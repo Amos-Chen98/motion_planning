@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+    <arg name="frame_id" default="world"/>
+    <arg name="pcl_topic" default="/pointcloud/output"/>
+    <arg name="sensor_max_range" default="inf"/>
+    <arg name="pointcloud_max_z" default="10.0"/>
+    <arg name="pointcloud_min_z" default="-2.0"/>
+    <arg name="occupancy_max_z" default="1.0"/>
+    <arg name="occupancy_min_z" default="-2.0"/>
+
+    <!-- Octomap -->
+    <node pkg="octomap_server" type="octomap_server_node" name="octomap_server">
+
+        <!-- name of the fixed frame, needs to be "/map" for SLAM -->
+        <param name="frame_id" type="string" value="$(arg frame_id)" />
+
+        <!-- topic from where pointcloud2 messages are subscribed -->
+        <remap from="/cloud_in" to="$(arg pcl_topic)" />
+
+        <!-- resolution in meters per pixel -->
+        <param name="resolution" value="0.1" />
+
+        <!-- max range / depth resolution of the kinect in meter -->
+        <param name="sensor_model/max_range" value="$(arg sensor_max_range)" />
+        <param name="latch" value="false" />
+
+        <param name="filter_ground" value="false" />
+
+        <!-- max/min height for occupancy map, should be in meters -->
+        <param name="pointcloud_max_z" value="$(arg pointcloud_max_z)" />
+        <param name="pointcloud_min_z" value="$(arg pointcloud_min_z)" />
+
+        <!-- generate 2D occupancy map from this interval -->
+        <param name="occupancy_max_z" value="$(arg occupancy_max_z)" />
+        <param name="occupancy_min_z" value="$(arg occupancy_min_z)" />
+
+    </node>
+
+</launch>

@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Map height parameters -->
+    <arg name="pointcloud_max_z" default="10.0"/>
+    <arg name="pointcloud_min_z" default="-2.0"/>
+    <arg name="occupancy_max_z" default="1.0"/>
+    <arg name="occupancy_min_z" default="-2.0"/>
+
+    <!-- Topic remapping -->
+     <arg name="robot_pose_type" default="pose" />
+     <!--pose or odom-->
+    <arg name="pose_cmd_type" default="pose" />
+     <!--pose or nav-->
+    <arg name="robot_pose_topic" default="dragon/root/pose" />
+    <arg name="target_pose_topic" default="/move_base_simple/goal" />
+    <arg name="robot_pose_cmd_topic" default="/mono_planner/pose_cmd" />
+
+    <!-- Frame configuration -->
+    <arg name="frame_id" default="world" />
+
+    <!-- Planner parameters -->
+    <arg name="target_reach_threshold" default="0.2" />
+    <arg name="cmd_hz" default="40" />
+    <arg name="move_vel" default="0.2" />
+    <arg name="map_server" default="esdf" />
+    <arg name="traj_opt" default="false" />
+    <arg name="dim" default="2" />
+    <arg name="resolution" default="0.1" />
+    <arg name="min_flight_height" default="0.5" />
+    <arg name="max_flight_height" default="2.0" />
+    <arg name="collision_threshold" default="0.4" />
+
+    <node pkg="mono_planner" type="traj_planner_node.py" name="mono_planner" output="screen">
+        <param name="frame_id" value="$(arg frame_id)" />
+        <param name="robot_pose_type" value="$(arg robot_pose_type)" />
+        <param name="pose_cmd_type" value="$(arg pose_cmd_type)" />
+        <param name="target_reach_threshold" value="$(arg target_reach_threshold)" />
+        <param name="cmd_hz" value="$(arg cmd_hz)" />
+        <param name="move_vel" value="$(arg move_vel)" />
+        <param name="map_server" value="$(arg map_server)" />
+        <param name="traj_opt" value="$(arg traj_opt)" />
+        <param name="dim" value="$(arg dim)" />
+        <param name="resolution" value="$(arg resolution)" />
+        <param name="min_flight_height" value="$(arg min_flight_height)" />
+        <param name="max_flight_height" value="$(arg max_flight_height)" />
+        <param name="collision_threshold" value="$(arg collision_threshold)" />
+        <remap from="robot_pose" to="$(arg robot_pose_topic)" />
+        <remap from="target_pose" to="$(arg target_pose_topic)" />
+        <remap from="robot_pose_cmd" to="$(arg robot_pose_cmd_topic)" />
+    </node>
+
+    <include file="$(find mono_planner)/launch/map_server.launch">
+        <arg name="frame_id" value="$(arg frame_id)" />
+        <arg name="pcl_topic" value="/pointcloud/output" />
+        <arg name="sensor_max_range" value="inf" />
+        <arg name="pointcloud_max_z" value="$(arg pointcloud_max_z)" />
+        <arg name="pointcloud_min_z" value="$(arg pointcloud_min_z)" />
+        <arg name="occupancy_max_z" value="$(arg occupancy_max_z)" />
+        <arg name="occupancy_min_z" value="$(arg occupancy_min_z)" />
+    </include>
+
+</launch>
