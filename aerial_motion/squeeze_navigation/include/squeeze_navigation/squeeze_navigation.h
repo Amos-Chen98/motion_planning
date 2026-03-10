@@ -47,7 +47,7 @@
 #include <aerial_robot_msgs/FlightNav.h>
 #include <aerial_robot_msgs/PoseControlPid.h>
 #include <moveit_msgs/DisplayRobotState.h>
-#include <spinal/DesireCoord.h>
+#include <aerial_robot_control/util/joy_parser.h>
 
 /* robot model */
 #include <hydrus/hydrus_tilted_robot_model.h>
@@ -86,7 +86,7 @@ protected:
 
   ros::Publisher joints_ctrl_pub_;
   ros::Publisher flight_nav_pub_;
-  ros::Publisher se3_roll_pitch_nav_pub_;
+  ros::Publisher rot_nav_pub_;
   ros::Publisher desired_path_pub_;
   ros::Publisher end_effector_pos_pub_;
   ros::Publisher debug_pub_; // TODO: need?
