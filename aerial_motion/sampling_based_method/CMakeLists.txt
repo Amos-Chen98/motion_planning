@@ -26,6 +26,8 @@ generate_messages(DEPENDENCIES std_msgs)
 if("$ENV{ROS_DISTRO}" STREQUAL "debian")
   set(OMPL_INCLUDE_DIRS "/opt/ros/one/include/ompl-1.6")
   set(OMPL_LIBRARIES "/opt/ros/one/lib/x86_64-linux-gnu/libompl.so")
+else()
+  find_package(ompl REQUIRED)
 endif()
 
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
