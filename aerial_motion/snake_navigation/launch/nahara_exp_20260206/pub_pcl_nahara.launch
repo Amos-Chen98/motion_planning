@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Frame configuration -->
+    <arg name="frame_id" default="world" />
+
+    <!-- Point cloud -->
+    <arg name="pcd_filename" default="large/nahara_center"/>
+    <arg name="pcl_topic" default="/pointcloud/output"/>
+    <arg name="pcl_pub_max_z" default="10.0"/>
+    <arg name="pcl_pub_min_z" default="0.2"/>
+
+    <!-- Planner topic remapping -->
+    <arg name="target_pose_topic" default="global_target_pose" />
+
+    <!-- RViz configuration -->
+    <arg name="rviz_config" default="$(find snake_navigation)/rviz/run_mini_quad.rviz"/>
+
+    <!-- Point cloud simulation (on ground PC only) -->
+    <include file="$(find snake_navigation)/launch/pcl.launch">
+        <arg name="frame_id" value="$(arg frame_id)" />
+        <arg name="pcd_filename" value="$(arg pcd_filename)" />
+        <arg name="pcl_topic" value="$(arg pcl_topic)" />
+        <arg name="pcl_pub_max_z" value="$(arg pcl_pub_max_z)" />
+        <arg name="pcl_pub_min_z" value="$(arg pcl_pub_min_z)" />
+        <arg name="target_pose_topic" value="$(arg target_pose_topic)" />
+        <arg name="rviz_config" value="$(arg rviz_config)" />
+    </include>
+
+</launch>

@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Frame configuration -->
+    <arg name="frame_id" default="world" />
+    <arg name="run_copilot" default="true" />
+
+    <!-- Point cloud -->
+    <arg name="pcl_topic" default="/pointcloud/output"/>
+
+    <!-- Mapping parameters -->
+    <arg name="pcl_sub_max_z" default="3.0"/>
+    <arg name="pcl_sub_min_z" default="-1.0"/>
+    <arg name="occupancy_max_z" default="-0.5"/>
+    <arg name="occupancy_min_z" default="-0.6"/>
+
+    <!-- Planner topic remapping -->
+    <arg name="robot_pose_type" default="pose" />
+    <arg name="pose_cmd_type" default="pose" />
+    <arg name="robot_pose_topic" default="dragon/root/pose" />
+    <arg name="target_pose_topic" default="global_target_pose" />
+    <arg name="robot_pose_cmd_topic" default="dragon/root/target_pose" />
+
+    <!-- Planner parameters -->
+    <arg name="target_reach_threshold" default="0.2" />
+    <arg name="cmd_hz" default="40" />
+    <arg name="move_vel" default="0.2" />
+    <arg name="map_server" default="esdf" />
+    <arg name="traj_opt" default="false" />
+    <arg name="dim" default="2" />
+    <arg name="resolution" default="0.1" />
+    <arg name="min_flight_height" default="0.5" />
+    <arg name="max_flight_height" default="2.0" />
+    <arg name="collision_threshold" default="0.4" />
+
+    <include file="$(find mono_planner)/launch/mono_planner.launch">
+        <arg name="pointcloud_max_z" value="$(arg pcl_sub_max_z)" />
+        <arg name="pointcloud_min_z" value="$(arg pcl_sub_min_z)" />
+        <arg name="occupancy_max_z" value="$(arg occupancy_max_z)" />
+        <arg name="occupancy_min_z" value="$(arg occupancy_min_z)" />
+        <arg name="robot_pose_type" value="$(arg robot_pose_type)" />
+        <arg name="pose_cmd_type" value="$(arg pose_cmd_type)" />
+        <arg name="robot_pose_topic" value="$(arg robot_pose_topic)" />
+        <arg name="target_pose_topic" value="$(arg target_pose_topic)" />
+        <arg name="robot_pose_cmd_topic" value="$(arg robot_pose_cmd_topic)" />
+        <arg name="frame_id" value="$(arg frame_id)" />
+        <arg name="target_reach_threshold" value="$(arg target_reach_threshold)" />
+        <arg name="cmd_hz" value="$(arg cmd_hz)" />
+        <arg name="move_vel" value="$(arg move_vel)" />
+        <arg name="map_server" value="$(arg map_server)" />
+        <arg name="traj_opt" value="$(arg traj_opt)" />
+        <arg name="dim" value="$(arg dim)" />
+        <arg name="resolution" value="$(arg resolution)" />
+        <arg name="min_flight_height" value="$(arg min_flight_height)" />
+        <arg name="max_flight_height" value="$(arg max_flight_height)" />
+        <arg name="collision_threshold" value="$(arg collision_threshold)" />
+    </include>
+
+    <include file="$(find multilink_copilot)/launch/copilot_planner.launch" if="$(arg run_copilot)">
+        <arg name="target_pose_frame_type" value="FLU" />
+    </include>
+
+</launch>

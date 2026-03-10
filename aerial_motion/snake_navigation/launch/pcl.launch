@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Frame configuration -->
+    <arg name="frame_id" default="world" />
+
+    <!-- Point cloud -->
+    <arg name="pcd_filename" default="bricks"/>
+    <arg name="pcl_topic" default="/pointcloud/output"/>
+    <arg name="pcl_pub_max_z" default="3.0"/>
+    <arg name="pcl_pub_min_z" default="-2.0"/>
+
+    <!-- Planner topic remapping -->
+    <arg name="target_pose_topic" default="global_target_pose" />
+
+    <!-- RViz configuration -->
+    <arg name="rviz_config" default="$(find snake_navigation)/rviz/rviz.rviz"/>
+
+    <!-- On ground PC only -->
+    <include file="$(find pcd_sim)/launch/pub_pcl.launch">
+        <arg name="pcd_filename" value="$(arg pcd_filename)" />
+        <arg name="frame_id" value="$(arg frame_id)" />
+        <arg name="rviz_config" value="$(arg rviz_config)" />
+        <arg name="pcl_topic" value="$(arg pcl_topic)" />
+        <arg name="pcl_min_z" value="$(arg pcl_pub_min_z)" />
+        <arg name="pcl_max_z" value="$(arg pcl_pub_max_z)" />
+    </include>
+
+    <include file="$(find pcd_sim)/launch/interactive_marker.launch">
+        <arg name="pose_topic" value="$(arg target_pose_topic)"/>
+        <arg name="frame_id" value="$(arg frame_id)"/>
+    </include>
+
+</launch>

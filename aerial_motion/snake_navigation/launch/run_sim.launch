@@ -1,0 +1,80 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Frame configuration -->
+    <arg name="frame_id" default="world" />
+
+    <!-- Point cloud -->
+    <arg name="pcd_filename" default="bricks"/>
+    <arg name="pcl_topic" default="/pointcloud/output"/>
+    <arg name="pcl_pub_max_z" default="3.0"/>
+    <arg name="pcl_pub_min_z" default="-2.0"/>
+
+    <!-- Mapping parameters -->
+    <arg name="pcl_sub_max_z" default="3.0"/>
+    <arg name="pcl_sub_min_z" default="-1.0"/>
+    <arg name="occupancy_max_z" default="-0.5"/>
+    <arg name="occupancy_min_z" default="-0.6"/>
+
+    <!-- Planner topic remapping -->
+    <arg name="robot_pose_type" default="pose" />
+    <arg name="pose_cmd_type" default="pose" />
+    <arg name="robot_pose_topic" default="dragon/root/pose" />
+    <arg name="target_pose_topic" default="global_target_pose" />
+    <arg name="robot_pose_cmd_topic" default="dragon/root/target_pose" />
+
+    <!-- Planner parameters -->
+    <arg name="target_reach_threshold" default="0.2" />
+    <arg name="cmd_hz" default="40" />
+    <arg name="move_vel" default="0.2" />
+    <arg name="map_server" default="esdf" />
+    <arg name="traj_opt" default="false" />
+    <arg name="dim" default="2" />
+    <arg name="resolution" default="0.1" />
+    <arg name="min_flight_height" default="0.5" />
+    <arg name="max_flight_height" default="2.0" />
+    <arg name="collision_threshold" default="0.4" />
+
+    <!-- Copilot parameter -->
+    <arg name="run_copilot" default="true" />
+
+    <!-- RViz configuration -->
+    <arg name="rviz_config" default="$(find snake_navigation)/rviz/rviz.rviz"/>
+
+    <!-- Navigation components -->
+    <include file="$(find snake_navigation)/launch/nav.launch">
+        <arg name="frame_id" value="$(arg frame_id)" />
+        <arg name="pcl_topic" value="$(arg pcl_topic)" />
+        <arg name="pcl_sub_max_z" value="$(arg pcl_sub_max_z)" />
+        <arg name="pcl_sub_min_z" value="$(arg pcl_sub_min_z)" />
+        <arg name="occupancy_max_z" value="$(arg occupancy_max_z)" />
+        <arg name="occupancy_min_z" value="$(arg occupancy_min_z)" />
+        <arg name="robot_pose_type" value="$(arg robot_pose_type)" />
+        <arg name="pose_cmd_type" value="$(arg pose_cmd_type)" />
+        <arg name="robot_pose_topic" value="$(arg robot_pose_topic)" />
+        <arg name="target_pose_topic" value="$(arg target_pose_topic)" />
+        <arg name="robot_pose_cmd_topic" value="$(arg robot_pose_cmd_topic)" />
+        <arg name="target_reach_threshold" value="$(arg target_reach_threshold)" />
+        <arg name="cmd_hz" value="$(arg cmd_hz)" />
+        <arg name="move_vel" value="$(arg move_vel)" />
+        <arg name="map_server" value="$(arg map_server)" />
+        <arg name="traj_opt" value="$(arg traj_opt)" />
+        <arg name="dim" value="$(arg dim)" />
+        <arg name="resolution" value="$(arg resolution)" />
+        <arg name="min_flight_height" value="$(arg min_flight_height)" />
+        <arg name="max_flight_height" value="$(arg max_flight_height)" />
+        <arg name="collision_threshold" value="$(arg collision_threshold)" />
+        <arg name="run_copilot" value="$(arg run_copilot)" />
+    </include>
+
+    <!-- Point cloud simulation (on ground PC only) -->
+    <include file="$(find snake_navigation)/launch/pcl.launch">
+        <arg name="frame_id" value="$(arg frame_id)" />
+        <arg name="pcd_filename" value="$(arg pcd_filename)" />
+        <arg name="pcl_topic" value="$(arg pcl_topic)" />
+        <arg name="pcl_pub_max_z" value="$(arg pcl_pub_max_z)" />
+        <arg name="pcl_pub_min_z" value="$(arg pcl_pub_min_z)" />
+        <arg name="target_pose_topic" value="$(arg target_pose_topic)" />
+        <arg name="rviz_config" value="$(arg rviz_config)" />
+    </include>
+
+</launch>
