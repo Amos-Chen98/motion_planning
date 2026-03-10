@@ -14,7 +14,6 @@
 
   <exec_depend>differential_kinematics</exec_depend>
   <exec_depend>flap_manipulation</exec_depend>
-  <exec_depend>path_navigation</exec_depend>
   <exec_depend>sampling_based_method</exec_depend>
   <exec_depend>squeeze_navigation</exec_depend>
   <exec_depend>aerial_transportation</exec_depend>
