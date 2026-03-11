@@ -50,7 +50,6 @@
 #include <aerial_robot_control/util/joy_parser.h>
 
 /* robot model */
-#include <hydrus/hydrus_tilted_robot_model.h>
 #include <dragon/model/hydrus_like_robot_model.h> // TODO: change to full vectoring model
 #include <dragon/dragon_navigation.h>
 
@@ -107,7 +106,6 @@ protected:
   int discrete_path_search_method_type_;
   bool discrete_path_debug_flag_;
   int motion_type_;
-  std::string robot_type_;
 
   /* navigation */
   ros::Timer navigate_timer_;
