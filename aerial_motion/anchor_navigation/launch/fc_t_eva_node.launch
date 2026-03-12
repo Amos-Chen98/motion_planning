@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="robot_ns" default="hydrus_xi"/>
+    <arg name="robot_urdf" default="$(find anchor_navigation)/urdf/hydrus_xi_20241227.urdf"/>
+
+    <group ns="$(arg robot_ns)">
+        <node pkg="anchor_navigation" type="fc_t_eva_node.py" name="fc_t_eva_node" output="screen">
+            <param name="robot_urdf" value="$(arg robot_urdf)"/>
+        </node>
+    </group>
+
+</launch>

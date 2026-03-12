@@ -2,3 +2,7 @@
     local-name: jsk_aerial_robot
     uri: https://github.com/jsk-ros-pkg/jsk_aerial_robot.git
     version: 6ac557b5
+
+- git:
+    local-name: pcd_simulator
+    uri: https://github.com/ut-dragon-lab/pcd_simulator.git

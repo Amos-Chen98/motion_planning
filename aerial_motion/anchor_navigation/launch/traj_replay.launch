@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Node parameters -->
+    <arg name="cmd_hz" default="100" />
+    <arg name="prepare_speed" default="0.2" />
+    <arg name="speed_scale" default="1.0" doc="Speed scaling factor for trajectory replay (0.5=half speed, 2.0=double speed)" />
+    <arg name="robot_urdf" default="$(find anchor_navigation)/urdf/hydrus_xi_20241227.urdf" />
+    <arg name="robot_ns" default="hydrus_xi"/>
+
+    <!-- Trajectory Replay Node -->
+    <group ns="$(arg robot_ns)">
+        <node name="traj_replay_node" pkg="anchor_navigation" type="traj_replay_node.py" output="screen">
+            <param name="cmd_hz" value="$(arg cmd_hz)" />
+            <param name="prepare_speed" value="$(arg prepare_speed)" />
+            <param name="speed_scale" value="$(arg speed_scale)" />
+            <param name="robot_urdf" value="$(arg robot_urdf)" />
+        </node>
+    </group>
+
+    <!-- Include visualization for desired state -->
+    <include file="$(find anchor_navigation)/launch/vis_des_state_replay.launch">
+        <arg name="robot_ns" value="$(arg robot_ns)" />
+    </include>
+
+    <include file="$(find anchor_navigation)/launch/fc_t_eva_node.launch">
+        <arg name="robot_ns" value="$(arg robot_ns)" />
+        <arg name="robot_urdf" value="$(arg robot_urdf)" />
+    </include>
+
+</launch>

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<launch>
+    <param name="obstacle_description" command="cat $(find anchor_navigation)/urdf/2d_opening.urdf"/>
+    <node pkg="gazebo_ros" type="spawn_model" name="obstacle" args="-param obstacle_description -urdf -model obstacle -x 0 -y 0 -z 0" />
+
+    <group ns="obstacle">
+        <node pkg="robot_state_publisher" type="robot_state_publisher" name="state_publisher" output="screen">
+            <remap from="robot_description" to="obstacle_description" />
+            <param name="tf_prefix" value="obstacle" />
+        </node>
+
+        <node pkg="tf2_ros" type="static_transform_publisher" name="world2obstacle" args="0 0 0 0 0 0 world obstacle/root" />
+    </group>
+</launch>

@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="run_traj_opt" default="true"/>
+    <arg name="find_anchor" default="true"/>
+    <arg name="is_parallel" default="true"/>
+    <arg name="robot_urdf" default="$(find anchor_navigation)/urdf/hydrus_xi_20241227.urdf"/>
+    <arg name="is_goal_complete" default="false"/>
+    <arg name="auto_shutdown" default="false"/>
+    <arg name="run_map_server" default="true"/>
+    <arg name="robot_ns" default="hydrus_xi"/>
+    <arg name="replace_gimbal_planner" default="false"/>
+    <arg name="rotate_first" default="false"/>
+    <arg name="one_way_fold" default="false" />
+    <arg name="save_traj" default="true"/>
+    <arg name="sample_density" default="20"/>
+    <arg name="transform_attempt_num" default="30"/>
+
+    <include file="$(find anchor_navigation)/launch/map_server.launch" if="$(arg run_map_server)" />
+
+    <node pkg="anchor_navigation" name="esdf_vis_node" type="esdf_vis_node.py" />
+
+    <!-- set group namespace-->
+    <group ns="$(arg robot_ns)">
+        <!-- traj planner node -->
+        <node pkg="anchor_navigation" type="motion_planner_node.py" name="motion_planner" output="screen">
+            <rosparam file="$(find anchor_navigation)/launch/config/planner_config.yaml" command="load"/>
+            <param name="find_anchor" value="$(arg find_anchor)"/>
+            <param name="is_parallel" value="$(arg is_parallel)"/>
+            <param name="robot_urdf" value="$(arg robot_urdf)"/>
+            <param name="is_goal_complete" value="$(arg is_goal_complete)"/>
+            <param name="auto_shutdown" value="$(arg auto_shutdown)"/>
+            <param name="replace_gimbal_planner" value="$(arg replace_gimbal_planner)"/>
+            <param name="rotate_first" value="$(arg rotate_first)"/>
+            <param name="one_way_fold" value="$(arg one_way_fold)"/>
+            <param name="save_traj" value="$(arg save_traj)"/>
+            <param name="run_traj_opt" value="$(arg run_traj_opt)"/>
+            <param name="sample_density" value="$(arg sample_density)"/>
+            <param name="transform_attempt_num" value="$(arg transform_attempt_num)"/>
+        </node>
+    </group>
+
+    <include file="$(find anchor_navigation)/launch/vis_des_state.launch">
+        <arg name="robot_ns" value="$(arg robot_ns)" />
+    </include>
+
+    <include file="$(find anchor_navigation)/launch/fc_t_eva_node.launch">
+        <arg name="robot_ns" value="$(arg robot_ns)" />
+        <arg name="robot_urdf" value="$(arg robot_urdf)" />
+    </include>
+
+</launch>

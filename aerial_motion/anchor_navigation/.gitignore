@@ -1,0 +1,7 @@
+real_exp_data
+saved_traj/
+bash/bash_logs/
+bash/*.txt
+logs/
+scripts/**/__pycache__/
+scripts/data_review/*.csv

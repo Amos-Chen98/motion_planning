@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="real_machine" default="False" />
+    <arg name="simulation" default="True" />
+    <arg name="config_dir" default="$(find hydrus_xi)/config"/>
+    <arg name="type" default="quad" />
+    <arg name="robot_id" default="" />
+    <arg name="robot_ns" value="hydrus_xi$(arg robot_id)" />
+
+    <include file="$(find aerial_robot_model)/launch/aerial_robot_model.launch">
+        <arg name="robot_model" value="$(find anchor_navigation)/urdf/hydrus_xi_20241227.urdf" />
+        <arg name="robot_ns" value="$(arg robot_ns)" />
+        <arg name="rviz_config" value="$(find anchor_navigation)/rviz/rviz_config.rviz" />
+        <arg name="rviz_init_pose" value="$(arg config_dir)/$(arg type)/RvizInit.yaml" />
+        <arg name="need_joint_state" value="false" if ="$(eval arg('simulation') + arg('real_machine') > 0)"/>
+    </include >
+
+    <include file="$(find anchor_navigation)/launch/vis_des_state.launch">
+        <arg name="robot_ns" value="$(arg robot_ns)" />
+    </include>
+
+</launch>

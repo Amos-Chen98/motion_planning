@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="robot_name" default="hydrus_xi" />
+    <arg name="world_name" default="dual_gap_room_0713" />
+
+    <!-- <include file="$(find aerial_robot_base)/launch/external_module/joy_stick.launch">
+        <arg name="robot_name" value="$(arg robot_name)" />
+    </include> -->
+
+    <include file="$(find anchor_navigation)/launch/rviz.launch" />
+
+    <include file="$(find pcd_sim)/launch/pub_pcl.launch">
+        <arg name="world_name" value="$(arg world_name)" />
+    </include>
+
+    <include file="$(find anchor_navigation)/launch/map_server.launch" />
+
+</launch>

@@ -3,3 +3,8 @@
     local-name: dynamixel_motor
     uri: https://github.com/arebgun/dynamixel_motor.git
     version: master
+
+# point cloud simulator
+- git:
+    local-name: pcd_simulator
+    uri: https://github.com/ut-dragon-lab/pcd_simulator.git

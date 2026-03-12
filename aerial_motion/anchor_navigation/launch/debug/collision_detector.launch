@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- set group namespace-->
+    <group ns="hydrus_xi">
+        <!-- traj planner node -->
+        <node pkg="anchor_navigation" type="collision_detection_node.py" name="collision_detector" output="screen">
+    </node>
+    </group>
+
+</launch>

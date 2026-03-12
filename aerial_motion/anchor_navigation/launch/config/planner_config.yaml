@@ -1,0 +1,38 @@
+# Motion planner node
+cmd_hz: 60
+target_reach_threshold: 0.2
+mission_timeout: 300.0
+
+# Global planner
+astar_resolution: 0.1
+astar_extra_clearance: 0.1
+seg_len_factor: 1.2 # the rate of the segment length to the link length
+travel_speed: 0.3 # the time allocated for each segment is obtained by dividing travel_dis by travel_speed
+bend_attempt_num: 10
+# transform_attempt_num: 30
+candidate_int_eva_num: 10
+
+# Constraints on the motion
+min_joint_angle: 0.5
+joint_angle_bound: 1.5708
+translational_vel_limit: 1.0
+rotational_vel_limit: 0.5
+dis2obs_min: 0.05
+fc_threshold_factor: 0.4
+fc_t_min_thre: 0.4 # feasible torque minimum threshold
+
+# BSpline planner and recovery parameters
+stage_control_points_num: 5 # shoule be >=4
+# sample_density: 100
+collision_cost_tolerance: 2.0
+stability_violation_tolerance: 5.0
+traj_fc_t_min_thre: 0.001
+opt_max_retries: 1
+
+# Optimizer
+ftol_rel: 1e-3
+maxtime: 10
+constraint_tol: 1e-4
+esdf_constraint_weight: 1e3
+vel_constraint_weight: 1
+stability_constraint_weight: 1e3
