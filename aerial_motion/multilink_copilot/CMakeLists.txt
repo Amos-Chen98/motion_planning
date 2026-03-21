@@ -5,6 +5,7 @@ add_compile_options(-std=c++17)
 
 find_package(catkin REQUIRED COMPONENTS
     roscpp
+    rospy
     geometry_msgs
     visualization_msgs
     aerial_robot_msgs
@@ -27,6 +28,7 @@ catkin_package(
     INCLUDE_DIRS include
     CATKIN_DEPENDS
     roscpp
+    rospy
     geometry_msgs
     visualization_msgs
     aerial_robot_msgs
@@ -60,6 +62,11 @@ set(COPILOT_PLANNER_SOURCES
 add_executable(copilot_planner ${COPILOT_PLANNER_SOURCES})
 target_link_libraries(copilot_planner ${catkin_LIBRARIES} qpOASES)
 add_dependencies(copilot_planner aerial_robot_msgs_generate_messages_cpp)
+
+catkin_install_python(PROGRAMS
+    scripts/demo/dragon_dance.py
+    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
 
 # ############
 # # Install ##

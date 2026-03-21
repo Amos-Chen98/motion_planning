@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="robot_ns" default="dragon" />
+
+    <group ns="$(arg robot_ns)">
+        <node pkg="multilink_copilot" type="dragon_dance.py" name="dragon_dance" output="screen" />
+    </group>
+</launch>
