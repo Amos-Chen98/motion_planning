@@ -15,6 +15,33 @@ namespace multilink_copilot
 namespace
 {
 constexpr char kForcedRobotModelPluginName[] = "dragon/hydrus_like_robot_model";
+constexpr char kJointPrefix[] = "joint";
+
+bool extractSegmentIndex(const std::string& joint_name, const std::string& suffix, int& segment_index)
+{
+  const size_t prefix_length = std::char_traits<char>::length(kJointPrefix);
+  if (joint_name.compare(0, prefix_length, kJointPrefix) != 0)
+  {
+    return false;
+  }
+
+  const size_t suffix_pos = joint_name.rfind(suffix);
+  if (suffix_pos == std::string::npos || suffix_pos + suffix.size() != joint_name.size() || suffix_pos <= prefix_length)
+  {
+    return false;
+  }
+
+  try
+  {
+    segment_index = std::stoi(joint_name.substr(prefix_length, suffix_pos - prefix_length)) - 1;
+  }
+  catch (const std::exception&)
+  {
+    return false;
+  }
+
+  return segment_index >= 0;
+}
 
 geometry_msgs::PoseStamped::Ptr convertFluPoseToLinkFrame(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
@@ -127,23 +154,47 @@ void CopilotPlanner::initializeRobotModel()
 
   link_num_ = dragon_robot_model_->getRotorNum();
   link_length_ = dragon_robot_model_->getLinkLength();
+  link_joint_names_ = dragon_robot_model_->getLinkJointNames();
   link_joint_indices_ = dragon_robot_model_->getLinkJointIndices();
   link_joint_num_ = link_joint_indices_.size();
+  pitch_joint_local_indices_.assign(std::max(0, link_num_ - 1), -1);
   yaw_joint_local_indices_.clear();
-
-  const auto& link_joint_names = dragon_robot_model_->getLinkJointNames();
+  yaw_joint_local_indices_.assign(std::max(0, link_num_ - 1), -1);
   for (int i = 0; i < link_joint_num_; ++i)
   {
-    const std::string& joint_name = i < static_cast<int>(link_joint_names.size()) ? link_joint_names.at(i) : "";
-    if (joint_name.find("_yaw") != std::string::npos)
+    const std::string& joint_name = i < static_cast<int>(link_joint_names_.size()) ? link_joint_names_.at(i) : "";
+    int segment_index = -1;
+
+    if (extractSegmentIndex(joint_name, "_pitch", segment_index) &&
+        segment_index < static_cast<int>(pitch_joint_local_indices_.size()))
     {
-      yaw_joint_local_indices_.push_back(i);
+      pitch_joint_local_indices_.at(segment_index) = i;
+    }
+    else if (extractSegmentIndex(joint_name, "_yaw", segment_index) &&
+             segment_index < static_cast<int>(yaw_joint_local_indices_.size()))
+    {
+      yaw_joint_local_indices_.at(segment_index) = i;
     }
   }
 
+  const int pitch_joint_count =
+      std::count_if(pitch_joint_local_indices_.begin(), pitch_joint_local_indices_.end(), [](int index) {
+        return index >= 0;
+      });
+  const int yaw_joint_count =
+      std::count_if(yaw_joint_local_indices_.begin(), yaw_joint_local_indices_.end(), [](int index) {
+        return index >= 0;
+      });
+
   ROS_INFO("[CopilotPlanner] Robot model initialized successfully");
   ROS_INFO("  Link num: %d, Joint num: %d", link_num_, link_joint_num_);
-  ROS_INFO("  Yaw joint num: %zu", yaw_joint_local_indices_.size());
+  ROS_INFO("  Pitch joint num: %d", pitch_joint_count);
+  ROS_INFO("  Yaw joint num: %d", yaw_joint_count);
+  if (pitch_joint_count != std::max(0, link_num_ - 1) || yaw_joint_count != std::max(0, link_num_ - 1))
+  {
+    ROS_WARN("[CopilotPlanner] Incomplete pitch/yaw joint mapping: expected %d pairs, got pitch=%d yaw=%d",
+             std::max(0, link_num_ - 1), pitch_joint_count, yaw_joint_count);
+  }
   ROS_INFO("[CopilotPlanner] Dragon model type: hydrus_like (forced for copilot)");
 }
 
@@ -211,12 +262,22 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   full_state_msg.root_state.header = latest_target_pose_->header;
   full_state_msg.root_state.pose.pose = root_target_pose;
   full_state_msg.joint_state.header = latest_target_pose_->header;
-  full_state_msg.joint_state.name.resize(link_joint_num_);
+  if (link_joint_names_.size() == static_cast<size_t>(link_joint_num_))
+  {
+    full_state_msg.joint_state.name = link_joint_names_;
+  }
+  else
+  {
+    full_state_msg.joint_state.name.resize(link_joint_num_);
+    for (int i = 0; i < link_joint_num_; ++i)
+    {
+      full_state_msg.joint_state.name[i] = std::string("joint") + std::to_string(i + 1);
+    }
+  }
   full_state_msg.joint_state.position.resize(link_joint_num_);
 
   for (int i = 0; i < link_joint_num_; ++i)
   {
-    full_state_msg.joint_state.name[i] = std::string("joint") + std::to_string(i + 1);
     full_state_msg.joint_state.position[i] = stable_joint_positions(i);
   }
 

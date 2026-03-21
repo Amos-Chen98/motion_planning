@@ -56,8 +56,8 @@ std::string formatTargetPose(const geometry_msgs::PoseStamped::ConstPtr& target_
 bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_joint_positions,
                                                  Eigen::VectorXd& stable_joint_positions)
 {
-  const Eigen::VectorXd precheck_joint_positions = buildYawOnlyJointPositions(getCurrentLinkJointPositions());
-  const Eigen::VectorXd desired_joint_positions = buildYawOnlyJointPositions(nominal_joint_positions);
+  const Eigen::VectorXd precheck_joint_positions = clampLinkJointPositions(getCurrentLinkJointPositions());
+  const Eigen::VectorXd desired_joint_positions = clampLinkJointPositions(nominal_joint_positions);
 
   if (checkStability(desired_joint_positions, false))
   {
@@ -75,7 +75,7 @@ bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_
     return false;
   }
 
-  if (!solveStableYawQp(desired_joint_positions, stable_reference, stable_joint_positions))
+  if (!solveStableJointQp(desired_joint_positions, stable_reference, stable_joint_positions))
   {
     stable_joint_positions = stable_reference;
   }
@@ -91,14 +91,12 @@ bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_
     stable_joint_positions = stable_reference;
   }
 
-  stable_joint_positions = buildYawOnlyJointPositions(stable_joint_positions);
+  stable_joint_positions = clampLinkJointPositions(stable_joint_positions);
   restoreRobotModelToLinkJointPositions(stable_joint_positions);
   last_stable_joint_positions_ = stable_joint_positions;
   has_last_stable_joint_positions_ = true;
 
-  const Eigen::VectorXd desired_yaw = extractYawJointPositions(desired_joint_positions);
-  const Eigen::VectorXd solved_yaw = extractYawJointPositions(stable_joint_positions);
-  if ((desired_yaw - solved_yaw).norm() > stability_qp_convergence_tol_)
+  if ((desired_joint_positions - stable_joint_positions).norm() > stability_qp_convergence_tol_)
   {
     ROS_WARN_STREAM_THROTTLE(0.5,
                              "[CopilotPlanner] Solved a conservative stable joint target"
@@ -131,8 +129,8 @@ void CopilotPlanner::updateRobotModelForTargetConfiguration(const KDL::JntArray&
 
 bool CopilotPlanner::evaluateStability(const Eigen::VectorXd& joint_positions, StabilityMetrics& metrics)
 {
-  const Eigen::VectorXd yaw_only_joint_positions = buildYawOnlyJointPositions(joint_positions);
-  const KDL::JntArray kdl_joint_positions = buildUpdatedJointPositions(yaw_only_joint_positions);
+  const Eigen::VectorXd clamped_joint_positions = clampLinkJointPositions(joint_positions);
+  const KDL::JntArray kdl_joint_positions = buildUpdatedJointPositions(clamped_joint_positions);
 
   updateRobotModelForTargetConfiguration(kdl_joint_positions);
   dragon_robot_model_->updateJacobians(kdl_joint_positions, false);
@@ -191,14 +189,14 @@ bool CopilotPlanner::satisfiesSafeStability(const StabilityMetrics& metrics) con
 
 bool CopilotPlanner::checkStability(const Eigen::VectorXd& joint_positions, bool report_result)
 {
-  const Eigen::VectorXd yaw_only_joint_positions = buildYawOnlyJointPositions(joint_positions);
+  const Eigen::VectorXd clamped_joint_positions = clampLinkJointPositions(joint_positions);
   StabilityMetrics metrics;
-  evaluateStability(yaw_only_joint_positions, metrics);
+  evaluateStability(clamped_joint_positions, metrics);
 
   const bool is_stable = metrics.safe;
   if (!is_stable && report_result)
   {
-    const KDL::JntArray kdl_joint_positions = buildUpdatedJointPositions(yaw_only_joint_positions);
+    const KDL::JntArray kdl_joint_positions = buildUpdatedJointPositions(clamped_joint_positions);
     const std::string root_pose_string =
         latest_target_pose_ ? formatPose(convertLink1TailPoseToRootPose(latest_target_pose_->pose)) : "unavailable";
     ROS_WARN_STREAM_THROTTLE(
@@ -206,7 +204,7 @@ bool CopilotPlanner::checkStability(const Eigen::VectorXd& joint_positions, bool
                  << ", root_pose: " << root_pose_string
                  << ", link1_tail_pose: " << formatTargetPose(latest_target_pose_)
                  << ", raw_model_stable: " << (metrics.raw_model_stable ? "true" : "false")
-                 << ", link_joint_positions: [" << yaw_only_joint_positions.transpose() << "]"
+                 << ", link_joint_positions: [" << clamped_joint_positions.transpose() << "]"
                  << ", full_joint_positions: " << formatJointPositions(kdl_joint_positions)
                  << ", fc_rp_min/thre: " << metrics.fc_rp_min << "/" << stability_fc_rp_min_thre_
                  << ", static_thrust[min,max]/safe_range: [" << metrics.static_thrust_min << ", "
@@ -233,7 +231,7 @@ bool CopilotPlanner::checkStability(const Eigen::VectorXd& joint_positions, bool
   {
     ROS_WARN_STREAM_THROTTLE(0.5,
                              "[CopilotPlanner] Target configuration is conservatively unstable"
-                                 << ", joint_positions: [" << yaw_only_joint_positions.transpose() << "]");
+                                 << ", joint_positions: [" << clamped_joint_positions.transpose() << "]");
   }
 
   return is_stable;
@@ -283,49 +281,6 @@ Eigen::VectorXd CopilotPlanner::clampLinkJointPositions(const Eigen::VectorXd& j
   return clamped_joint_positions;
 }
 
-Eigen::VectorXd CopilotPlanner::buildYawOnlyJointPositions(const Eigen::VectorXd& joint_positions) const
-{
-  const Eigen::VectorXd clamped_joint_positions = clampLinkJointPositions(joint_positions);
-  Eigen::VectorXd yaw_only_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
-
-  for (const int local_index : yaw_joint_local_indices_)
-  {
-    if (local_index < clamped_joint_positions.size())
-    {
-      yaw_only_joint_positions(local_index) = clamped_joint_positions(local_index);
-    }
-  }
-
-  return clampLinkJointPositions(yaw_only_joint_positions);
-}
-
-Eigen::VectorXd CopilotPlanner::extractYawJointPositions(const Eigen::VectorXd& joint_positions) const
-{
-  Eigen::VectorXd yaw_joint_positions = Eigen::VectorXd::Zero(yaw_joint_local_indices_.size());
-  for (int i = 0; i < static_cast<int>(yaw_joint_local_indices_.size()); ++i)
-  {
-    const int local_index = yaw_joint_local_indices_.at(i);
-    if (local_index < joint_positions.size())
-    {
-      yaw_joint_positions(i) = joint_positions(local_index);
-    }
-  }
-
-  return yaw_joint_positions;
-}
-
-Eigen::VectorXd CopilotPlanner::composeYawOnlyJointPositions(const Eigen::VectorXd& yaw_joint_positions) const
-{
-  Eigen::VectorXd full_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
-  const int joint_count = std::min<int>(yaw_joint_positions.size(), yaw_joint_local_indices_.size());
-  for (int i = 0; i < joint_count; ++i)
-  {
-    full_joint_positions(yaw_joint_local_indices_.at(i)) = yaw_joint_positions(i);
-  }
-
-  return clampLinkJointPositions(full_joint_positions);
-}
-
 Eigen::VectorXd CopilotPlanner::getCurrentLinkJointPositions() const
 {
   Eigen::VectorXd current_link_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
@@ -348,29 +303,40 @@ Eigen::VectorXd CopilotPlanner::buildFoldedReferenceJointPositions() const
   Eigen::VectorXd folded_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
   for (const int local_index : yaw_joint_local_indices_)
   {
-    folded_joint_positions(local_index) = M_PI / 2.0;
+    if (local_index >= 0 && local_index < link_joint_num_)
+    {
+      folded_joint_positions(local_index) = M_PI / 2.0;
+    }
   }
 
-  return buildYawOnlyJointPositions(folded_joint_positions);
+  return clampLinkJointPositions(folded_joint_positions);
 }
 
 Eigen::VectorXd CopilotPlanner::buildDefaultReferenceJointPositions() const
 {
   Eigen::VectorXd default_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
-  if (!yaw_joint_local_indices_.empty())
+
+  int valid_yaw_count = 0;
+  for (const int local_index : yaw_joint_local_indices_)
   {
-    default_joint_positions(yaw_joint_local_indices_.at(0)) = -M_PI / 4.0;
-  }
-  if (yaw_joint_local_indices_.size() > 1)
-  {
-    default_joint_positions(yaw_joint_local_indices_.at(1)) = M_PI / 2.0;
-  }
-  if (yaw_joint_local_indices_.size() > 2)
-  {
-    default_joint_positions(yaw_joint_local_indices_.at(2)) = M_PI / 2.0;
+    if (local_index < 0 || local_index >= link_joint_num_)
+    {
+      continue;
+    }
+
+    if (valid_yaw_count == 0)
+    {
+      default_joint_positions(local_index) = -M_PI / 4.0;
+    }
+    else if (valid_yaw_count <= 2)
+    {
+      default_joint_positions(local_index) = M_PI / 2.0;
+    }
+
+    ++valid_yaw_count;
   }
 
-  return buildYawOnlyJointPositions(default_joint_positions);
+  return clampLinkJointPositions(default_joint_positions);
 }
 
 bool CopilotPlanner::tryGetStableReferenceJointPositions(Eigen::VectorXd& stable_reference)
@@ -395,7 +361,7 @@ bool CopilotPlanner::tryGetStableReferenceJointPositions(Eigen::VectorXd& stable
 
   for (const Eigen::VectorXd& raw_candidate : reference_candidates)
   {
-    const Eigen::VectorXd candidate = buildYawOnlyJointPositions(raw_candidate);
+    const Eigen::VectorXd candidate = clampLinkJointPositions(raw_candidate);
     if (checkStability(candidate, false))
     {
       stable_reference = candidate;
@@ -412,7 +378,7 @@ bool CopilotPlanner::tryGetStableReferenceJointPositions(Eigen::VectorXd& stable
 
 void CopilotPlanner::restoreRobotModelToLinkJointPositions(const Eigen::VectorXd& joint_positions)
 {
-  updateRobotModelForTargetConfiguration(buildUpdatedJointPositions(buildYawOnlyJointPositions(joint_positions)));
+  updateRobotModelForTargetConfiguration(buildUpdatedJointPositions(clampLinkJointPositions(joint_positions)));
 }
 
 }  // namespace multilink_copilot

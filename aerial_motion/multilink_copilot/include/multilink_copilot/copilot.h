@@ -56,8 +56,10 @@ private:
   // Robot parameters
   int link_num_;
   double link_length_;
+  std::vector<std::string> link_joint_names_;
   std::vector<int> link_joint_indices_;
   int link_joint_num_;
+  std::vector<int> pitch_joint_local_indices_;
   std::vector<int> yaw_joint_local_indices_;
   
   // Trajectory tracking
@@ -119,9 +121,9 @@ private:
   void updateRobotModelForTargetConfiguration(const KDL::JntArray& joint_positions);
   bool computeStableJointPositions(const Eigen::VectorXd& nominal_joint_positions,
                                    Eigen::VectorXd& stable_joint_positions);
-  bool solveStableYawQp(const Eigen::VectorXd& desired_joint_positions,
-                        const Eigen::VectorXd& reference_joint_positions,
-                        Eigen::VectorXd& stable_joint_positions);
+  bool solveStableJointQp(const Eigen::VectorXd& desired_joint_positions,
+                          const Eigen::VectorXd& reference_joint_positions,
+                          Eigen::VectorXd& stable_joint_positions);
   bool evaluateStability(const Eigen::VectorXd& joint_positions, StabilityMetrics& metrics);
   bool satisfiesSafeStability(const StabilityMetrics& metrics) const;
   bool tryGetStableReferenceJointPositions(Eigen::VectorXd& stable_reference);
@@ -130,9 +132,6 @@ private:
   // Helper functions
   KDL::JntArray buildUpdatedJointPositions(const Eigen::VectorXd& joint_positions) const;
   Eigen::VectorXd clampLinkJointPositions(const Eigen::VectorXd& joint_positions) const;
-  Eigen::VectorXd buildYawOnlyJointPositions(const Eigen::VectorXd& joint_positions) const;
-  Eigen::VectorXd extractYawJointPositions(const Eigen::VectorXd& joint_positions) const;
-  Eigen::VectorXd composeYawOnlyJointPositions(const Eigen::VectorXd& yaw_joint_positions) const;
   Eigen::VectorXd getCurrentLinkJointPositions() const;
   Eigen::VectorXd buildFoldedReferenceJointPositions() const;
   Eigen::VectorXd buildDefaultReferenceJointPositions() const;

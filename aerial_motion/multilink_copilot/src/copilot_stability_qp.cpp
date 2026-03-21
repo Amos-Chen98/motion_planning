@@ -1,5 +1,5 @@
 // copilot_stability_qp.cpp
-// Yaw-only stability QP assembly and solve loop
+// Joint-space stability QP assembly and solve loop
 
 #include <multilink_copilot/copilot.h>
 
@@ -30,23 +30,18 @@ std::vector<int> selectSmallestIndices(const Eigen::VectorXd& values, int count)
   return indices;
 }
 
-Eigen::RowVectorXd extractSelectedJacobianRow(const Eigen::MatrixXd& jacobian,
-                                              int row,
-                                              const std::vector<int>& yaw_joint_local_indices)
+Eigen::RowVectorXd extractLinkJointJacobianRow(const Eigen::MatrixXd& jacobian, int row, int link_joint_num)
 {
-  Eigen::RowVectorXd selected = Eigen::RowVectorXd::Zero(yaw_joint_local_indices.size());
+  Eigen::RowVectorXd selected = Eigen::RowVectorXd::Zero(link_joint_num);
   if (row < 0 || row >= jacobian.rows())
   {
     return selected;
   }
 
-  for (int i = 0; i < static_cast<int>(yaw_joint_local_indices.size()); ++i)
+  const int available_columns = std::max(0, std::min(link_joint_num, static_cast<int>(jacobian.cols()) - 6));
+  if (available_columns > 0)
   {
-    const int full_column = 6 + yaw_joint_local_indices.at(i);
-    if (full_column < jacobian.cols())
-    {
-      selected(i) = jacobian(row, full_column);
-    }
+    selected.head(available_columns) = jacobian.block(row, 6, 1, available_columns);
   }
 
   return selected;
@@ -102,18 +97,13 @@ struct QpConstraintBuilder
   int row;
 };
 
-Eigen::VectorXd buildYawLimitVector(const std::vector<double>& joint_limits,
-                                    const std::vector<int>& yaw_joint_local_indices,
-                                    double default_value)
+Eigen::VectorXd buildJointLimitVector(const std::vector<double>& joint_limits, int joint_count, double default_value)
 {
-  Eigen::VectorXd limit_vector = Eigen::VectorXd::Constant(yaw_joint_local_indices.size(), default_value);
-  for (int i = 0; i < static_cast<int>(yaw_joint_local_indices.size()); ++i)
+  Eigen::VectorXd limit_vector = Eigen::VectorXd::Constant(joint_count, default_value);
+  const int available_count = std::min<int>(joint_count, joint_limits.size());
+  for (int i = 0; i < available_count; ++i)
   {
-    const int local_index = yaw_joint_local_indices.at(i);
-    if (local_index < static_cast<int>(joint_limits.size()))
-    {
-      limit_vector(i) = joint_limits.at(local_index);
-    }
+    limit_vector(i) = joint_limits.at(i);
   }
 
   return limit_vector;
@@ -121,9 +111,9 @@ Eigen::VectorXd buildYawLimitVector(const std::vector<double>& joint_limits,
 
 void appendFcRpConstraints(const boost::shared_ptr<Dragon::HydrusLikeRobotModel>& robot_model,
                            const std::vector<int>& active_indices,
-                           const std::vector<int>& yaw_joint_local_indices,
+                           int link_joint_num,
                            double fc_rp_min_threshold,
-                           const Eigen::VectorXd& current_yaw,
+                           const Eigen::VectorXd& current_joint_positions,
                            QpConstraintBuilder& builder)
 {
   const Eigen::VectorXd& fc_rp_dists = robot_model->getFeasibleControlRollPitchDists();
@@ -132,17 +122,17 @@ void appendFcRpConstraints(const boost::shared_ptr<Dragon::HydrusLikeRobotModel>
   for (const int active_index : active_indices)
   {
     const Eigen::RowVectorXd jacobian_row =
-        extractSelectedJacobianRow(fc_rp_jacobian, active_index, yaw_joint_local_indices);
-    builder.appendLowerBound(jacobian_row,
-                             fc_rp_min_threshold - fc_rp_dists(active_index) + jacobian_row.dot(current_yaw));
+        extractLinkJointJacobianRow(fc_rp_jacobian, active_index, link_joint_num);
+    builder.appendLowerBound(
+        jacobian_row, fc_rp_min_threshold - fc_rp_dists(active_index) + jacobian_row.dot(current_joint_positions));
   }
 }
 
 void appendFcTConstraints(const boost::shared_ptr<Dragon::HydrusLikeRobotModel>& robot_model,
                           const std::vector<int>& active_indices,
-                          const std::vector<int>& yaw_joint_local_indices,
+                          int link_joint_num,
                           double fc_t_min_threshold,
-                          const Eigen::VectorXd& current_yaw,
+                          const Eigen::VectorXd& current_joint_positions,
                           QpConstraintBuilder& builder)
 {
   const Eigen::VectorXd& fc_t_dists = robot_model->getFeasibleControlTDists();
@@ -151,17 +141,17 @@ void appendFcTConstraints(const boost::shared_ptr<Dragon::HydrusLikeRobotModel>&
   for (const int active_index : active_indices)
   {
     const Eigen::RowVectorXd jacobian_row =
-        extractSelectedJacobianRow(fc_t_jacobian, active_index, yaw_joint_local_indices);
-    builder.appendLowerBound(jacobian_row,
-                             fc_t_min_threshold - fc_t_dists(active_index) + jacobian_row.dot(current_yaw));
+        extractLinkJointJacobianRow(fc_t_jacobian, active_index, link_joint_num);
+    builder.appendLowerBound(
+        jacobian_row, fc_t_min_threshold - fc_t_dists(active_index) + jacobian_row.dot(current_joint_positions));
   }
 }
 
 void appendStaticThrustConstraints(const boost::shared_ptr<Dragon::HydrusLikeRobotModel>& robot_model,
-                                   const std::vector<int>& yaw_joint_local_indices,
+                                   int link_joint_num,
                                    double static_thrust_min,
                                    double static_thrust_max,
-                                   const Eigen::VectorXd& current_yaw,
+                                   const Eigen::VectorXd& current_joint_positions,
                                    QpConstraintBuilder& builder)
 {
   const Eigen::VectorXd& static_thrust = robot_model->getStaticThrust();
@@ -170,43 +160,42 @@ void appendStaticThrustConstraints(const boost::shared_ptr<Dragon::HydrusLikeRob
   for (int i = 0; i < static_thrust.size(); ++i)
   {
     const Eigen::RowVectorXd jacobian_row =
-        extractSelectedJacobianRow(lambda_jacobian, i, yaw_joint_local_indices);
-    builder.appendLowerBound(jacobian_row,
-                             static_thrust_min - static_thrust(i) + jacobian_row.dot(current_yaw));
-    builder.appendUpperBound(jacobian_row,
-                             static_thrust_max - static_thrust(i) + jacobian_row.dot(current_yaw));
+        extractLinkJointJacobianRow(lambda_jacobian, i, link_joint_num);
+    builder.appendLowerBound(
+        jacobian_row, static_thrust_min - static_thrust(i) + jacobian_row.dot(current_joint_positions));
+    builder.appendUpperBound(
+        jacobian_row, static_thrust_max - static_thrust(i) + jacobian_row.dot(current_joint_positions));
   }
 }
 
 void appendOverlapConstraint(const boost::shared_ptr<Dragon::HydrusLikeRobotModel>& robot_model,
-                             const std::vector<int>& yaw_joint_local_indices,
+                             int link_joint_num,
                              double minimum_overlap_clearance,
-                             const Eigen::VectorXd& current_yaw,
+                             const Eigen::VectorXd& current_joint_positions,
                              QpConstraintBuilder& builder)
 {
   const double overlap_clearance =
       robot_model->getClosestRotorDist() - 2.0 * robot_model->getEdfRadius();
   const Eigen::RowVectorXd overlap_jacobian =
-      extractSelectedJacobianRow(robot_model->getRotorOverlapJacobian(), 0, yaw_joint_local_indices);
-  builder.appendLowerBound(overlap_jacobian,
-                           minimum_overlap_clearance - overlap_clearance + overlap_jacobian.dot(current_yaw));
+      extractLinkJointJacobianRow(robot_model->getRotorOverlapJacobian(), 0, link_joint_num);
+  builder.appendLowerBound(
+      overlap_jacobian, minimum_overlap_clearance - overlap_clearance + overlap_jacobian.dot(current_joint_positions));
 }
 }  // namespace
 
-bool CopilotPlanner::solveStableYawQp(const Eigen::VectorXd& desired_joint_positions,
-                                      const Eigen::VectorXd& reference_joint_positions,
-                                      Eigen::VectorXd& stable_joint_positions)
+bool CopilotPlanner::solveStableJointQp(const Eigen::VectorXd& desired_joint_positions,
+                                        const Eigen::VectorXd& reference_joint_positions,
+                                        Eigen::VectorXd& stable_joint_positions)
 {
-  const Eigen::VectorXd desired_full = buildYawOnlyJointPositions(desired_joint_positions);
-  const Eigen::VectorXd desired_yaw = extractYawJointPositions(desired_full);
+  const Eigen::VectorXd desired_full = clampLinkJointPositions(desired_joint_positions);
 
-  if (yaw_joint_local_indices_.empty())
+  if (link_joint_num_ <= 0)
   {
     stable_joint_positions = desired_full;
     return checkStability(stable_joint_positions, false);
   }
 
-  Eigen::VectorXd current_joint_positions = buildYawOnlyJointPositions(reference_joint_positions);
+  Eigen::VectorXd current_joint_positions = clampLinkJointPositions(reference_joint_positions);
   StabilityMetrics current_metrics;
   if (!evaluateStability(current_joint_positions, current_metrics) || !current_metrics.safe)
   {
@@ -214,12 +203,12 @@ bool CopilotPlanner::solveStableYawQp(const Eigen::VectorXd& desired_joint_posit
   }
 
   Eigen::VectorXd best_joint_positions = current_joint_positions;
-  double best_yaw_error = (extractYawJointPositions(best_joint_positions) - desired_yaw).norm();
+  double best_joint_error = (best_joint_positions - desired_full).norm();
 
-  const Eigen::VectorXd yaw_lower_bounds =
-      buildYawLimitVector(dragon_robot_model_->getLinkJointLowerLimits(), yaw_joint_local_indices_, -M_PI);
-  const Eigen::VectorXd yaw_upper_bounds =
-      buildYawLimitVector(dragon_robot_model_->getLinkJointUpperLimits(), yaw_joint_local_indices_, M_PI);
+  const Eigen::VectorXd joint_lower_bounds =
+      buildJointLimitVector(dragon_robot_model_->getLinkJointLowerLimits(), link_joint_num_, -M_PI);
+  const Eigen::VectorXd joint_upper_bounds =
+      buildJointLimitVector(dragon_robot_model_->getLinkJointUpperLimits(), link_joint_num_, M_PI);
 
   for (int iter = 0; iter < stability_qp_max_iterations_; ++iter)
   {
@@ -229,15 +218,15 @@ bool CopilotPlanner::solveStableYawQp(const Eigen::VectorXd& desired_joint_posit
       break;
     }
 
-    const Eigen::VectorXd current_yaw = extractYawJointPositions(current_joint_positions);
-    const double current_yaw_error = (current_yaw - desired_yaw).norm();
-    if (iter_metrics.safe && current_yaw_error < best_yaw_error)
+    const Eigen::VectorXd current_joint_vector = current_joint_positions;
+    const double current_joint_error = (current_joint_vector - desired_full).norm();
+    if (iter_metrics.safe && current_joint_error < best_joint_error)
     {
       best_joint_positions = current_joint_positions;
-      best_yaw_error = current_yaw_error;
+      best_joint_error = current_joint_error;
     }
 
-    if (iter_metrics.safe && current_yaw_error <= stability_qp_convergence_tol_)
+    if (iter_metrics.safe && current_joint_error <= stability_qp_convergence_tol_)
     {
       stable_joint_positions = current_joint_positions;
       return true;
@@ -253,18 +242,18 @@ bool CopilotPlanner::solveStableYawQp(const Eigen::VectorXd& desired_joint_posit
                                  static_cast<int>(active_fc_t_indices.size()) +
                                  dragon_robot_model_->getStaticThrust().size() * 2 + 1;
 
-    QpConstraintBuilder builder(constraint_count, yaw_joint_local_indices_.size());
-    appendFcRpConstraints(dragon_robot_model_, active_fc_rp_indices, yaw_joint_local_indices_,
-                          stability_fc_rp_min_thre_, current_yaw, builder);
+    QpConstraintBuilder builder(constraint_count, link_joint_num_);
+    appendFcRpConstraints(dragon_robot_model_, active_fc_rp_indices, link_joint_num_, stability_fc_rp_min_thre_,
+                          current_joint_vector, builder);
     if (stability_check_fc_t_)
     {
-      appendFcTConstraints(dragon_robot_model_, active_fc_t_indices, yaw_joint_local_indices_,
-                           stability_fc_t_min_thre_, current_yaw, builder);
+      appendFcTConstraints(dragon_robot_model_, active_fc_t_indices, link_joint_num_, stability_fc_t_min_thre_,
+                           current_joint_vector, builder);
     }
-    appendStaticThrustConstraints(dragon_robot_model_, yaw_joint_local_indices_, stability_static_thrust_min_,
-                                  stability_static_thrust_max_, current_yaw, builder);
-    appendOverlapConstraint(dragon_robot_model_, yaw_joint_local_indices_, stability_overlap_min_clearance_,
-                            current_yaw, builder);
+    appendStaticThrustConstraints(dragon_robot_model_, link_joint_num_, stability_static_thrust_min_,
+                                  stability_static_thrust_max_, current_joint_vector, builder);
+    appendOverlapConstraint(dragon_robot_model_, link_joint_num_, stability_overlap_min_clearance_,
+                            current_joint_vector, builder);
     if (builder.row != constraint_count)
     {
       ROS_ERROR_STREAM("[CopilotPlanner] Stability QP constraint assembly mismatch: expected "
@@ -272,24 +261,24 @@ bool CopilotPlanner::solveStableYawQp(const Eigen::VectorXd& desired_joint_posit
       return false;
     }
 
-    Eigen::VectorXd qp_lower_bounds = current_yaw.array() - stability_qp_joint_step_limit_;
-    Eigen::VectorXd qp_upper_bounds = current_yaw.array() + stability_qp_joint_step_limit_;
-    qp_lower_bounds = qp_lower_bounds.cwiseMax(yaw_lower_bounds);
-    qp_upper_bounds = qp_upper_bounds.cwiseMin(yaw_upper_bounds);
+    Eigen::VectorXd qp_lower_bounds = current_joint_vector.array() - stability_qp_joint_step_limit_;
+    Eigen::VectorXd qp_upper_bounds = current_joint_vector.array() + stability_qp_joint_step_limit_;
+    qp_lower_bounds = qp_lower_bounds.cwiseMax(joint_lower_bounds);
+    qp_upper_bounds = qp_upper_bounds.cwiseMin(joint_upper_bounds);
 
     if (!hasNonEmptyIntersection(qp_lower_bounds, qp_upper_bounds, stability_qp_feasibility_tol_))
     {
       break;
     }
 
-    Eigen::MatrixXd H = Eigen::MatrixXd::Identity(yaw_joint_local_indices_.size(), yaw_joint_local_indices_.size());
+    Eigen::MatrixXd H = Eigen::MatrixXd::Identity(link_joint_num_, link_joint_num_);
     H *= (1.0 + stability_qp_regularization_);
-    const Eigen::VectorXd g = -(desired_yaw + stability_qp_regularization_ * current_yaw);
+    const Eigen::VectorXd g = -(desired_full + stability_qp_regularization_ * current_joint_vector);
 
     RowMajorMatrixXd H_row_major = H;
     RowMajorMatrixXd A_row_major = builder.A;
 
-    qpOASES::SQProblem solver(yaw_joint_local_indices_.size(), constraint_count);
+    qpOASES::SQProblem solver(link_joint_num_, constraint_count);
     qpOASES::Options options;
     options.printLevel = qpOASES::PL_NONE;
     options.enableEqualities = qpOASES::BT_TRUE;
@@ -305,15 +294,15 @@ bool CopilotPlanner::solveStableYawQp(const Eigen::VectorXd& desired_joint_posit
       break;
     }
 
-    Eigen::VectorXd solved_yaw = current_yaw;
-    solver.getPrimalSolution(solved_yaw.data());
-    if (!solved_yaw.allFinite())
+    Eigen::VectorXd solved_joint_positions = current_joint_vector;
+    solver.getPrimalSolution(solved_joint_positions.data());
+    if (!solved_joint_positions.allFinite())
     {
       break;
     }
 
-    current_joint_positions = composeYawOnlyJointPositions(solved_yaw);
-    const double update_norm = (solved_yaw - current_yaw).norm();
+    current_joint_positions = clampLinkJointPositions(solved_joint_positions);
+    const double update_norm = (current_joint_positions - current_joint_vector).norm();
     if (update_norm <= stability_qp_convergence_tol_)
     {
       StabilityMetrics next_metrics;

@@ -42,10 +42,41 @@ double clamp01(double value)
   return std::max(0.0, std::min(1.0, value));
 }
 
+double clampUnit(double value)
+{
+  return std::max(-1.0, std::min(1.0, value));
+}
+
 double smoothstep01(double value)
 {
   value = clamp01(value);
   return value * value * (3.0 - 2.0 * value);
+}
+
+Eigen::Matrix3d rotationAroundY(double angle)
+{
+  const double c = std::cos(angle);
+  const double s = std::sin(angle);
+
+  Eigen::Matrix3d rotation = Eigen::Matrix3d::Identity();
+  rotation(0, 0) = c;
+  rotation(0, 2) = s;
+  rotation(2, 0) = -s;
+  rotation(2, 2) = c;
+  return rotation;
+}
+
+Eigen::Matrix3d rotationAroundZ(double angle)
+{
+  const double c = std::cos(angle);
+  const double s = std::sin(angle);
+
+  Eigen::Matrix3d rotation = Eigen::Matrix3d::Identity();
+  rotation(0, 0) = c;
+  rotation(0, 1) = -s;
+  rotation(1, 0) = s;
+  rotation(1, 1) = c;
+  return rotation;
 }
 
 Eigen::Vector3d interpolateSegmentPoint(const std::vector<Eigen::Vector3d>& polyline, int segment_index, double alpha)
@@ -458,8 +489,14 @@ Eigen::VectorXd CopilotPlanner::computeJointAnglesFromSnakeTarget(const std::vec
   tf::Quaternion root_quat;
   tf::quaternionMsgToTF(latest_target_pose_->pose.orientation, root_quat);
   const tf::Matrix3x3 root_rotation(root_quat);
-  const tf::Vector3 link1_direction_tf = root_rotation * tf::Vector3(1.0, 0.0, 0.0);
-  Eigen::Vector3d current_link_direction(link1_direction_tf.x(), link1_direction_tf.y(), link1_direction_tf.z());
+  Eigen::Matrix3d current_link_rotation = Eigen::Matrix3d::Identity();
+  for (int row = 0; row < 3; ++row)
+  {
+    for (int col = 0; col < 3; ++col)
+    {
+      current_link_rotation(row, col) = root_rotation[row][col];
+    }
+  }
   Eigen::Vector3d current_tail_position = link1_tail_pos_world_;
 
   for (size_t i = 0; i < target_positions.size(); ++i)
@@ -471,39 +508,36 @@ Eigen::VectorXd CopilotPlanner::computeJointAnglesFromSnakeTarget(const std::vec
     }
 
     const Eigen::Vector3d desired_next_direction = segment.normalized();
-    Eigen::Vector2d current_dir_xy(current_link_direction.x(), current_link_direction.y());
-    Eigen::Vector2d desired_dir_xy(desired_next_direction.x(), desired_next_direction.y());
-
-    const double current_dir_xy_norm = current_dir_xy.norm();
-    const double desired_dir_xy_norm = desired_dir_xy.norm();
-    if (current_dir_xy_norm < kDirectionNormEpsilon || desired_dir_xy_norm < kDirectionNormEpsilon)
+    Eigen::Vector3d desired_next_direction_local = current_link_rotation.transpose() * desired_next_direction;
+    const double desired_next_direction_local_norm = desired_next_direction_local.norm();
+    if (desired_next_direction_local_norm < kDirectionNormEpsilon)
     {
-      current_link_direction = desired_next_direction;
       current_tail_position = target_positions[i];
       continue;
     }
 
-    current_dir_xy /= current_dir_xy_norm;
-    desired_dir_xy /= desired_dir_xy_norm;
+    desired_next_direction_local /= desired_next_direction_local_norm;
 
-    double joint_yaw = std::atan2(desired_dir_xy.y(), desired_dir_xy.x()) -
-                       std::atan2(current_dir_xy.y(), current_dir_xy.x());
-    while (joint_yaw > M_PI)
+    const double joint_yaw = std::asin(clampUnit(desired_next_direction_local.y()));
+    const double xz_norm = std::hypot(desired_next_direction_local.x(), desired_next_direction_local.z());
+    const double joint_pitch =
+        xz_norm < kDirectionNormEpsilon ? 0.0 : std::atan2(-desired_next_direction_local.z(),
+                                                           desired_next_direction_local.x());
+
+    const int pitch_joint_index =
+        i < pitch_joint_local_indices_.size() ? pitch_joint_local_indices_.at(i) : -1;
+    if (pitch_joint_index >= 0 && pitch_joint_index < link_joint_num_)
     {
-      joint_yaw -= 2.0 * M_PI;
-    }
-    while (joint_yaw < -M_PI)
-    {
-      joint_yaw += 2.0 * M_PI;
+      joint_positions(pitch_joint_index) = joint_pitch;
     }
 
-    const int yaw_joint_index = static_cast<int>(i) * 2 + 1;
-    if (yaw_joint_index < link_joint_num_)
+    const int yaw_joint_index = i < yaw_joint_local_indices_.size() ? yaw_joint_local_indices_.at(i) : -1;
+    if (yaw_joint_index >= 0 && yaw_joint_index < link_joint_num_)
     {
       joint_positions(yaw_joint_index) = joint_yaw;
     }
 
-    current_link_direction = desired_next_direction;
+    current_link_rotation = current_link_rotation * rotationAroundY(joint_pitch) * rotationAroundZ(joint_yaw);
     current_tail_position = target_positions[i];
   }
 
@@ -523,16 +557,27 @@ Eigen::VectorXd CopilotPlanner::computeWarmupJointPositions(const std::vector<Ei
 
   for (size_t i = 0; i < target_positions.size(); ++i)
   {
-    const int yaw_joint_index = static_cast<int>(i) * 2 + 1;
-    if (yaw_joint_index >= link_joint_num_)
+    const int pitch_joint_index =
+        i < pitch_joint_local_indices_.size() ? pitch_joint_local_indices_.at(i) : -1;
+    const int yaw_joint_index = i < yaw_joint_local_indices_.size() ? yaw_joint_local_indices_.at(i) : -1;
+    if ((pitch_joint_index < 0 || pitch_joint_index >= link_joint_num_) &&
+        (yaw_joint_index < 0 || yaw_joint_index >= link_joint_num_))
     {
-      break;
+      continue;
     }
 
     const double joint_progress = (total_arc_length_ - static_cast<double>(i) * link_length_) / activation_distance;
     const double activation = smoothstep01(joint_progress);
-    desired_joint_positions(yaw_joint_index) +=
-        activation * (path_joint_positions(yaw_joint_index) - desired_joint_positions(yaw_joint_index));
+    if (pitch_joint_index >= 0 && pitch_joint_index < link_joint_num_)
+    {
+      desired_joint_positions(pitch_joint_index) += activation *
+          (path_joint_positions(pitch_joint_index) - desired_joint_positions(pitch_joint_index));
+    }
+    if (yaw_joint_index >= 0 && yaw_joint_index < link_joint_num_)
+    {
+      desired_joint_positions(yaw_joint_index) +=
+          activation * (path_joint_positions(yaw_joint_index) - desired_joint_positions(yaw_joint_index));
+    }
   }
 
   return clampLinkJointPositions(desired_joint_positions);
