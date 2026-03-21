@@ -12,6 +12,15 @@ jsk_aerial_robot: https://github.com/jsk-ros-pkg/jsk_aerial_robot/pull/746
 roslaunch multilink_copilot copilot_planner.launch
 ```
 
+## Configuration
+
+The planner parameters are stored in:
+
+```bash
+multilink_copilot/config/copilot_planner.yaml
+```
+
+The launch file loads this YAML by default. `target_pose_frame_type` can still be overridden from the launch arg.
 
 
 

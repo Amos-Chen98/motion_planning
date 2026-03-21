@@ -3,6 +3,7 @@
     <!-- Frame configuration -->
     <arg name="frame_id" default="world" />
     <arg name="run_copilot" default="true" />
+    <arg name="target_pose_frame_type" default="FLU" />
 
     <!-- Point cloud -->
     <arg name="pcl_topic" default="/pointcloud/output"/>
@@ -56,7 +57,7 @@
     </include>
 
     <include file="$(find multilink_copilot)/launch/copilot_planner.launch" if="$(arg run_copilot)">
-        <arg name="target_pose_frame_type" value="FLU" />
+        <arg name="target_pose_frame_type" value="$(arg target_pose_frame_type)" />
     </include>
 
 </launch>

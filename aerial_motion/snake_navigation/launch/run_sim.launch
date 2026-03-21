@@ -2,18 +2,19 @@
 <launch>
     <!-- Frame configuration -->
     <arg name="frame_id" default="world" />
+    <arg name="target_pose_frame_type" default="FLU" />
 
     <!-- Point cloud -->
     <arg name="pcd_filename" default="bricks"/>
     <arg name="pcl_topic" default="/pointcloud/output"/>
-    <arg name="pcl_pub_max_z" default="3.0"/>
-    <arg name="pcl_pub_min_z" default="-2.0"/>
+    <arg name="pcl_pub_max_z" default="5.0"/>
+    <arg name="pcl_pub_min_z" default="0.0"/>
 
     <!-- Mapping parameters -->
-    <arg name="pcl_sub_max_z" default="3.0"/>
-    <arg name="pcl_sub_min_z" default="-1.0"/>
-    <arg name="occupancy_max_z" default="-0.5"/>
-    <arg name="occupancy_min_z" default="-0.6"/>
+    <arg name="pcl_sub_max_z" default="0.7"/>
+    <arg name="pcl_sub_min_z" default="0.6"/>
+    <arg name="occupancy_max_z" default="0.7"/>
+    <arg name="occupancy_min_z" default="0.6"/>
 
     <!-- Planner topic remapping -->
     <arg name="robot_pose_type" default="pose" />
@@ -25,7 +26,7 @@
     <!-- Planner parameters -->
     <arg name="target_reach_threshold" default="0.2" />
     <arg name="cmd_hz" default="40" />
-    <arg name="move_vel" default="0.2" />
+    <arg name="move_vel" default="0.05" />
     <arg name="map_server" default="esdf" />
     <arg name="traj_opt" default="false" />
     <arg name="dim" default="2" />
@@ -38,7 +39,7 @@
     <arg name="run_copilot" default="true" />
 
     <!-- RViz configuration -->
-    <arg name="rviz_config" default="$(find snake_navigation)/rviz/rviz.rviz"/>
+    <arg name="rviz_config" default="$(find snake_navigation)/rviz/run_dragon.rviz"/>
 
     <!-- Navigation components -->
     <include file="$(find snake_navigation)/launch/nav.launch">
@@ -64,6 +65,7 @@
         <arg name="max_flight_height" value="$(arg max_flight_height)" />
         <arg name="collision_threshold" value="$(arg collision_threshold)" />
         <arg name="run_copilot" value="$(arg run_copilot)" />
+        <arg name="target_pose_frame_type" value="$(arg target_pose_frame_type)" />
     </include>
 
     <!-- Point cloud simulation (on ground PC only) -->

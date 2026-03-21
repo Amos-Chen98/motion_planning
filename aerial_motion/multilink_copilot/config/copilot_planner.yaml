@@ -1,0 +1,29 @@
+# Control loop
+control_loop_rate: 40.0
+
+# Trajectory tracking
+trajectory_sample_interval: 0.05
+trajectory_buffer_max_length: 10.0
+
+# Snake motion
+snake_mode_enabled: true
+
+# Target pose coordinate frame.
+# This value can be overridden by the launch arg `target_pose_frame_type`.
+target_pose_frame_type: FLU
+
+# Stability projection QP
+stability_qp_max_iterations: 20
+stability_qp_joint_step_limit: 0.1
+stability_qp_regularization: 0.001
+stability_qp_convergence_tol: 0.001
+stability_qp_feasibility_tol: 0.0001
+
+# Conservative stability thresholds.
+# These are intentionally stricter than the raw robot-model thresholds.
+stability_check_fc_t: false
+stability_fc_rp_min_thre: 3.2
+stability_fc_t_min_thre: 0.01
+stability_static_thrust_min: 2.0
+stability_static_thrust_max: 30.0
+stability_overlap_min_clearance: 0.01

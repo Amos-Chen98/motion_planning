@@ -10,18 +10,33 @@
 
     <buildtool_depend>catkin</buildtool_depend>
 
-    <depend>roscpp</depend>
-    <depend>std_msgs</depend>
-    <depend>geometry_msgs</depend>
-    <depend>sensor_msgs</depend>
-    <depend>nav_msgs</depend>
-    <depend>visualization_msgs</depend>
-    <depend>aerial_robot_msgs</depend>
-    <depend>aerial_robot_model</depend>
-    <depend>tf</depend>
-    <depend>tf_conversions</depend>
-    <depend>kdl_parser</depend>
-    <depend>eigen_conversions</depend>
+    <build_depend>roscpp</build_depend>
+    <build_depend>geometry_msgs</build_depend>
+    <build_depend>visualization_msgs</build_depend>
+    <build_depend>aerial_robot_msgs</build_depend>
+    <build_depend>differential_kinematics</build_depend>
+    <build_depend>dragon</build_depend>
+    <build_depend>pluginlib</build_depend>
+    <build_depend>tf</build_depend>
+    <build_depend>tf_conversions</build_depend>
+
+    <build_export_depend>roscpp</build_export_depend>
+    <build_export_depend>geometry_msgs</build_export_depend>
+    <build_export_depend>visualization_msgs</build_export_depend>
+    <build_export_depend>aerial_robot_msgs</build_export_depend>
+    <build_export_depend>differential_kinematics</build_export_depend>
+    <build_export_depend>dragon</build_export_depend>
+    <build_export_depend>pluginlib</build_export_depend>
+
+    <exec_depend>roscpp</exec_depend>
+    <exec_depend>geometry_msgs</exec_depend>
+    <exec_depend>visualization_msgs</exec_depend>
+    <exec_depend>aerial_robot_msgs</exec_depend>
+    <exec_depend>differential_kinematics</exec_depend>
+    <exec_depend>dragon</exec_depend>
+    <exec_depend>pluginlib</exec_depend>
+    <exec_depend>tf</exec_depend>
+    <exec_depend>tf_conversions</exec_depend>
 
     <export>
     </export>
