@@ -85,13 +85,14 @@ private:
   double stability_overlap_min_clearance_;
   
   // Current state
-  geometry_msgs::PoseStamped::ConstPtr latest_target_pose_;
+  geometry_msgs::PoseStamped::ConstPtr latest_target_pose_;  // Interpreted as the first-link tail target pose.
   Eigen::VectorXd latest_desired_joint_positions_;
   bool has_latest_desired_joint_positions_;
   Eigen::VectorXd last_stable_joint_positions_;
   bool has_last_stable_joint_positions_;
   bool stability_debug_timer_started_;
   Eigen::Vector3d root_pos_world_;
+  Eigen::Vector3d link1_tail_pos_world_;
   std::vector<Eigen::Vector3d> latest_snake_targets_;
   
   // Callbacks
@@ -104,13 +105,12 @@ private:
   void loadParameters();
   
   // Trajectory management
-  void updateTrajectoryBuffer(const Eigen::Vector3d& current_position);
+  void updateTrajectoryBuffer(const Eigen::Vector3d& link1_tail_position, const Eigen::Vector3d& root_position);
   bool prepareTrajectoryData();
   
   // Snake motion computation
   std::vector<Eigen::Vector3d> computeSnakeTargetPositions();
   std::vector<Eigen::Vector3d> computeWarmupTargetPositions();
-  Eigen::Vector3d findPointOnTrajectoryAtDistance(const Eigen::Vector3d& from_point, double target_distance);
   Eigen::VectorXd computeJointAnglesFromSnakeTarget(const std::vector<Eigen::Vector3d>& target_positions);
   Eigen::VectorXd computeWarmupJointPositions(const std::vector<Eigen::Vector3d>& target_positions);
   
@@ -136,7 +136,9 @@ private:
   Eigen::VectorXd getCurrentLinkJointPositions() const;
   Eigen::VectorXd buildFoldedReferenceJointPositions() const;
   Eigen::VectorXd buildDefaultReferenceJointPositions() const;
-  Eigen::Vector3d getRootPositionFromPose(const geometry_msgs::Pose& pose);
+  geometry_msgs::Pose convertLink1TailPoseToRootPose(const geometry_msgs::Pose& pose) const;
+  Eigen::Vector3d getLink1TailPositionFromPose(const geometry_msgs::Pose& pose) const;
+  Eigen::Vector3d getRootPositionFromLink1TailPose(const geometry_msgs::Pose& pose) const;
   
   // Visualization
   visualization_msgs::MarkerArray getTrajectoryVisualization();

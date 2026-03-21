@@ -15,6 +15,27 @@ namespace
 {
 constexpr double kDirectionNormEpsilon = 1e-6;
 constexpr double kWarmupDistanceTolerance = 0.02;
+constexpr double kSearchParameterEpsilon = 1e-9;
+
+struct TrajectorySearchCursor
+{
+  int segment_index = -1;  // Segment [segment_index, segment_index + 1] on an oldest-to-newest polyline.
+  double alpha = 0.0;      // Interpolation factor on the segment: 0 -> older endpoint, 1 -> newer endpoint.
+  Eigen::Vector3d position = Eigen::Vector3d::Zero();
+
+  bool valid() const
+  {
+    return segment_index >= 0;
+  }
+};
+
+struct TrajectorySearchResult
+{
+  Eigen::Vector3d position = Eigen::Vector3d::Zero();
+  TrajectorySearchCursor cursor;
+  double distance_error = std::numeric_limits<double>::infinity();
+  bool exact_match = false;
+};
 
 double clamp01(double value)
 {
@@ -25,6 +46,176 @@ double smoothstep01(double value)
 {
   value = clamp01(value);
   return value * value * (3.0 - 2.0 * value);
+}
+
+Eigen::Vector3d interpolateSegmentPoint(const std::vector<Eigen::Vector3d>& polyline, int segment_index, double alpha)
+{
+  return polyline[segment_index] + alpha * (polyline[segment_index + 1] - polyline[segment_index]);
+}
+
+std::vector<Eigen::Vector3d> buildTrajectorySearchPolyline(const std::deque<TrajectoryPoint>& trajectory_buffer,
+                                                           const Eigen::Vector3d& current_position)
+{
+  std::vector<Eigen::Vector3d> polyline;
+  polyline.reserve(trajectory_buffer.size() + 1);
+  for (const auto& point : trajectory_buffer)
+  {
+    polyline.push_back(point.position);
+  }
+
+  if (polyline.empty() || (polyline.back() - current_position).norm() > kDirectionNormEpsilon)
+  {
+    polyline.push_back(current_position);
+  }
+
+  return polyline;
+}
+
+TrajectorySearchCursor makeNewestTrajectoryCursor(const std::vector<Eigen::Vector3d>& polyline)
+{
+  TrajectorySearchCursor cursor;
+  if (polyline.size() < 2)
+  {
+    return cursor;
+  }
+
+  cursor.segment_index = static_cast<int>(polyline.size()) - 2;
+  cursor.alpha = 1.0;
+  cursor.position = polyline.back();
+  return cursor;
+}
+
+TrajectorySearchCursor normalizeCursorForBackwardTraversal(const std::vector<Eigen::Vector3d>& polyline,
+                                                           const TrajectorySearchCursor& raw_cursor)
+{
+  TrajectorySearchCursor cursor = raw_cursor;
+  if (polyline.size() < 2 || cursor.segment_index < 0 || cursor.segment_index + 1 >= static_cast<int>(polyline.size()))
+  {
+    cursor.segment_index = -1;
+    return cursor;
+  }
+
+  cursor.alpha = clamp01(cursor.alpha);
+  cursor.position = interpolateSegmentPoint(polyline, cursor.segment_index, cursor.alpha);
+
+  if (cursor.alpha <= kSearchParameterEpsilon && cursor.segment_index > 0)
+  {
+    --cursor.segment_index;
+    cursor.alpha = 1.0;
+    cursor.position = polyline[cursor.segment_index + 1];
+  }
+
+  return cursor;
+}
+
+void updateBestSearchResult(const Eigen::Vector3d& from_point,
+                            double target_distance,
+                            const Eigen::Vector3d& segment_start,
+                            const Eigen::Vector3d& segment_delta,
+                            int segment_index,
+                            double alpha_start,
+                            double u,
+                            TrajectorySearchResult& best_result)
+{
+  const double clamped_u = clamp01(u);
+  const Eigen::Vector3d candidate = segment_start + clamped_u * segment_delta;
+  const double distance_error = std::abs((candidate - from_point).norm() - target_distance);
+  if (distance_error >= best_result.distance_error)
+  {
+    return;
+  }
+
+  best_result.position = candidate;
+  best_result.cursor.segment_index = segment_index;
+  best_result.cursor.alpha = alpha_start * (1.0 - clamped_u);
+  best_result.cursor.position = candidate;
+  best_result.distance_error = distance_error;
+  best_result.exact_match = false;
+}
+
+TrajectorySearchResult findPointOnTrajectoryAtDistance(const std::vector<Eigen::Vector3d>& polyline,
+                                                       const TrajectorySearchCursor& start_cursor,
+                                                       const Eigen::Vector3d& from_point,
+                                                       double target_distance)
+{
+  TrajectorySearchResult best_result;
+  best_result.position = polyline.front();
+  best_result.cursor.segment_index = 0;
+  best_result.cursor.alpha = 0.0;
+  best_result.cursor.position = polyline.front();
+  best_result.distance_error = std::abs((polyline.front() - from_point).norm() - target_distance);
+
+  const TrajectorySearchCursor cursor = normalizeCursorForBackwardTraversal(polyline, start_cursor);
+  if (!cursor.valid())
+  {
+    return best_result;
+  }
+
+  for (int segment_index = cursor.segment_index; segment_index >= 0; --segment_index)
+  {
+    const double alpha_start = (segment_index == cursor.segment_index) ? cursor.alpha : 1.0;
+    const Eigen::Vector3d segment_start =
+        (segment_index == cursor.segment_index) ? cursor.position : polyline[segment_index + 1];
+    const Eigen::Vector3d segment_end = polyline[segment_index];
+    const Eigen::Vector3d segment_delta = segment_end - segment_start;
+    const double segment_length_sq = segment_delta.squaredNorm();
+
+    if (segment_length_sq < kDirectionNormEpsilon * kDirectionNormEpsilon)
+    {
+      updateBestSearchResult(from_point, target_distance, segment_start, segment_delta, segment_index, alpha_start, 0.0,
+                             best_result);
+      continue;
+    }
+
+    const Eigen::Vector3d relative_start = segment_start - from_point;
+    const double a = segment_length_sq;
+    const double b = 2.0 * segment_delta.dot(relative_start);
+    const double c = relative_start.squaredNorm() - target_distance * target_distance;
+    const double discriminant = b * b - 4.0 * a * c;
+
+    if (discriminant >= -kSearchParameterEpsilon)
+    {
+      const double sqrt_discriminant = std::sqrt(std::max(0.0, discriminant));
+      const double inv_denominator = 0.5 / a;
+      const double u_candidates[2] = {(-b - sqrt_discriminant) * inv_denominator,
+                                      (-b + sqrt_discriminant) * inv_denominator};
+      double best_u = std::numeric_limits<double>::infinity();
+
+      for (double u : u_candidates)
+      {
+        if (u >= -kSearchParameterEpsilon && u <= 1.0 + kSearchParameterEpsilon && u < best_u)
+        {
+          best_u = clamp01(u);
+        }
+      }
+
+      if (std::isfinite(best_u))
+      {
+        TrajectorySearchResult result;
+        result.position = segment_start + best_u * segment_delta;
+        result.cursor.segment_index = segment_index;
+        result.cursor.alpha = alpha_start * (1.0 - best_u);
+        result.cursor.position = result.position;
+        result.cursor = normalizeCursorForBackwardTraversal(polyline, result.cursor);
+        result.distance_error = std::abs((result.position - from_point).norm() - target_distance);
+        result.exact_match = true;
+        return result;
+      }
+    }
+
+    updateBestSearchResult(from_point, target_distance, segment_start, segment_delta, segment_index, alpha_start, 0.0,
+                           best_result);
+    updateBestSearchResult(from_point, target_distance, segment_start, segment_delta, segment_index, alpha_start, 1.0,
+                           best_result);
+
+    const double projection_u =
+        clamp01((from_point - segment_start).dot(segment_delta) / std::max(segment_length_sq, kDirectionNormEpsilon));
+    updateBestSearchResult(from_point, target_distance, segment_start, segment_delta, segment_index, alpha_start,
+                           projection_u, best_result);
+  }
+
+  best_result.cursor = normalizeCursorForBackwardTraversal(polyline, best_result.cursor);
+  return best_result;
 }
 
 Eigen::Vector3d getRootLinkDirection(const geometry_msgs::PoseStamped::ConstPtr& target_pose)
@@ -113,26 +304,28 @@ Eigen::Vector3d extrapolatePointAlongRayAtDistance(const Eigen::Vector3d& from_p
 }
 }  // namespace
 
-void CopilotPlanner::updateTrajectoryBuffer(const Eigen::Vector3d& current_position)
+void CopilotPlanner::updateTrajectoryBuffer(const Eigen::Vector3d& link1_tail_position,
+                                           const Eigen::Vector3d& root_position)
 {
   if (!trajectory_initialized_)
   {
-    trajectory_buffer_.push_back({current_position});
-    last_recorded_position_ = current_position;
+    trajectory_buffer_.push_back({link1_tail_position});
+    last_recorded_position_ = link1_tail_position;
     trajectory_initialized_ = true;
-    root_pos_world_ = current_position;
-    ROS_INFO("[CopilotPlanner] Trajectory initialized at position: [%.3f, %.3f, %.3f]", current_position.x(),
-             current_position.y(), current_position.z());
+    link1_tail_pos_world_ = link1_tail_position;
+    root_pos_world_ = root_position;
+    ROS_INFO("[CopilotPlanner] Link1-tail trajectory initialized at position: [%.3f, %.3f, %.3f]",
+             link1_tail_position.x(), link1_tail_position.y(), link1_tail_position.z());
     return;
   }
 
-  const double distance = (current_position - last_recorded_position_).norm();
+  const double distance = (link1_tail_position - last_recorded_position_).norm();
 
   if (distance >= trajectory_sample_interval_)
   {
-    trajectory_buffer_.push_back({current_position});
+    trajectory_buffer_.push_back({link1_tail_position});
     total_arc_length_ += distance;
-    last_recorded_position_ = current_position;
+    last_recorded_position_ = link1_tail_position;
 
     while (!trajectory_buffer_.empty() && total_arc_length_ > trajectory_buffer_max_length_)
     {
@@ -147,7 +340,8 @@ void CopilotPlanner::updateTrajectoryBuffer(const Eigen::Vector3d& current_posit
     }
   }
 
-  root_pos_world_ = current_position;
+  link1_tail_pos_world_ = link1_tail_position;
+  root_pos_world_ = root_position;
 }
 
 bool CopilotPlanner::prepareTrajectoryData()
@@ -176,10 +370,18 @@ std::vector<Eigen::Vector3d> CopilotPlanner::computeWarmupTargetPositions()
     return target_positions;
   }
 
+  const std::vector<Eigen::Vector3d> trajectory_polyline =
+      buildTrajectorySearchPolyline(trajectory_buffer_, link1_tail_pos_world_);
+  if (trajectory_polyline.size() < 2)
+  {
+    return target_positions;
+  }
+
   const Eigen::Vector3d current_link_direction = getRootLinkDirection(latest_target_pose_);
   const Eigen::Vector3d oldest_backward_direction =
       computeOldestBackwardDirection(trajectory_buffer_, current_link_direction);
-  Eigen::Vector3d current_head = root_pos_world_ + current_link_direction * link_length_;
+  Eigen::Vector3d current_head = link1_tail_pos_world_;
+  TrajectorySearchCursor trajectory_cursor = makeNewestTrajectoryCursor(trajectory_polyline);
 
   bool tail_extension_started = false;
   for (int i = 2; i <= link_num_; ++i)
@@ -187,12 +389,14 @@ std::vector<Eigen::Vector3d> CopilotPlanner::computeWarmupTargetPositions()
     Eigen::Vector3d target = current_head;
     if (!tail_extension_started)
     {
-      const Eigen::Vector3d trajectory_target = findPointOnTrajectoryAtDistance(current_head, link_length_);
-      const double distance_error = std::abs((trajectory_target - current_head).norm() - link_length_);
+      const TrajectorySearchResult search_result =
+          findPointOnTrajectoryAtDistance(trajectory_polyline, trajectory_cursor, current_head, link_length_);
+      const double distance_error = search_result.distance_error;
 
       if (distance_error <= kWarmupDistanceTolerance)
       {
-        target = trajectory_target;
+        target = search_result.position;
+        trajectory_cursor = search_result.cursor;
       }
       else
       {
@@ -226,90 +430,25 @@ std::vector<Eigen::Vector3d> CopilotPlanner::computeSnakeTargetPositions()
     return target_positions;
   }
 
-  tf::Quaternion root_quat;
-  tf::quaternionMsgToTF(latest_target_pose_->pose.orientation, root_quat);
-  const tf::Matrix3x3 root_rotation(root_quat);
-  const tf::Vector3 link1_direction_tf = root_rotation * tf::Vector3(1.0, 0.0, 0.0);
-  const Eigen::Vector3d link1_direction(link1_direction_tf.x(), link1_direction_tf.y(), link1_direction_tf.z());
-  const Eigen::Vector3d link1_tail = root_pos_world_ + link1_direction * link_length_;
+  const std::vector<Eigen::Vector3d> trajectory_polyline =
+      buildTrajectorySearchPolyline(trajectory_buffer_, link1_tail_pos_world_);
+  if (trajectory_polyline.size() < 2)
+  {
+    return target_positions;
+  }
 
-  Eigen::Vector3d current_head = link1_tail;
+  Eigen::Vector3d current_head = link1_tail_pos_world_;
+  TrajectorySearchCursor trajectory_cursor = makeNewestTrajectoryCursor(trajectory_polyline);
   for (int i = 2; i <= link_num_; ++i)
   {
-    const Eigen::Vector3d target = findPointOnTrajectoryAtDistance(current_head, link_length_);
-    target_positions.push_back(target);
-    current_head = target;
+    const TrajectorySearchResult search_result =
+        findPointOnTrajectoryAtDistance(trajectory_polyline, trajectory_cursor, current_head, link_length_);
+    target_positions.push_back(search_result.position);
+    current_head = search_result.position;
+    trajectory_cursor = search_result.cursor;
   }
 
   return target_positions;
-}
-
-Eigen::Vector3d CopilotPlanner::findPointOnTrajectoryAtDistance(const Eigen::Vector3d& from_point,
-                                                                double target_distance)
-{
-  if (trajectory_buffer_.size() < 2)
-  {
-    return from_point;
-  }
-
-  int start_segment = 0;
-  double min_dist_to_trajectory = std::numeric_limits<double>::max();
-
-  for (size_t i = 0; i + 1 < trajectory_buffer_.size(); ++i)
-  {
-    const Eigen::Vector3d& p1 = trajectory_buffer_[i].position;
-    const Eigen::Vector3d& p2 = trajectory_buffer_[i + 1].position;
-    const Eigen::Vector3d segment = p2 - p1;
-    const double segment_length_sq = segment.squaredNorm();
-
-    double projection = 0.0;
-    if (segment_length_sq > 1e-10)
-    {
-      projection = std::max(0.0, std::min(1.0, (from_point - p1).dot(segment) / segment_length_sq));
-    }
-
-    const Eigen::Vector3d closest = p1 + projection * segment;
-    const double distance = (from_point - closest).norm();
-    if (distance < min_dist_to_trajectory)
-    {
-      min_dist_to_trajectory = distance;
-      start_segment = static_cast<int>(i);
-    }
-  }
-
-  Eigen::Vector3d best_point = trajectory_buffer_.front().position;
-  double best_distance_error = std::numeric_limits<double>::max();
-
-  for (int i = start_segment; i >= 0; --i)
-  {
-    const Eigen::Vector3d& p1 = trajectory_buffer_[i].position;
-    const Eigen::Vector3d& p2 = trajectory_buffer_[i + 1].position;
-    const Eigen::Vector3d segment = p2 - p1;
-    const double segment_length = segment.norm();
-
-    if (segment_length < 1e-6)
-    {
-      continue;
-    }
-
-    for (double alpha = 0.0; alpha <= 1.0; alpha += 0.1)
-    {
-      const Eigen::Vector3d candidate = p1 + alpha * segment;
-      const double error = std::abs((from_point - candidate).norm() - target_distance);
-      if (error < best_distance_error)
-      {
-        best_distance_error = error;
-        best_point = candidate;
-      }
-    }
-
-    if (best_distance_error < 0.01)
-    {
-      return best_point;
-    }
-  }
-
-  return best_point;
 }
 
 Eigen::VectorXd CopilotPlanner::computeJointAnglesFromSnakeTarget(const std::vector<Eigen::Vector3d>& target_positions)
@@ -321,7 +460,7 @@ Eigen::VectorXd CopilotPlanner::computeJointAnglesFromSnakeTarget(const std::vec
   const tf::Matrix3x3 root_rotation(root_quat);
   const tf::Vector3 link1_direction_tf = root_rotation * tf::Vector3(1.0, 0.0, 0.0);
   Eigen::Vector3d current_link_direction(link1_direction_tf.x(), link1_direction_tf.y(), link1_direction_tf.z());
-  Eigen::Vector3d current_tail_position = root_pos_world_ + current_link_direction * link_length_;
+  Eigen::Vector3d current_tail_position = link1_tail_pos_world_;
 
   for (size_t i = 0; i < target_positions.size(); ++i)
   {
@@ -399,9 +538,40 @@ Eigen::VectorXd CopilotPlanner::computeWarmupJointPositions(const std::vector<Ei
   return clampLinkJointPositions(desired_joint_positions);
 }
 
-Eigen::Vector3d CopilotPlanner::getRootPositionFromPose(const geometry_msgs::Pose& pose)
+geometry_msgs::Pose CopilotPlanner::convertLink1TailPoseToRootPose(const geometry_msgs::Pose& pose) const
+{
+  geometry_msgs::Pose root_pose = pose;
+
+  tf::Quaternion root_quat;
+  tf::quaternionMsgToTF(pose.orientation, root_quat);
+  const tf::Matrix3x3 root_rotation(root_quat);
+  const tf::Vector3 link1_direction_tf = root_rotation * tf::Vector3(1.0, 0.0, 0.0);
+  Eigen::Vector3d link1_direction(link1_direction_tf.x(), link1_direction_tf.y(), link1_direction_tf.z());
+
+  if (link1_direction.norm() < kDirectionNormEpsilon)
+  {
+    link1_direction = Eigen::Vector3d::UnitX();
+  }
+  else
+  {
+    link1_direction.normalize();
+  }
+
+  root_pose.position.x -= link_length_ * link1_direction.x();
+  root_pose.position.y -= link_length_ * link1_direction.y();
+  root_pose.position.z -= link_length_ * link1_direction.z();
+  return root_pose;
+}
+
+Eigen::Vector3d CopilotPlanner::getLink1TailPositionFromPose(const geometry_msgs::Pose& pose) const
 {
   return Eigen::Vector3d(pose.position.x, pose.position.y, pose.position.z);
+}
+
+Eigen::Vector3d CopilotPlanner::getRootPositionFromLink1TailPose(const geometry_msgs::Pose& pose) const
+{
+  const geometry_msgs::Pose root_pose = convertLink1TailPoseToRootPose(pose);
+  return Eigen::Vector3d(root_pose.position.x, root_pose.position.y, root_pose.position.z);
 }
 
 visualization_msgs::MarkerArray CopilotPlanner::getTrajectoryVisualization()
@@ -417,7 +587,7 @@ visualization_msgs::MarkerArray CopilotPlanner::getTrajectoryVisualization()
   visualization_msgs::Marker trajectory_line;
   trajectory_line.header.frame_id = "world";
   trajectory_line.header.stamp = current_time;
-  trajectory_line.ns = "root_trajectory";
+  trajectory_line.ns = "link1_tail_trajectory";
   trajectory_line.id = 0;
   trajectory_line.type = visualization_msgs::Marker::LINE_STRIP;
   trajectory_line.action = visualization_msgs::Marker::ADD;
@@ -464,12 +634,33 @@ visualization_msgs::MarkerArray CopilotPlanner::getTrajectoryVisualization()
   root_marker.lifetime = ros::Duration(0.1);
   marker_array.markers.push_back(root_marker);
 
+  visualization_msgs::Marker link1_tail_marker;
+  link1_tail_marker.header.frame_id = "world";
+  link1_tail_marker.header.stamp = current_time;
+  link1_tail_marker.ns = "link1_tail_position";
+  link1_tail_marker.id = 2;
+  link1_tail_marker.type = visualization_msgs::Marker::SPHERE;
+  link1_tail_marker.action = visualization_msgs::Marker::ADD;
+  link1_tail_marker.pose.position.x = link1_tail_pos_world_.x();
+  link1_tail_marker.pose.position.y = link1_tail_pos_world_.y();
+  link1_tail_marker.pose.position.z = link1_tail_pos_world_.z();
+  link1_tail_marker.pose.orientation.w = 1.0;
+  link1_tail_marker.scale.x = 0.08;
+  link1_tail_marker.scale.y = 0.08;
+  link1_tail_marker.scale.z = 0.08;
+  link1_tail_marker.color.r = 0.0;
+  link1_tail_marker.color.g = 0.4;
+  link1_tail_marker.color.b = 1.0;
+  link1_tail_marker.color.a = 1.0;
+  link1_tail_marker.lifetime = ros::Duration(0.1);
+  marker_array.markers.push_back(link1_tail_marker);
+
   for (size_t i = 0; i < trajectory_buffer_.size(); ++i)
   {
     visualization_msgs::Marker point_marker;
     point_marker.header.frame_id = "world";
     point_marker.header.stamp = current_time;
-    point_marker.ns = "trajectory_points";
+    point_marker.ns = "link1_tail_trajectory_points";
     point_marker.id = 100 + i;
     point_marker.type = visualization_msgs::Marker::SPHERE;
     point_marker.action = visualization_msgs::Marker::ADD;

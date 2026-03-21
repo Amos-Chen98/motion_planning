@@ -32,6 +32,15 @@ std::string formatJointPositions(const KDL::JntArray& joint_positions)
   return stream.str();
 }
 
+std::string formatPose(const geometry_msgs::Pose& pose)
+{
+  std::ostringstream stream;
+  stream << "pos: [" << pose.position.x << ' ' << pose.position.y << ' ' << pose.position.z
+         << "], quat(xyzw): [" << pose.orientation.x << ' ' << pose.orientation.y << ' ' << pose.orientation.z
+         << ' ' << pose.orientation.w << "]";
+  return stream.str();
+}
+
 std::string formatTargetPose(const geometry_msgs::PoseStamped::ConstPtr& target_pose)
 {
   if (!target_pose)
@@ -39,12 +48,7 @@ std::string formatTargetPose(const geometry_msgs::PoseStamped::ConstPtr& target_
     return "unavailable";
   }
 
-  const auto& pose = target_pose->pose;
-  std::ostringstream stream;
-  stream << "pos: [" << pose.position.x << ' ' << pose.position.y << ' ' << pose.position.z
-         << "], quat(xyzw): [" << pose.orientation.x << ' ' << pose.orientation.y << ' ' << pose.orientation.z
-         << ' ' << pose.orientation.w << "]";
-  return stream.str();
+  return formatPose(target_pose->pose);
 }
 
 }  // namespace
@@ -110,7 +114,7 @@ void CopilotPlanner::updateRobotModelForTargetConfiguration(const KDL::JntArray&
   if (latest_target_pose_)
   {
     tf::Transform root_tf;
-    tf::poseMsgToTF(latest_target_pose_->pose, root_tf);
+    tf::poseMsgToTF(convertLink1TailPoseToRootPose(latest_target_pose_->pose), root_tf);
 
     tf::Transform root_to_baselink_tf;
     tf::transformKDLToTF(
@@ -195,9 +199,12 @@ bool CopilotPlanner::checkStability(const Eigen::VectorXd& joint_positions, bool
   if (!is_stable && report_result)
   {
     const KDL::JntArray kdl_joint_positions = buildUpdatedJointPositions(yaw_only_joint_positions);
+    const std::string root_pose_string =
+        latest_target_pose_ ? formatPose(convertLink1TailPoseToRootPose(latest_target_pose_->pose)) : "unavailable";
     ROS_WARN_STREAM_THROTTLE(
         0.5, "[CopilotPlanner] Conservative stability check failed"
-                 << ", root_pose: " << formatTargetPose(latest_target_pose_)
+                 << ", root_pose: " << root_pose_string
+                 << ", link1_tail_pose: " << formatTargetPose(latest_target_pose_)
                  << ", raw_model_stable: " << (metrics.raw_model_stable ? "true" : "false")
                  << ", link_joint_positions: [" << yaw_only_joint_positions.transpose() << "]"
                  << ", full_joint_positions: " << formatJointPositions(kdl_joint_positions)

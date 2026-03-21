@@ -43,7 +43,7 @@ CopilotPlanner::CopilotPlanner()
   loadParameters();
   initializeRobotModel();
 
-  target_pose_sub_ = nh_.subscribe("root/target_pose", 1, &CopilotPlanner::targetPoseCallback, this);
+  target_pose_sub_ = nh_.subscribe("root/target_pose", 1, &CopilotPlanner::targetPoseCallback, this); // root link's tail pose
   full_state_target_pub_ = nh_.advertise<aerial_robot_msgs::FullStateTarget>("full_state_target", 1);
   trajectory_viz_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("trajectory_visualization", 1);
   control_timer_ =
@@ -54,6 +54,7 @@ CopilotPlanner::CopilotPlanner()
   ROS_INFO("[CopilotPlanner] Node initialized");
   ROS_INFO("[CopilotPlanner] Snake mode enabled: %s", snake_mode_enabled_ ? "true" : "false");
   ROS_INFO("[CopilotPlanner] Link number: %d, Link length: %.3f", link_num_, link_length_);
+  ROS_INFO("[CopilotPlanner] Interpreting root/target_pose as the first-link tail pose and deriving root pose internally");
 }
 
 void CopilotPlanner::loadParameters()
@@ -165,8 +166,10 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
     return;
   }
 
-  const Eigen::Vector3d root_position = getRootPositionFromPose(latest_target_pose_->pose);
-  updateTrajectoryBuffer(root_position);
+  const Eigen::Vector3d link1_tail_position = getLink1TailPositionFromPose(latest_target_pose_->pose);
+  const geometry_msgs::Pose root_target_pose = convertLink1TailPoseToRootPose(latest_target_pose_->pose);
+  const Eigen::Vector3d root_position = getRootPositionFromLink1TailPose(latest_target_pose_->pose);
+  updateTrajectoryBuffer(link1_tail_position, root_position);
 
   Eigen::VectorXd desired_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
   latest_snake_targets_.clear();
@@ -206,7 +209,7 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   aerial_robot_msgs::FullStateTarget full_state_msg;
   full_state_msg.header.stamp = ros::Time::now();
   full_state_msg.root_state.header = latest_target_pose_->header;
-  full_state_msg.root_state.pose.pose = latest_target_pose_->pose;
+  full_state_msg.root_state.pose.pose = root_target_pose;
   full_state_msg.joint_state.header = latest_target_pose_->header;
   full_state_msg.joint_state.name.resize(link_joint_num_);
   full_state_msg.joint_state.position.resize(link_joint_num_);
