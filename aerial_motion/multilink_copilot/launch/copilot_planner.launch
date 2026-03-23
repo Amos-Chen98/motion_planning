@@ -9,7 +9,7 @@
 
             <!-- Target pose coordinate frame: "LINK" or "FLU" -->
             <!-- "LINK": x-axis along link pointing to joint1 (default) -->
-            <!-- "FLU": Forward-Left-Up frame (requires 180° Z-axis rotation) -->
+            <!-- "FLU": Forward-Left-Up frame (requires 180° rotation about the local/body Z axis) -->
             <param name="target_pose_frame_type" value="$(arg target_pose_frame_type)" />
         </node>
     </group>

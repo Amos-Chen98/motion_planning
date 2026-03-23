@@ -50,8 +50,10 @@ geometry_msgs::PoseStamped::Ptr convertFluPoseToLinkFrame(const geometry_msgs::P
   tf::Quaternion original_quat;
   tf::quaternionMsgToTF(msg->pose.orientation, original_quat);
 
-  tf::Quaternion z_rotation(0.0, 0.0, 1.0, 0.0);
-  tf::quaternionTFToMsg(z_rotation * original_quat, converted_msg->pose.orientation);
+  // The LINK frame differs from FLU by a 180-degree rotation around the body's local Z axis,
+  // so convert by post-multiplying the fixed frame-offset quaternion.
+  const tf::Quaternion local_z_rotation(0.0, 0.0, 1.0, 0.0);
+  tf::quaternionTFToMsg(original_quat * local_z_rotation, converted_msg->pose.orientation);
 
   return converted_msg;
 }
