@@ -35,7 +35,7 @@ class DragonDancePublisher(DragonDanceSupportMixin):
     HOVER_STATE = 5
     PUBLISH_RATE_HZ = 40.0
     TOTAL_DURATION = 60.0
-    STARTUP_TRANSITION_DURATION = 8.0
+    STARTUP_TRANSITION_DURATION = 10.0
     STARTUP_POSITION_TOLERANCE = 0.15
     STARTUP_YAW_TOLERANCE = 0.15
     STARTUP_GOAL_RETRY_MARGIN = 2.0
@@ -64,9 +64,9 @@ class DragonDancePublisher(DragonDanceSupportMixin):
     )
 
     ELLIPSE_CENTER_X = 0.0
-    ELLIPSE_CENTER_Y = -0.7
-    ELLIPSE_SEMI_MAJOR = 2.0
-    ELLIPSE_SEMI_MINOR = 1.25
+    ELLIPSE_CENTER_Y = -0.2
+    ELLIPSE_SEMI_MAJOR = 1.8
+    ELLIPSE_SEMI_MINOR = 1.2
 
     Z_OFFSET = 1.3
     Z_AMPLITUDE = 0.5
@@ -287,35 +287,26 @@ class DragonDancePublisher(DragonDanceSupportMixin):
             self.publish_startup_cog_target()
             return
 
-        position_error, yaw_error = self.compute_startup_goal_error()
-        if position_error <= self.startup_position_tolerance and yaw_error <= self.startup_yaw_tolerance:
+        if self.startup_goal_sent_time is None:
+            return
+
+        elapsed_since_goal = (rospy.Time.now() - self.startup_goal_sent_time).to_sec()
+        if elapsed_since_goal >= self.startup_transition_duration:
             self.startup_transition_complete = True
             rospy.loginfo(
-                "Startup CoG transition completed with position error %.3f m and yaw error %.3f rad; switching to %s",
-                position_error,
-                yaw_error,
+                "Startup CoG transition duration %.1f s elapsed; switching to %s",
+                elapsed_since_goal,
                 self.resolved_root_target_topic,
             )
             return
 
         rospy.loginfo_throttle(
             2.0,
-            "Navigating CoG to startup goal: position error %.3f m, yaw error %.3f rad",
-            position_error,
-            yaw_error,
+            "Startup CoG transition in progress: %.1f / %.1f s before switching to %s",
+            elapsed_since_goal,
+            self.startup_transition_duration,
+            self.resolved_root_target_topic,
         )
-
-        if self.startup_goal_sent_time is None:
-            return
-
-        elapsed_since_goal = (rospy.Time.now() - self.startup_goal_sent_time).to_sec()
-        retry_delay = self.startup_transition_duration + self.STARTUP_GOAL_RETRY_MARGIN
-        if elapsed_since_goal >= retry_delay:
-            rospy.logwarn(
-                "Startup CoG goal not reached after %.1f s, republishing target_pose",
-                elapsed_since_goal,
-            )
-            self.publish_startup_cog_target()
 
     def handle_shutdown_sequence(self):
         elapsed = (rospy.Time.now() - self.shutdown_request_time).to_sec()
