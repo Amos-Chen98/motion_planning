@@ -68,6 +68,7 @@ CopilotPlanner::CopilotPlanner()
   , has_latest_desired_joint_positions_(false)
   , has_last_stable_joint_positions_(false)
   , stability_debug_timer_started_(false)
+  , has_last_published_root_pose_(false)
 {
   loadParameters();
   initializeRobotModel();
@@ -93,6 +94,9 @@ void CopilotPlanner::loadParameters()
   pnh_.param("trajectory_buffer_max_length", trajectory_buffer_max_length_, 10.0);
   pnh_.param("snake_mode_enabled", snake_mode_enabled_, true);
   pnh_.param("target_pose_frame_type", target_pose_frame_type_, std::string("LINK"));
+  pnh_.param("publish_only_on_significant_root_motion", publish_only_on_significant_root_motion_, false);
+  pnh_.param("publish_root_translation_threshold", publish_root_translation_threshold_, 0.05);
+  pnh_.param("publish_root_rotation_threshold", publish_root_rotation_threshold_, 0.0872664626);
   pnh_.param("stability_qp_max_iterations", stability_qp_max_iterations_, 20);
   pnh_.param("stability_qp_joint_step_limit", stability_qp_joint_step_limit_, 0.1);
   pnh_.param("stability_qp_regularization", stability_qp_regularization_, 1e-3);
@@ -110,6 +114,10 @@ void CopilotPlanner::loadParameters()
   ROS_INFO("  trajectory_sample_interval: %.3f m", trajectory_sample_interval_);
   ROS_INFO("  snake_mode_enabled: %s", snake_mode_enabled_ ? "true" : "false");
   ROS_INFO("  target_pose_frame_type: %s", target_pose_frame_type_.c_str());
+  ROS_INFO("  publish_only_on_significant_root_motion: %s",
+           publish_only_on_significant_root_motion_ ? "true" : "false");
+  ROS_INFO("  publish_root_translation_threshold: %.3f m", publish_root_translation_threshold_);
+  ROS_INFO("  publish_root_rotation_threshold: %.3f rad", publish_root_rotation_threshold_);
   ROS_INFO("  stability_qp_max_iterations: %d", stability_qp_max_iterations_);
   ROS_INFO("  stability_qp_joint_step_limit: %.3f", stability_qp_joint_step_limit_);
   ROS_INFO("  stability_fc_rp_min_thre: %.3f", stability_fc_rp_min_thre_);
@@ -249,6 +257,14 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
     return;
   }
 
+  if (!shouldPublishFullStateTarget(root_target_pose))
+  {
+    trajectory_viz_pub_.publish(getTrajectoryVisualization());
+    ROS_DEBUG_THROTTLE(1.0,
+                       "[CopilotPlanner] Skipping full_state_target publish because root motion is below thresholds");
+    return;
+  }
+
   latest_desired_joint_positions_ = stable_joint_positions;
   has_latest_desired_joint_positions_ = true;
 
@@ -284,6 +300,7 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   }
 
   full_state_target_pub_.publish(full_state_msg);
+  recordPublishedRootPose(root_target_pose);
   trajectory_viz_pub_.publish(getTrajectoryVisualization());
 }
 
@@ -295,6 +312,45 @@ void CopilotPlanner::stabilityDebugTimerCallback(const ros::TimerEvent&)
   }
 
   checkStability(latest_desired_joint_positions_);
+}
+
+bool CopilotPlanner::shouldPublishFullStateTarget(const geometry_msgs::Pose& root_target_pose) const
+{
+  if (!publish_only_on_significant_root_motion_ || !has_last_published_root_pose_)
+  {
+    return true;
+  }
+
+  const Eigen::Vector3d current_position(root_target_pose.position.x, root_target_pose.position.y,
+                                         root_target_pose.position.z);
+  const Eigen::Vector3d previous_position(last_published_root_pose_.position.x, last_published_root_pose_.position.y,
+                                          last_published_root_pose_.position.z);
+  const double translation_delta = (current_position - previous_position).norm();
+  if (translation_delta > publish_root_translation_threshold_)
+  {
+    return true;
+  }
+
+  tf::Quaternion current_orientation;
+  tf::Quaternion previous_orientation;
+  tf::quaternionMsgToTF(root_target_pose.orientation, current_orientation);
+  tf::quaternionMsgToTF(last_published_root_pose_.orientation, previous_orientation);
+
+  if (current_orientation.length2() <= 0.0 || previous_orientation.length2() <= 0.0)
+  {
+    return false;
+  }
+
+  current_orientation.normalize();
+  previous_orientation.normalize();
+  const double rotation_delta = previous_orientation.angleShortestPath(current_orientation);
+  return rotation_delta > publish_root_rotation_threshold_;
+}
+
+void CopilotPlanner::recordPublishedRootPose(const geometry_msgs::Pose& root_target_pose)
+{
+  last_published_root_pose_ = root_target_pose;
+  has_last_published_root_pose_ = true;
 }
 
 }  // namespace multilink_copilot

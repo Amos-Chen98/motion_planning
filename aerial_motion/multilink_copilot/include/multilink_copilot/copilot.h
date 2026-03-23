@@ -74,6 +74,9 @@ private:
   double control_loop_rate_;
   bool snake_mode_enabled_;
   std::string target_pose_frame_type_;  // "FLU" or "LINK"
+  bool publish_only_on_significant_root_motion_;
+  double publish_root_translation_threshold_;
+  double publish_root_rotation_threshold_;
   int stability_qp_max_iterations_;
   double stability_qp_joint_step_limit_;
   double stability_qp_regularization_;
@@ -93,6 +96,8 @@ private:
   Eigen::VectorXd last_stable_joint_positions_;
   bool has_last_stable_joint_positions_;
   bool stability_debug_timer_started_;
+  geometry_msgs::Pose last_published_root_pose_;
+  bool has_last_published_root_pose_;
   Eigen::Vector3d root_pos_world_;
   Eigen::Vector3d link1_tail_pos_world_;
   std::vector<Eigen::Vector3d> latest_snake_targets_;
@@ -138,6 +143,8 @@ private:
   geometry_msgs::Pose convertLink1TailPoseToRootPose(const geometry_msgs::Pose& pose) const;
   Eigen::Vector3d getLink1TailPositionFromPose(const geometry_msgs::Pose& pose) const;
   Eigen::Vector3d getRootPositionFromLink1TailPose(const geometry_msgs::Pose& pose) const;
+  bool shouldPublishFullStateTarget(const geometry_msgs::Pose& root_target_pose) const;
+  void recordPublishedRootPose(const geometry_msgs::Pose& root_target_pose);
   
   // Visualization
   visualization_msgs::MarkerArray getTrajectoryVisualization();

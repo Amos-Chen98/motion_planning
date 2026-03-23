@@ -12,6 +12,13 @@ snake_mode_enabled: true
 # This value can be overridden by the launch arg `target_pose_frame_type`.
 target_pose_frame_type: FLU
 
+# Publish gating for full_state_target.
+# When enabled, the planner only publishes after the root pose has moved enough
+# relative to the last published root pose.
+publish_only_on_significant_root_motion: true
+publish_root_translation_threshold: 0.05
+publish_root_rotation_threshold: 0.0872664626
+
 # Stability projection QP
 stability_qp_max_iterations: 20
 stability_qp_joint_step_limit: 0.1
