@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import math
+import os
 import select
 import sys
 import termios
@@ -10,16 +11,27 @@ from xml.etree import ElementTree
 import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import JointState
 from std_msgs.msg import UInt8
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
-class DragonDancePublisher:
+from dragon_dance_support import DragonDanceSupportMixin
+
+
+class DragonDancePublisher(DragonDanceSupportMixin):
     ROOT_TARGET_TOPIC = "root/target_pose"
     COG_TARGET_TOPIC = "target_pose"
+    ROTATION_TARGET_TOPIC = "target_rotation_motion"
+    JOINT_CONTROL_TOPIC = "joints_ctrl"
     ROOT_POSE_TOPIC = "root/pose"
     COG_ODOM_TOPIC = "uav/cog/odom"
+    JOINT_STATE_TOPIC = "joint_states"
     FLIGHT_STATE_TOPIC = "flight_state"
     FRAME_ID = "world"
+    ROTATION_FRAME_ID = "cog"
     HOVER_STATE = 5
     PUBLISH_RATE_HZ = 40.0
     TOTAL_DURATION = 60.0
@@ -27,8 +39,29 @@ class DragonDancePublisher:
     STARTUP_POSITION_TOLERANCE = 0.15
     STARTUP_YAW_TOLERANCE = 0.15
     STARTUP_GOAL_RETRY_MARGIN = 2.0
+    SHUTDOWN_WAIT_DURATION = 3.0
+    SHUTDOWN_JOINT_SHAPE_TIMEOUT = 6.0
+    SHUTDOWN_JOINT_TOLERANCE = 0.05
+    SHUTDOWN_COG_HOLD_DURATION = 0.5
+    SHUTDOWN_LEVELING_PUBLISH_DURATION = 6.0
     TAIL_FLU_TO_ROOT_YAW_OFFSET = math.pi
     ROBOT_DESCRIPTION_PARAM = "robot_description"
+    SHUTDOWN_JOINT_NAMES = (
+        "joint1_pitch",
+        "joint1_yaw",
+        "joint2_pitch",
+        "joint2_yaw",
+        "joint3_pitch",
+        "joint3_yaw",
+    )
+    SHUTDOWN_JOINT_POSITIONS = (
+        0.0,
+        math.pi / 2.0,
+        0.0,
+        math.pi / 2.0,
+        0.0,
+        math.pi / 2.0,
+    )
 
     ELLIPSE_CENTER_X = 0.0
     ELLIPSE_CENTER_Y = -0.7
@@ -44,6 +77,8 @@ class DragonDancePublisher:
 
         self.root_target_publisher = rospy.Publisher(self.ROOT_TARGET_TOPIC, PoseStamped, queue_size=1)
         self.cog_target_publisher = rospy.Publisher(self.COG_TARGET_TOPIC, PoseStamped, queue_size=1)
+        self.rotation_target_publisher = rospy.Publisher(self.ROTATION_TARGET_TOPIC, Odometry, queue_size=1)
+        self.joint_target_publisher = rospy.Publisher(self.JOINT_CONTROL_TOPIC, JointState, queue_size=1)
         self.root_pose_subscriber = rospy.Subscriber(
             self.ROOT_POSE_TOPIC,
             PoseStamped,
@@ -54,6 +89,12 @@ class DragonDancePublisher:
             self.COG_ODOM_TOPIC,
             Odometry,
             self.cog_odom_callback,
+            queue_size=1,
+        )
+        self.joint_state_subscriber = rospy.Subscriber(
+            self.JOINT_STATE_TOPIC,
+            JointState,
+            self.joint_state_callback,
             queue_size=1,
         )
         self.flight_state_subscriber = rospy.Subscriber(
@@ -74,23 +115,57 @@ class DragonDancePublisher:
             "~startup_yaw_tolerance",
             self.STARTUP_YAW_TOLERANCE,
         )
+        self.shutdown_wait_duration = rospy.get_param(
+            "~shutdown_wait_duration",
+            self.SHUTDOWN_WAIT_DURATION,
+        )
+        self.shutdown_joint_shape_timeout = rospy.get_param(
+            "~shutdown_joint_shape_timeout",
+            self.SHUTDOWN_JOINT_SHAPE_TIMEOUT,
+        )
+        self.shutdown_joint_tolerance = rospy.get_param(
+            "~shutdown_joint_tolerance",
+            self.SHUTDOWN_JOINT_TOLERANCE,
+        )
+        self.shutdown_cog_hold_duration = rospy.get_param(
+            "~shutdown_cog_hold_duration",
+            self.SHUTDOWN_COG_HOLD_DURATION,
+        )
+        self.shutdown_leveling_publish_duration = rospy.get_param(
+            "~shutdown_leveling_publish_duration",
+            self.SHUTDOWN_LEVELING_PUBLISH_DURATION,
+        )
         self.root_link_length = self.resolve_root_link_length()
         self.samples_per_cycle = int(round(self.TOTAL_DURATION * self.PUBLISH_RATE_HZ))
         self.sample_index = 0
         self.completed_cycles = 0
         self.latest_root_pose = None
         self.latest_cog_pose = None
+        self.latest_joint_state = None
         self.latest_flight_state = None
         self.startup_transition_complete = False
         self.startup_transition_goal = None
         self.startup_goal_sent_time = None
         self.startup_tail_pose_flu = self.build_tail_pose_message(0.0)
+        self.shutdown_requested = False
+        self.shutdown_request_time = None
+        self.shutdown_joint_shape_started = False
+        self.shutdown_joint_shape_complete = False
+        self.shutdown_joint_shape_start_time = None
+        self.shutdown_leveling_started = False
+        self.shutdown_leveling_start_time = None
+        self.shutdown_leveling_start_rpy = None
+        self.shutdown_joint_target = self.build_shutdown_joint_target()
+        self.shutdown_hold_cog_target = None
         self.stdin_fd = None
         self.stdin_settings = None
         self.keyboard_enabled = self.configure_keyboard_input()
         self.resolved_root_pose_topic = rospy.resolve_name(self.ROOT_POSE_TOPIC)
         self.resolved_cog_odom_topic = rospy.resolve_name(self.COG_ODOM_TOPIC)
         self.resolved_cog_target_topic = rospy.resolve_name(self.COG_TARGET_TOPIC)
+        self.resolved_rotation_target_topic = rospy.resolve_name(self.ROTATION_TARGET_TOPIC)
+        self.resolved_joint_control_topic = rospy.resolve_name(self.JOINT_CONTROL_TOPIC)
+        self.resolved_joint_state_topic = rospy.resolve_name(self.JOINT_STATE_TOPIC)
         self.resolved_root_target_topic = rospy.resolve_name(self.ROOT_TARGET_TOPIC)
         self.resolved_flight_state_topic = rospy.resolve_name(self.FLIGHT_STATE_TOPIC)
 
@@ -122,9 +197,20 @@ class DragonDancePublisher:
         rate = rospy.Rate(self.PUBLISH_RATE_HZ)
         try:
             while not rospy.is_shutdown():
-                if self.key_pressed():
-                    rospy.loginfo("Key press detected, stopping trajectory publisher")
-                    break
+                if not self.shutdown_requested and self.key_pressed():
+                    self.shutdown_requested = True
+                    self.shutdown_request_time = rospy.Time.now()
+                    rospy.loginfo(
+                        "Key press detected, stopping root tail target publishing and waiting %.1f s before leveling CoG via %s",
+                        self.shutdown_wait_duration,
+                        self.resolved_rotation_target_topic,
+                    )
+
+                if self.shutdown_requested:
+                    if self.handle_shutdown_sequence():
+                        break
+                    rate.sleep()
+                    continue
 
                 pose_msg = self.build_next_pose_message()
                 if pose_msg is not None:
@@ -231,103 +317,146 @@ class DragonDancePublisher:
             )
             self.publish_startup_cog_target()
 
-    def build_tail_pose_message(self, elapsed):
-        pose_msg = PoseStamped()
-        pose_msg.header.stamp = rospy.Time.now()
-        pose_msg.header.frame_id = self.FRAME_ID
+    def handle_shutdown_sequence(self):
+        elapsed = (rospy.Time.now() - self.shutdown_request_time).to_sec()
+        if elapsed < self.shutdown_wait_duration:
+            rospy.loginfo_throttle(
+                1.0,
+                "Shutdown requested; root tail publishing is paused for %.1f / %.1f s before CoG leveling",
+                elapsed,
+                self.shutdown_wait_duration,
+            )
+            return False
 
-        angular_speed = 2.0 * math.pi / self.TOTAL_DURATION
-        z_angular_speed = 2.0 * math.pi * self.Z_CYCLES / self.TOTAL_DURATION
-        theta = (math.pi / 2.0) - angular_speed * elapsed
+        if self.latest_cog_pose is None:
+            rospy.loginfo_throttle(
+                2.0,
+                "Waiting for %s before publishing the shutdown CoG leveling target",
+                self.resolved_cog_odom_topic,
+            )
+            return False
 
-        pose_msg.pose.position.x = self.ELLIPSE_CENTER_X + self.ELLIPSE_SEMI_MAJOR * math.cos(theta)
-        pose_msg.pose.position.y = self.ELLIPSE_CENTER_Y + self.ELLIPSE_SEMI_MINOR * math.sin(theta)
+        if self.latest_flight_state != self.HOVER_STATE:
+            rospy.loginfo_throttle(
+                2.0,
+                "Waiting for hover state on %s before publishing the shutdown CoG leveling target",
+                self.resolved_flight_state_topic,
+            )
+            return False
 
-        z_phase = z_angular_speed * elapsed - (math.pi / 2.0)
-        pose_msg.pose.position.z = self.Z_OFFSET + self.Z_AMPLITUDE * math.sin(z_phase)
+        if self.cog_target_publisher.get_num_connections() == 0:
+            rospy.loginfo_throttle(
+                2.0,
+                "Waiting for a subscriber on %s before publishing the shutdown CoG hold target",
+                self.resolved_cog_target_topic,
+            )
+            return False
 
-        velocity_x = self.ELLIPSE_SEMI_MAJOR * angular_speed * math.sin(theta)
-        velocity_y = -self.ELLIPSE_SEMI_MINOR * angular_speed * math.cos(theta)
-        velocity_z = self.Z_AMPLITUDE * z_angular_speed * math.cos(z_phase)
+        if self.rotation_target_publisher.get_num_connections() == 0:
+            rospy.loginfo_throttle(
+                2.0,
+                "Waiting for a subscriber on %s before publishing the shutdown CoG leveling target",
+                self.resolved_rotation_target_topic,
+            )
+            return False
 
-        horizontal_speed = math.hypot(velocity_x, velocity_y)
-        yaw = math.atan2(velocity_y, velocity_x)
-        # FLU uses +X forward, +Y left, +Z up, so following the velocity vector
-        # requires the link-frame pitch sign to be flipped here.
-        pitch = -math.atan2(velocity_z, horizontal_speed)
+        if self.joint_target_publisher.get_num_connections() == 0:
+            rospy.loginfo_throttle(
+                2.0,
+                "Waiting for a subscriber on %s before publishing the shutdown joint target",
+                self.resolved_joint_control_topic,
+            )
+            return False
 
-        half_pitch = 0.5 * pitch
-        half_yaw = 0.5 * yaw
-        pose_msg.pose.orientation.x = -math.sin(half_pitch) * math.sin(half_yaw)
-        pose_msg.pose.orientation.y = math.sin(half_pitch) * math.cos(half_yaw)
-        pose_msg.pose.orientation.z = math.cos(half_pitch) * math.sin(half_yaw)
-        pose_msg.pose.orientation.w = math.cos(half_pitch) * math.cos(half_yaw)
+        if not self.shutdown_joint_shape_complete:
+            return self.handle_shutdown_joint_shape()
 
-        return pose_msg
+        if not self.shutdown_leveling_started:
+            self.shutdown_leveling_start_rpy = self.rpy_from_orientation(self.latest_cog_pose.pose.orientation)
+            self.shutdown_hold_cog_target = self.build_shutdown_hold_cog_target(self.shutdown_leveling_start_rpy[2])
+            self.shutdown_leveling_started = True
+            self.shutdown_leveling_start_time = rospy.Time.now()
+            rospy.loginfo(
+                "Starting shutdown leveling sequence after joint shaping: holding CoG via %s and interpolating CoG attitude via %s for %.1f s from [roll=%.2f, pitch=%.2f, yaw=%.2f] rad",
+                self.resolved_cog_target_topic,
+                self.resolved_rotation_target_topic,
+                self.shutdown_leveling_publish_duration,
+                self.shutdown_leveling_start_rpy[0],
+                self.shutdown_leveling_start_rpy[1],
+                self.shutdown_leveling_start_rpy[2],
+            )
 
-    def build_startup_cog_target(self, root_pose, cog_pose):
-        startup_root_pose = self.convert_flu_tail_pose_to_root_pose(self.startup_tail_pose_flu)
-        startup_goal = PoseStamped()
-        startup_goal.header.stamp = rospy.Time.now()
-        startup_goal.header.frame_id = self.FRAME_ID
+        leveling_elapsed = (rospy.Time.now() - self.shutdown_leveling_start_time).to_sec()
+        if leveling_elapsed >= self.shutdown_leveling_publish_duration:
+            rospy.loginfo("Shutdown leveling commands published for %.1f s, exiting demo node", leveling_elapsed)
+            return True
 
-        # Preserve the current root-to-CoG transform while projecting the FLU tail
-        # entry pose onto a CoG target.
-        root_orientation = self.orientation_to_tuple(root_pose.pose.orientation)
-        cog_orientation = self.orientation_to_tuple(cog_pose.pose.orientation)
-        root_to_cog_orientation = self.quaternion_multiply(
-            self.quaternion_inverse(root_orientation),
-            cog_orientation,
+        self.publish_shutdown_leveling_commands(leveling_elapsed)
+        rospy.loginfo_throttle(
+            1.0,
+            "Publishing shutdown hold/level commands for %.1f / %.1f s",
+            leveling_elapsed,
+            self.shutdown_leveling_publish_duration,
         )
+        return False
 
-        root_position = self.position_to_tuple(root_pose.pose.position)
-        cog_position = self.position_to_tuple(cog_pose.pose.position)
-        root_to_cog_translation_world = self.subtract_vectors(cog_position, root_position)
-        root_to_cog_translation_root = self.rotate_vector(
-            self.quaternion_inverse(root_orientation),
-            root_to_cog_translation_world,
-        )
+    def handle_shutdown_joint_shape(self):
+        if not self.shutdown_joint_shape_started:
+            self.shutdown_joint_shape_started = True
+            self.shutdown_joint_shape_start_time = rospy.Time.now()
+            current_yaw = self.yaw_from_orientation(self.latest_cog_pose.pose.orientation)
+            self.shutdown_hold_cog_target = self.build_shutdown_hold_cog_target(current_yaw)
+            rospy.loginfo(
+                "Starting shutdown joint shaping on %s toward %s",
+                self.resolved_joint_control_topic,
+                list(self.SHUTDOWN_JOINT_POSITIONS),
+            )
 
-        startup_root_orientation = self.orientation_to_tuple(startup_root_pose.pose.orientation)
-        startup_root_position = self.position_to_tuple(startup_root_pose.pose.position)
-        rotated_translation = self.rotate_vector(startup_root_orientation, root_to_cog_translation_root)
-        startup_goal.pose.position.x = startup_root_position[0] + rotated_translation[0]
-        startup_goal.pose.position.y = startup_root_position[1] + rotated_translation[1]
-        startup_goal.pose.position.z = startup_root_position[2] + rotated_translation[2]
+        shaping_elapsed = (rospy.Time.now() - self.shutdown_joint_shape_start_time).to_sec()
+        self.publish_shutdown_joint_shape_commands()
 
-        startup_cog_orientation = self.quaternion_multiply(
-            startup_root_orientation,
-            root_to_cog_orientation,
-        )
-        startup_goal.pose.orientation.x = startup_cog_orientation[0]
-        startup_goal.pose.orientation.y = startup_cog_orientation[1]
-        startup_goal.pose.orientation.z = startup_cog_orientation[2]
-        startup_goal.pose.orientation.w = startup_cog_orientation[3]
+        joint_error = self.compute_shutdown_joint_error()
+        if joint_error is not None and joint_error <= self.shutdown_joint_tolerance:
+            self.shutdown_joint_shape_complete = True
+            rospy.loginfo(
+                "Shutdown joint shaping completed with max error %.3f rad; proceeding to CoG leveling",
+                joint_error,
+            )
+            return False
 
-        return startup_goal
+        if shaping_elapsed >= self.shutdown_joint_shape_timeout:
+            if joint_error is None:
+                rospy.logwarn(
+                    "Shutdown joint shaping timed out after %.1f s without usable %s feedback; proceeding to CoG leveling",
+                    shaping_elapsed,
+                    self.resolved_joint_state_topic,
+                )
+            else:
+                rospy.logwarn(
+                    "Shutdown joint shaping timed out after %.1f s with remaining max error %.3f rad; proceeding to CoG leveling",
+                    shaping_elapsed,
+                    joint_error,
+                )
+            self.shutdown_joint_shape_complete = True
+            return False
 
-    def convert_flu_tail_pose_to_root_pose(self, tail_pose_flu):
-        root_pose = PoseStamped()
-        root_pose.header.stamp = rospy.Time.now()
-        root_pose.header.frame_id = self.FRAME_ID
-
-        tail_orientation_flu = self.orientation_to_tuple(tail_pose_flu.pose.orientation)
-        root_orientation = self.quaternion_multiply(
-            self.quaternion_from_yaw(self.TAIL_FLU_TO_ROOT_YAW_OFFSET),
-            tail_orientation_flu,
-        )
-        tail_position = self.position_to_tuple(tail_pose_flu.pose.position)
-        link_direction = self.rotate_vector(root_orientation, (1.0, 0.0, 0.0))
-
-        root_pose.pose.position.x = tail_position[0] - self.root_link_length * link_direction[0]
-        root_pose.pose.position.y = tail_position[1] - self.root_link_length * link_direction[1]
-        root_pose.pose.position.z = tail_position[2] - self.root_link_length * link_direction[2]
-        root_pose.pose.orientation.x = root_orientation[0]
-        root_pose.pose.orientation.y = root_orientation[1]
-        root_pose.pose.orientation.z = root_orientation[2]
-        root_pose.pose.orientation.w = root_orientation[3]
-
-        return root_pose
+        if joint_error is None:
+            rospy.loginfo_throttle(
+                1.0,
+                "Publishing shutdown joint target for %.1f / %.1f s while waiting for %s",
+                shaping_elapsed,
+                self.shutdown_joint_shape_timeout,
+                self.resolved_joint_state_topic,
+            )
+        else:
+            rospy.loginfo_throttle(
+                1.0,
+                "Publishing shutdown joint target for %.1f / %.1f s with current max joint error %.3f rad",
+                shaping_elapsed,
+                self.shutdown_joint_shape_timeout,
+                joint_error,
+            )
+        return False
 
     def resolve_root_link_length(self):
         param_link_length = rospy.get_param("~root_link_length", None)
@@ -391,22 +520,6 @@ class DragonDancePublisher:
             self.startup_transition_duration,
         )
 
-    def compute_startup_goal_error(self):
-        goal_position = self.position_to_tuple(self.startup_transition_goal.pose.position)
-        current_position = self.position_to_tuple(self.latest_cog_pose.pose.position)
-        position_error = math.sqrt(
-            sum(
-                (goal_component - current_component) * (goal_component - current_component)
-                for goal_component, current_component in zip(goal_position, current_position)
-            )
-        )
-
-        goal_yaw = self.yaw_from_orientation(self.startup_transition_goal.pose.orientation)
-        current_yaw = self.yaw_from_orientation(self.latest_cog_pose.pose.orientation)
-        yaw_error = abs(self.normalize_angle(goal_yaw - current_yaw))
-
-        return position_error, yaw_error
-
     def root_pose_callback(self, msg):
         self.latest_root_pose = self.copy_pose_message(msg)
 
@@ -423,88 +536,17 @@ class DragonDancePublisher:
         pose_msg.pose.orientation.w = msg.pose.pose.orientation.w
         self.latest_cog_pose = pose_msg
 
+    def joint_state_callback(self, msg):
+        copied_joint_state = JointState()
+        copied_joint_state.header = msg.header
+        copied_joint_state.name = list(msg.name)
+        copied_joint_state.position = list(msg.position)
+        copied_joint_state.velocity = list(msg.velocity)
+        copied_joint_state.effort = list(msg.effort)
+        self.latest_joint_state = copied_joint_state
+
     def flight_state_callback(self, msg):
         self.latest_flight_state = msg.data
-
-    def copy_pose_message(self, pose_msg):
-        copied_pose = PoseStamped()
-        copied_pose.header.stamp = pose_msg.header.stamp
-        copied_pose.header.frame_id = pose_msg.header.frame_id
-        copied_pose.pose.position.x = pose_msg.pose.position.x
-        copied_pose.pose.position.y = pose_msg.pose.position.y
-        copied_pose.pose.position.z = pose_msg.pose.position.z
-        copied_pose.pose.orientation.x = pose_msg.pose.orientation.x
-        copied_pose.pose.orientation.y = pose_msg.pose.orientation.y
-        copied_pose.pose.orientation.z = pose_msg.pose.orientation.z
-        copied_pose.pose.orientation.w = pose_msg.pose.orientation.w
-        return copied_pose
-
-    def position_to_tuple(self, position):
-        return (position.x, position.y, position.z)
-
-    def orientation_to_tuple(self, orientation):
-        return self.normalize_quaternion(
-            (
-                orientation.x,
-                orientation.y,
-                orientation.z,
-                orientation.w,
-            )
-        )
-
-    def normalize_quaternion(self, quaternion):
-        norm = math.sqrt(sum(component * component for component in quaternion))
-        if norm < 1e-8:
-            return (0.0, 0.0, 0.0, 1.0)
-
-        return tuple(component / norm for component in quaternion)
-
-    def quaternion_inverse(self, quaternion):
-        normalized_quaternion = self.normalize_quaternion(quaternion)
-        return (
-            -normalized_quaternion[0],
-            -normalized_quaternion[1],
-            -normalized_quaternion[2],
-            normalized_quaternion[3],
-        )
-
-    def quaternion_multiply(self, lhs, rhs):
-        lhs = self.normalize_quaternion(lhs)
-        rhs = self.normalize_quaternion(rhs)
-        return self.normalize_quaternion(self.quaternion_multiply_raw(lhs, rhs))
-
-    def quaternion_multiply_raw(self, lhs, rhs):
-        return (
-            lhs[3] * rhs[0] + lhs[0] * rhs[3] + lhs[1] * rhs[2] - lhs[2] * rhs[1],
-            lhs[3] * rhs[1] - lhs[0] * rhs[2] + lhs[1] * rhs[3] + lhs[2] * rhs[0],
-            lhs[3] * rhs[2] + lhs[0] * rhs[1] - lhs[1] * rhs[0] + lhs[2] * rhs[3],
-            lhs[3] * rhs[3] - lhs[0] * rhs[0] - lhs[1] * rhs[1] - lhs[2] * rhs[2],
-        )
-
-    def rotate_vector(self, quaternion, vector):
-        normalized_quaternion = self.normalize_quaternion(quaternion)
-        vector_quaternion = (vector[0], vector[1], vector[2], 0.0)
-        rotated_vector = self.quaternion_multiply_raw(
-            self.quaternion_multiply_raw(normalized_quaternion, vector_quaternion),
-            self.quaternion_inverse(quaternion),
-        )
-        return rotated_vector[:3]
-
-    def subtract_vectors(self, lhs, rhs):
-        return tuple(lhs_component - rhs_component for lhs_component, rhs_component in zip(lhs, rhs))
-
-    def quaternion_from_yaw(self, yaw):
-        half_yaw = 0.5 * yaw
-        return (0.0, 0.0, math.sin(half_yaw), math.cos(half_yaw))
-
-    def yaw_from_orientation(self, orientation):
-        quaternion = self.orientation_to_tuple(orientation)
-        siny_cosp = 2.0 * (quaternion[3] * quaternion[2] + quaternion[0] * quaternion[1])
-        cosy_cosp = 1.0 - 2.0 * (quaternion[1] * quaternion[1] + quaternion[2] * quaternion[2])
-        return math.atan2(siny_cosp, cosy_cosp)
-
-    def normalize_angle(self, angle):
-        return math.atan2(math.sin(angle), math.cos(angle))
 
     def configure_keyboard_input(self):
         if not sys.stdin.isatty():
@@ -521,7 +563,7 @@ class DragonDancePublisher:
             self.stdin_settings = None
             return False
 
-        rospy.loginfo("Press any key in this terminal to stop the repeating trajectory publisher")
+        rospy.loginfo("Press any key in this terminal to stop root tail publishing and trigger the shutdown leveling sequence")
         return True
 
     def restore_terminal_settings(self):
