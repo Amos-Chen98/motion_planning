@@ -68,8 +68,8 @@ class DragonDancePublisher(DragonDanceSupportMixin):
     ELLIPSE_SEMI_MAJOR = 1.8
     ELLIPSE_SEMI_MINOR = 1.2
 
-    Z_OFFSET = 1.3
-    Z_AMPLITUDE = 0.5
+    Z_OFFSET = 1.25
+    Z_AMPLITUDE = 0.25
     Z_CYCLES = 3.0
 
     def __init__(self):
