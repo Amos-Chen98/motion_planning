@@ -1,16 +1,28 @@
 <?xml version="1.0"?>
 <launch>
+    <arg name="ns" default="dragon" />
     <arg name="nonholo" default="false" />
     <arg name="publish_rate_hz" default="60.0" />
     <arg name="total_trajectory_time" default="20.0" />
+    <arg name="robot_frame_type" default="FLU" doc="Planner root/tail_pose frame type: FLU or LINK" />
+    <arg name="robot_pose_topic" default="root/tail_pose" />
+    <arg name="target_pose_topic" default="root/target_pose" />
 
-    <node unless="$(arg nonholo)" pkg="mono_planner" type="waypoint_conditioned_planner_node.py" name="waypoint_conditioned_planner_node" output="screen">
-        <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
-        <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
-    </node>
+    <group ns="$(arg ns)">
+        <node unless="$(arg nonholo)" pkg="mono_planner" type="waypoint_conditioned_planner_node.py" name="waypoint_conditioned_planner_node" output="screen">
+            <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
+            <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
+            <param name="robot_frame_type" value="$(arg robot_frame_type)" />
+            <remap from="root/tail_pose" to="$(arg robot_pose_topic)" />
+            <remap from="root/target_pose" to="$(arg target_pose_topic)" />
+        </node>
 
-    <node if="$(arg nonholo)" pkg="mono_planner" type="nonholonomic_waypoint_conditioned_planner_node.py" name="nonholonomic_waypoint_conditioned_planner_node" output="screen">
-        <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
-        <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
-    </node>
+        <node if="$(arg nonholo)" pkg="mono_planner" type="nonholonomic_waypoint_conditioned_planner_node.py" name="nonholonomic_waypoint_conditioned_planner_node" output="screen">
+            <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
+            <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
+            <param name="robot_frame_type" value="$(arg robot_frame_type)" />
+            <remap from="root/tail_pose" to="$(arg robot_pose_topic)" />
+            <remap from="root/target_pose" to="$(arg target_pose_topic)" />
+        </node>
+    </group>
 </launch>

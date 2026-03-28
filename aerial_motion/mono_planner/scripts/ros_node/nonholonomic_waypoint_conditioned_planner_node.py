@@ -30,17 +30,16 @@ class NonholonomicWaypointConditionedPlannerNode(BaseWaypointConditionedPlannerN
     AXIS_EPSILON = 1e-3
     FEASIBILITY_EPSILON = 1e-6
     ROTATION_TOLERANCE = 1e-5
-    should_replan_on_root_update = True
     cache_waypoint_before_signature = True
 
-    def build_plan(self, root_pose_snapshot, ordered_waypoints, frame_id):
-        trajectory = self.build_trajectory(root_pose_snapshot, ordered_waypoints)
+    def build_plan(self, start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints, frame_id):
+        trajectory = self.build_trajectory(start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints)
         sample_times = self.build_sample_times()
         sampled_positions, sampled_poses = self.sample_trajectory(trajectory, sample_times, frame_id)
         return PlanningArtifacts(
             samples=sampled_poses,
             trajectory_positions=sampled_positions,
-            control_positions=trajectory.closed_knot_positions,
+            control_positions=trajectory.knot_positions,
         )
 
     def sample_to_pose(self, sample):
@@ -59,21 +58,21 @@ class NonholonomicWaypointConditionedPlannerNode(BaseWaypointConditionedPlannerN
 
     def log_planning_success(self, waypoint_count, sample_count, reason):
         rospy.loginfo(
-            "Planned %d-waypoint nonholonomic closed trajectory (%d samples, %.2f s total) because %s.",
+            "Planned %d-waypoint nonholonomic trajectory from current root to startup root (%d samples, %.2f s total) because %s.",
             waypoint_count,
             sample_count,
             self.total_trajectory_time,
             reason,
         )
 
-    def build_trajectory(self, root_pose_snapshot, ordered_waypoints):
-        closed_knot_poses = [root_pose_snapshot]
-        closed_knot_poses.extend(ordered_waypoints)
-        closed_knot_poses.append(root_pose_snapshot)
+    def build_trajectory(self, start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints):
+        knot_poses = [start_root_pose_snapshot]
+        knot_poses.extend(ordered_waypoints)
+        knot_poses.append(terminal_root_pose_snapshot)
 
         knot_positions = []
         knot_rotations = []
-        for pose_stamped in closed_knot_poses:
+        for pose_stamped in knot_poses:
             position, rotation = self.pose_to_position_and_rotation(pose_stamped)
             knot_positions.append(position)
             knot_rotations.append(rotation)

@@ -35,7 +35,7 @@ class WaypointPosePublisher:
 
         self.pose_messages = self._build_pose_messages(waypoint_specs)
         self.publishers = [
-            rospy.Publisher(f"waypoint/pose_{index}", PoseStamped, queue_size=1, latch=True)
+            rospy.Publisher(f"/waypoint/pose_{index}", PoseStamped, queue_size=1, latch=True)
             for index in range(len(self.pose_messages))
         ]
 

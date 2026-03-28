@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import rospy
+import tf.transformations as tf_trans
 from geometry_msgs.msg import Point, PoseStamped
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -16,6 +17,9 @@ class PlanningArtifacts:
     samples: object
     trajectory_positions: np.ndarray
     control_positions: np.ndarray
+
+
+LINK_TO_FLU_LOCAL_Z_HALF_TURN = np.array([0.0, 0.0, 1.0, 0.0], dtype=float)
 
 
 def normalize_topic_name(topic_name):
@@ -74,10 +78,9 @@ class BaseWaypointConditionedPlannerNode(ABC):
     WAYPOINT_TOPIC_PATTERN = re.compile(r"^/?waypoint/pose_(\d+)$")
     POSE_EPSILON = 1e-6
     DISCOVERY_PERIOD = 1.0
-    TRAJECTORY_MARKER_TOPIC = "waypoint_conditioned_trajectory_marker"
+    TRAJECTORY_MARKER_TOPIC = "/waypoint_conditioned_trajectory_marker"
     NODE_NAME = None
     READY_LOG_MESSAGE = None
-    should_replan_on_root_update = False
     cache_waypoint_before_signature = False
 
     def __init__(self):
@@ -88,15 +91,19 @@ class BaseWaypointConditionedPlannerNode(ABC):
 
         self.publish_rate_hz = float(rospy.get_param("~publish_rate_hz", 60.0))
         self.total_trajectory_time = float(rospy.get_param("~total_trajectory_time", 20.0))
+        configured_robot_frame_type = str(rospy.get_param("~robot_frame_type", "FLU"))
+        self.robot_frame_type = configured_robot_frame_type.upper()
         if self.publish_rate_hz <= 0.0:
             raise ValueError("~publish_rate_hz must be greater than 0.")
         if self.total_trajectory_time <= 0.0:
             raise ValueError("~total_trajectory_time must be greater than 0.")
+        if self.robot_frame_type not in {"FLU", "LINK"}:
+            raise ValueError("~robot_frame_type must be either 'FLU' or 'LINK'.")
 
         self.lock = threading.RLock()
 
+        self.startup_root_pose = None
         self.latest_root_pose = None
-        self.latest_root_pose_signature = None
         self.waypoint_subscribers = {}
         self.waypoint_topic_indices = {}
         self.latest_waypoints = {}
@@ -122,32 +129,50 @@ class BaseWaypointConditionedPlannerNode(ABC):
             self.publish_rate_hz,
             self.total_trajectory_time,
         )
+        if self.robot_frame_type == "LINK":
+            rospy.loginfo(
+                "Interpreting root/tail_pose as LINK and converting to FLU with a local-Z 180-degree rotation."
+            )
+        else:
+            rospy.loginfo("Interpreting root/tail_pose as FLU without conversion.")
+
+    def convert_root_pose_for_planning(self, pose_stamped):
+        converted_pose = copy.deepcopy(pose_stamped)
+        if self.robot_frame_type != "LINK":
+            return converted_pose
+
+        input_quaternion = np.array(
+            [
+                pose_stamped.pose.orientation.x,
+                pose_stamped.pose.orientation.y,
+                pose_stamped.pose.orientation.z,
+                pose_stamped.pose.orientation.w,
+            ],
+            dtype=float,
+        )
+        rotated_quaternion = tf_trans.quaternion_multiply(input_quaternion, LINK_TO_FLU_LOCAL_Z_HALF_TURN)
+        norm = np.linalg.norm(rotated_quaternion)
+        if norm > 0.0:
+            rotated_quaternion = rotated_quaternion / norm
+
+        converted_pose.pose.orientation.x = rotated_quaternion[0]
+        converted_pose.pose.orientation.y = rotated_quaternion[1]
+        converted_pose.pose.orientation.z = rotated_quaternion[2]
+        converted_pose.pose.orientation.w = rotated_quaternion[3]
+        return converted_pose
 
     def root_pose_cb(self, msg):
-        if not self.should_replan_on_root_update:
-            with self.lock:
-                self.latest_root_pose = copy.deepcopy(msg)
-            return
-
+        root_pose = self.convert_root_pose_for_planning(msg)
+        bootstrap_plan = False
         with self.lock:
-            previous_signature = self.latest_root_pose_signature
-            previous_frame = self.latest_root_pose.header.frame_id if self.latest_root_pose is not None else ""
+            if self.startup_root_pose is None:
+                self.startup_root_pose = copy.deepcopy(root_pose)
+                bootstrap_plan = True
+            self.latest_root_pose = root_pose
 
-            self.latest_root_pose = copy.deepcopy(msg)
-            new_signature = self.compute_pose_signature(msg, "root/tail_pose")
-            self.latest_root_pose_signature = new_signature
-
-            frame_changed = previous_frame != msg.header.frame_id
-            pose_changed = (
-                previous_signature is None
-                or new_signature is None
-                or not np.allclose(previous_signature, new_signature, atol=self.POSE_EPSILON, rtol=0.0)
-            )
-            if not pose_changed and not frame_changed:
-                return
-
-        self.invalidate_current_trajectory()
-        self.try_plan("root/tail_pose {}".format("received" if previous_signature is None else "updated"))
+        if bootstrap_plan:
+            rospy.loginfo("Captured startup root/tail_pose; future plans will terminate at this pose.")
+            self.try_plan("startup root/tail_pose received")
 
     def waypoint_pose_cb(self, msg, topic_name):
         topic_name = normalize_topic_name(topic_name)
@@ -257,24 +282,31 @@ class BaseWaypointConditionedPlannerNode(ABC):
             self.try_plan("waypoint topic set changed")
 
     def try_plan(self, reason):
-        root_pose_snapshot, ordered_waypoint_entries = self.collect_planning_inputs()
-        if root_pose_snapshot is None:
-            rospy.loginfo_throttle(2.0, "Waiting for root/tail_pose before planning.")
+        planning_inputs = self.collect_planning_inputs()
+        if planning_inputs is None:
             return
-        if ordered_waypoint_entries is None:
-            rospy.loginfo_throttle(2.0, "Waiting for waypoint/pose_x topics before planning.")
-            return
+
+        start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoint_entries = planning_inputs
 
         ordered_waypoints = [waypoint for _, waypoint in ordered_waypoint_entries]
         if not ordered_waypoints:
             rospy.loginfo_throttle(2.0, "Waiting for at least one waypoint/pose_x topic before planning.")
             return
 
-        frame_id = root_pose_snapshot.header.frame_id or "world"
+        frame_id = (
+            start_root_pose_snapshot.header.frame_id
+            or terminal_root_pose_snapshot.header.frame_id
+            or "world"
+        )
         self.warn_if_frame_mismatch(frame_id, ordered_waypoint_entries)
 
         try:
-            planning_artifacts = self.build_plan(root_pose_snapshot, ordered_waypoints, frame_id)
+            planning_artifacts = self.build_plan(
+                start_root_pose_snapshot,
+                terminal_root_pose_snapshot,
+                ordered_waypoints,
+                frame_id,
+            )
         except np.linalg.LinAlgError as exc:
             self.on_planning_failure("Trajectory solve failed while replanning ({})".format(reason), exc)
             return
@@ -303,7 +335,7 @@ class BaseWaypointConditionedPlannerNode(ABC):
 
     def log_planning_success(self, waypoint_count, sample_count, reason):
         rospy.loginfo(
-            "Planned %d-waypoint trajectory (%d samples, %.2f s total) because %s.",
+            "Planned %d-waypoint trajectory from current root to startup root (%d samples, %.2f s total) because %s.",
             waypoint_count,
             sample_count,
             self.total_trajectory_time,
@@ -312,26 +344,44 @@ class BaseWaypointConditionedPlannerNode(ABC):
 
     def collect_planning_inputs(self):
         with self.lock:
-            root_pose_snapshot = copy.deepcopy(self.latest_root_pose)
-            if root_pose_snapshot is None:
-                return None, None
+            start_root_pose_snapshot = copy.deepcopy(self.latest_root_pose)
+            terminal_root_pose_snapshot = copy.deepcopy(self.startup_root_pose)
 
             discovered_indices = sorted(self.waypoint_topic_indices.values())
+            missing_indices = []
             if not discovered_indices:
-                return root_pose_snapshot, []
+                ordered_waypoints = []
+            else:
+                missing_indices = [index for index in discovered_indices if index not in self.latest_waypoints]
+                if missing_indices:
+                    ordered_waypoints = None
+                else:
+                    ordered_waypoints = [(index, copy.deepcopy(self.latest_waypoints[index])) for index in discovered_indices]
 
-            missing_indices = [index for index in discovered_indices if index not in self.latest_waypoints]
-            if missing_indices:
-                rospy.loginfo_throttle(
-                    2.0,
-                    "Waiting for initial messages on waypoint indices: %s",
-                    ", ".join(str(index) for index in missing_indices),
-                )
-                return root_pose_snapshot, None
+        if start_root_pose_snapshot is None or terminal_root_pose_snapshot is None:
+            rospy.loginfo_throttle(2.0, "Waiting for root/tail_pose before planning.")
+            return None
 
-            ordered_waypoints = [(index, copy.deepcopy(self.latest_waypoints[index])) for index in discovered_indices]
+        current_root_frame = start_root_pose_snapshot.header.frame_id or ""
+        startup_root_frame = terminal_root_pose_snapshot.header.frame_id or ""
+        if current_root_frame != startup_root_frame:
+            rospy.logerr_throttle(
+                2.0,
+                "Frame mismatch detected: current root/tail_pose uses '%s' but startup root/tail_pose uses '%s'; no TF transform will be applied.",
+                current_root_frame or "<empty>",
+                startup_root_frame or "<empty>",
+            )
+            return None
 
-        return root_pose_snapshot, ordered_waypoints
+        if ordered_waypoints is None:
+            rospy.loginfo_throttle(
+                2.0,
+                "Waiting for initial messages on waypoint indices: %s",
+                ", ".join(str(index) for index in missing_indices),
+            )
+            return None
+
+        return start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints
 
     def build_sample_times(self):
         publish_dt = 1.0 / self.publish_rate_hz
@@ -455,7 +505,7 @@ class BaseWaypointConditionedPlannerNode(ABC):
         self.trajectory_marker_pub.publish(MarkerArray(markers=[delete_all_marker]))
 
     @abstractmethod
-    def build_plan(self, root_pose_snapshot, ordered_waypoints, frame_id):
+    def build_plan(self, start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints, frame_id):
         raise NotImplementedError
 
     @abstractmethod

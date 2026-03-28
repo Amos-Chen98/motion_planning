@@ -154,53 +154,53 @@ class QuinticPolynomialSegment:
 class NonholonomicQuinticTrajectory:
     def __init__(
         self,
-        closed_knot_positions,
-        closed_knot_rotations,
+        knot_positions,
+        knot_rotations,
         total_time,
         tangent_epsilon,
         axis_epsilon,
         feasibility_epsilon,
         rotation_tolerance,
     ):
-        self.closed_knot_positions = np.asarray(closed_knot_positions, dtype=float)
-        self.closed_knot_rotations = np.asarray(closed_knot_rotations, dtype=float)
+        self.knot_positions = np.asarray(knot_positions, dtype=float)
+        self.knot_rotations = np.asarray(knot_rotations, dtype=float)
         self.total_time = float(total_time)
         self.tangent_epsilon = float(tangent_epsilon)
         self.axis_epsilon = float(axis_epsilon)
         self.feasibility_epsilon = float(feasibility_epsilon)
         self.rotation_tolerance = float(rotation_tolerance)
 
-        if self.closed_knot_positions.ndim != 2 or self.closed_knot_positions.shape[1] != 3:
-            raise ValueError("Closed knot positions must have shape (N, 3).")
-        if self.closed_knot_rotations.ndim != 3 or self.closed_knot_rotations.shape[1:] != (3, 3):
-            raise ValueError("Closed knot rotations must have shape (N, 3, 3).")
-        if self.closed_knot_positions.shape[0] != self.closed_knot_rotations.shape[0]:
-            raise ValueError("Closed knot positions and rotations must have the same knot count.")
-        if self.closed_knot_positions.shape[0] < 3:
-            raise ValueError("At least one waypoint is required to build a closed trajectory.")
+        if self.knot_positions.ndim != 2 or self.knot_positions.shape[1] != 3:
+            raise ValueError("Knot positions must have shape (N, 3).")
+        if self.knot_rotations.ndim != 3 or self.knot_rotations.shape[1:] != (3, 3):
+            raise ValueError("Knot rotations must have shape (N, 3, 3).")
+        if self.knot_positions.shape[0] != self.knot_rotations.shape[0]:
+            raise ValueError("Knot positions and rotations must have the same knot count.")
+        if self.knot_positions.shape[0] < 3:
+            raise ValueError("At least one waypoint is required to build a trajectory.")
         if self.total_time <= 0.0:
             raise ValueError("Total trajectory time must be positive.")
 
-        self.segment_count = self.closed_knot_positions.shape[0] - 1
-        self.segment_displacements = np.diff(self.closed_knot_positions, axis=0)
+        self.segment_count = self.knot_positions.shape[0] - 1
+        self.segment_displacements = np.diff(self.knot_positions, axis=0)
         self.segment_distances = np.linalg.norm(self.segment_displacements, axis=1)
         if np.any(self.segment_distances < self.tangent_epsilon):
             raise ValueError("Consecutive knot positions must not be coincident.")
 
         self.segment_times = self.total_time * self.segment_distances / np.sum(self.segment_distances)
         self.cumulative_times = np.concatenate(([0.0], np.cumsum(self.segment_times)))
-        self.closed_knot_forward_axes = self.closed_knot_rotations[:, :, 0]
+        self.knot_forward_axes = self.knot_rotations[:, :, 0]
 
         self.validate_segment_feasibility()
-        self.closed_knot_velocities = self.build_closed_knot_velocities()
-        self.closed_knot_base_rotations = np.stack(
+        self.knot_velocities = self.build_knot_velocities()
+        self.knot_base_rotations = np.stack(
             [
                 rotation_matrix_from_tangent(forward_axis, self.tangent_epsilon, self.axis_epsilon)
-                for forward_axis in self.closed_knot_forward_axes
+                for forward_axis in self.knot_forward_axes
             ],
             axis=0,
         )
-        self.closed_knot_twist_angles = self.build_closed_knot_twist_angles()
+        self.knot_twist_angles = self.build_knot_twist_angles()
         self.position_segments = self.build_position_segments()
         self.twist_segments = self.build_twist_segments()
 
@@ -211,46 +211,42 @@ class NonholonomicQuinticTrajectory:
                 self.tangent_epsilon,
                 "segment chord",
             )
-            start_alignment = np.dot(chord, self.closed_knot_forward_axes[segment_index])
-            end_alignment = np.dot(chord, self.closed_knot_forward_axes[segment_index + 1])
+            start_alignment = np.dot(chord, self.knot_forward_axes[segment_index])
+            end_alignment = np.dot(chord, self.knot_forward_axes[segment_index + 1])
             if start_alignment <= self.feasibility_epsilon or end_alignment <= self.feasibility_epsilon:
                 raise ValueError(
                     "Segment {} is incompatible with the waypoint/root forward-axis constraint.".format(segment_index)
                 )
 
-    def build_closed_knot_velocities(self):
+    def build_knot_velocities(self):
         segment_speeds = self.segment_distances / self.segment_times
-        unique_knot_speeds = np.zeros(self.segment_count, dtype=float)
-        for knot_index in range(self.segment_count):
-            previous_segment_index = (knot_index - 1) % self.segment_count
-            next_segment_index = knot_index
-            unique_knot_speeds[knot_index] = 0.5 * (
-                segment_speeds[previous_segment_index] + segment_speeds[next_segment_index]
-            )
+        knot_speeds = np.zeros(self.segment_count + 1, dtype=float)
+        knot_speeds[0] = segment_speeds[0]
+        knot_speeds[-1] = segment_speeds[-1]
+        for knot_index in range(1, self.segment_count):
+            knot_speeds[knot_index] = 0.5 * (segment_speeds[knot_index - 1] + segment_speeds[knot_index])
+        return knot_speeds[:, np.newaxis] * self.knot_forward_axes
 
-        closed_knot_speeds = np.concatenate((unique_knot_speeds, unique_knot_speeds[:1]))
-        return closed_knot_speeds[:, np.newaxis] * self.closed_knot_forward_axes
-
-    def build_closed_knot_twist_angles(self):
-        unique_twist_angles = [
+    def build_knot_twist_angles(self):
+        twist_angles = [
             extract_twist_angle(
-                self.closed_knot_base_rotations[knot_index],
-                self.closed_knot_rotations[knot_index],
+                self.knot_base_rotations[knot_index],
+                self.knot_rotations[knot_index],
                 self.rotation_tolerance,
             )
-            for knot_index in range(self.segment_count)
+            for knot_index in range(self.segment_count + 1)
         ]
-        return np.unwrap(np.asarray(unique_twist_angles + unique_twist_angles[:1], dtype=float))
+        return np.unwrap(np.asarray(twist_angles, dtype=float))
 
     def build_position_segments(self):
         zero_acceleration = np.zeros(3, dtype=float)
         return [
             QuinticPolynomialSegment(
-                self.closed_knot_positions[segment_index],
-                self.closed_knot_velocities[segment_index],
+                self.knot_positions[segment_index],
+                self.knot_velocities[segment_index],
                 zero_acceleration,
-                self.closed_knot_positions[segment_index + 1],
-                self.closed_knot_velocities[segment_index + 1],
+                self.knot_positions[segment_index + 1],
+                self.knot_velocities[segment_index + 1],
                 zero_acceleration,
                 self.segment_times[segment_index],
             )
@@ -261,10 +257,10 @@ class NonholonomicQuinticTrajectory:
         zero_scalar = np.array([0.0], dtype=float)
         return [
             QuinticPolynomialSegment(
-                np.array([self.closed_knot_twist_angles[segment_index]], dtype=float),
+                np.array([self.knot_twist_angles[segment_index]], dtype=float),
                 zero_scalar,
                 zero_scalar,
-                np.array([self.closed_knot_twist_angles[segment_index + 1]], dtype=float),
+                np.array([self.knot_twist_angles[segment_index + 1]], dtype=float),
                 zero_scalar,
                 zero_scalar,
                 self.segment_times[segment_index],

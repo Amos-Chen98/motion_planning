@@ -25,8 +25,12 @@ class WaypointConditionedPlannerNode(BaseWaypointConditionedPlannerNode):
         self.traj_planner = SE3TrajectoryPlanner()
         super().__init__()
 
-    def build_plan(self, root_pose_snapshot, ordered_waypoints, _frame_id):
-        state_sequence = self.build_state_sequence(root_pose_snapshot, ordered_waypoints)
+    def build_plan(self, start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints, _frame_id):
+        state_sequence = self.build_state_sequence(
+            start_root_pose_snapshot,
+            terminal_root_pose_snapshot,
+            ordered_waypoints,
+        )
         segment_times = self.compute_segment_times(state_sequence[:, :3])
         sample_times = self.build_sample_times()
 
@@ -43,17 +47,17 @@ class WaypointConditionedPlannerNode(BaseWaypointConditionedPlannerNode):
 
     def log_planning_success(self, waypoint_count, sample_count, reason):
         rospy.loginfo(
-            "Planned %d-waypoint closed trajectory (%d samples, %.2f s total) because %s.",
+            "Planned %d-waypoint trajectory from current root to startup root (%d samples, %.2f s total) because %s.",
             waypoint_count,
             sample_count,
             self.total_trajectory_time,
             reason,
         )
 
-    def build_state_sequence(self, root_pose_snapshot, ordered_waypoints):
-        states = [self.pose_to_state(root_pose_snapshot)]
+    def build_state_sequence(self, start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints):
+        states = [self.pose_to_state(start_root_pose_snapshot)]
         states.extend(self.pose_to_state(waypoint) for waypoint in ordered_waypoints)
-        states.append(self.pose_to_state(root_pose_snapshot))
+        states.append(self.pose_to_state(terminal_root_pose_snapshot))
 
         state_array = np.vstack(states)
         state_array[:, 3] = np.unwrap(state_array[:, 3])
