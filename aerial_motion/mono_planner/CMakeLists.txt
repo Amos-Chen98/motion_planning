@@ -10,6 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
     mavros_msgs
     octomap_msgs
     tf
+    visualization_msgs
 )
 
 catkin_package(
@@ -22,11 +23,15 @@ catkin_package(
     mavros_msgs
     octomap_msgs
     tf
+    visualization_msgs
 )
 
 # Install Python scripts
 catkin_install_python(PROGRAMS
+    scripts/ros_node/nonholonomic_waypoint_conditioned_planner_node.py
+    scripts/ros_node/waypoint_conditioned_planner_node.py
     scripts/ros_node/traj_planner_node.py
+    scripts/demo/waypoint_pose_publisher.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -40,4 +45,10 @@ install(DIRECTORY launch/
 install(DIRECTORY config/
     DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config
     FILES_MATCHING PATTERN "*.yaml"
+)
+
+# Install RViz configs
+install(DIRECTORY rviz/
+    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/rviz
+    FILES_MATCHING PATTERN "*.rviz"
 )

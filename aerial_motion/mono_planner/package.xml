@@ -18,8 +18,11 @@
     <depend>mavros_msgs</depend>
     <depend>octomap_msgs</depend>
     <depend>tf</depend>
+    <depend>visualization_msgs</depend>
 
     <exec_depend>python3-numpy</exec_depend>
+    <exec_depend>python3-rospkg</exec_depend>
+    <exec_depend>python3-yaml</exec_depend>
 
     <export>
     </export>
