@@ -2,11 +2,11 @@
 
 This package provides a copilot planner that generates full-state targets for multilink aerial robots with reference to the movement of the head.
 
-## Dependencies
+## 1. Dependencies
 
-jsk_aerial_robot: https://github.com/jsk-ros-pkg/jsk_aerial_robot/pull/758
+jsk_aerial_robot: [https://github.com/jsk-ros-pkg/jsk_aerial_robot/pull/758](https://github.com/jsk-ros-pkg/jsk_aerial_robot/pull/758)
 
-## Copilot Planner
+## 2. Copilot Planner
 
 The main entrypoint is:
 
@@ -14,7 +14,7 @@ The main entrypoint is:
 roslaunch multilink_copilot copilot_planner.launch
 ```
 
-### Common Interface
+### 2.1 Common Interface
 
 The copilot planner exposes a shared interface regardless of how the head-motion
 reference is generated:
@@ -28,7 +28,7 @@ reference is generated:
 - Launch args:
   `robot_ns` and `target_pose_frame_type`.
 
-### Common Behavior
+### 2.2 Common Behavior
 
 The copilot planner shares the same behavior across all demos:
 
@@ -43,7 +43,7 @@ The copilot planner shares the same behavior across all demos:
 - Full-state publishing can be gated by significant root motion using the
   thresholds defined in the YAML configuration.
 
-## Demo Workflows
+## 3. Demo Workflows
 
 Both demo flows use the same copilot planner. The main difference is which node
 publishes `root/target_pose`:
@@ -52,8 +52,10 @@ publishes `root/target_pose`:
 - `mono_planner waypoint_conditioned_planner.launch`: publishes waypoint-based
   target poses that the copilot planner converts into multilink full-state
   targets.
+- `DragonRootTargetNavigator`: publishes joystick-driven target poses for
+  human-guided shared control.
 
-### Dragon Dance
+### 3.1 Dragon Dance
 
 Start the demo in the following order:
 
@@ -81,7 +83,7 @@ To stop tracking, press any key in the terminal that launched `dragon_dance.laun
 
 After the shutdown sequence finishes and the `dragon_dance` node exits, send the normal landing command through the standard teleoperation interface.
 
-### Waypoint-conditioned maneuvering
+### 3.2 Waypoint-conditioned maneuvering
 
 This demo uses the waypoint-conditioned planner from `mono_planner` as the
 upstream source of `root/target_pose`. The copilot planner then converts that
@@ -112,7 +114,56 @@ Start the demo in the following order:
 The waypoint pose publisher loads `mono_planner/config/demo_waypoints.yaml` by
 default.
 
-## Configuration
+### 3.3 Human-guided shared control
+
+This demo uses the Dragon joystick navigation plugin as the upstream publisher
+of `root/target_pose`. `multilink_copilot` then converts that target stream
+into `full_state_target` for shared control of the multilink robot.
+
+Demo-specific prerequisite:
+
+- `jsk_aerial_robot` branch:
+  [https://github.com/Amos-Chen98/jsk_aerial_robot/tree/copilot_joystick](https://github.com/Amos-Chen98/jsk_aerial_robot/tree/copilot_joystick)
+
+Start the demo in the following order:
+
+1. Launch Dragon bringup:
+
+   ```bash
+   roslaunch dragon bringup.launch
+   ```
+
+2. Launch the joystick driver:
+
+   ```bash
+   roslaunch aerial_robot_base joy_stick.launch robot_name:=dragon
+   ```
+
+3. Launch the copilot planner with the FLU target pose frame:
+
+   ```bash
+   roslaunch multilink_copilot copilot_planner.launch target_pose_frame_type:=FLU
+   ```
+
+Use the normal Dragon bringup teleoperation flow to arm, take off, and enter
+`HOVER`. After the robot is hovering, the joystick-driven navigation plugin
+publishes `root/target_pose`, and the copilot planner consumes it as the shared
+control reference.
+
+Controller mapping for this demo:
+
+- `R2`: move forward along the robot body `+X` direction.
+- Left stick horizontal: control yaw.
+- Left stick vertical: control pitch.
+- `L2`: ignored in this shared-control mode.
+- Right stick: ignored in this shared-control mode.
+- Other Dragon joystick buttons keep their original bringup behavior, including
+  the standard arm, takeoff, landing, and stop flow.
+
+`target_pose_frame_type:=FLU` is required because this joystick-driven demo
+publishes `root/target_pose` in the FLU convention.
+
+## 4. Configuration
 
 The planner parameters are stored in:
 
