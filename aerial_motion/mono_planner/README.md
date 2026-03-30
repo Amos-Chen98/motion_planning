@@ -1,7 +1,7 @@
 # mono_planner
 Motion planner for monolithic (rigid-body) robots. Plans from point cloud input.
 
-## Dependencies
+## 1. Dependencies
 
 ```
 sudo apt install ros-one-octomap* # change the ROS version according to your system
@@ -22,7 +22,7 @@ If it reports missing `libdynamicedt3d.so.1.8` while running, add the following 
 export LD_LIBRARY_PATH=~/.local/lib:$LD_LIBRARY_PATH
 ```
 
-## Waypoint-Conditioned Planners
+## 2. Waypoint-Conditioned Planners
 
 `waypoint_conditioned_planner.launch` supports two planner variants that share the
 same ROS interface:
@@ -32,7 +32,7 @@ same ROS interface:
 - Nonholonomic planner: constrains the published orientation to follow the
   trajectory tangent and enforces forward-motion feasibility at each knot.
 
-### Common Interface
+### 2.1. Common Interface
 
 Both variants use the same topics and launch arguments:
 
@@ -45,7 +45,7 @@ Both variants use the same topics and launch arguments:
   `nonholo`, `publish_rate_hz`, `total_trajectory_time`, `robot_frame_type`,
   `robot_pose_topic`, `target_pose_topic`, and `ns`.
 
-### Common Behavior
+### 2.2. Common Behavior
 
 Both variants share the same replanning and root-pose semantics:
 
@@ -59,7 +59,7 @@ Both variants share the same replanning and root-pose semantics:
 - In `LINK` mode, the incoming `root/tail_pose` orientation is rotated by 180
   degrees about the robot's local `Z` axis before planning. This is specially for multi-link robots such as DRAGON.
 
-### Quick Start
+### 2.3. Quick Start
 
 1. Launch the waypoint pose publisher:
 
@@ -98,7 +98,12 @@ roslaunch mono_planner waypoint_conditioned_planner.launch robot_frame_type:=LIN
 roslaunch mono_planner waypoint_conditioned_planner.launch nonholo:=true robot_frame_type:=LINK
 ```
 
-### Holonomic Planner
+The following GIF shows the Holonomic planner (video speed: 2x):
+
+![Holonomic planner demo](media/waypoint-conditioned-planning.gif)
+
+
+### 2.4. Holonomic Planner
 
 This variant is intended for holonomic robots. It tracks the pose sequence
 
@@ -107,7 +112,7 @@ This variant is intended for holonomic robots. It tracks the pose sequence
 without imposing a tangent-following body-frame constraint on the output
 orientation.
 
-### Nonholonomic Planner
+### 2.5. Nonholonomic Planner
 
 This variant keeps the same ROS interface, but the published `root/target_pose`
 orientation is constrained by the trajectory tangent so that the robot body `X`
