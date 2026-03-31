@@ -1,13 +1,13 @@
 <?xml version="1.0"?>
 <launch>
-    <arg name="config_file" default="$(find mono_planner)/config/demo_waypoints.yaml" />
+    <arg name="config_file" default="demo_waypoints.yaml" />
     <arg name="publish_rate_hz" default="60.0" />
     <arg name="frame_id" default="world" />
     <arg name="launch_rviz" default="true" />
     <arg name="rviz_config" default="$(find mono_planner)/rviz/wpt_cond_manv.rviz" />
 
     <node pkg="mono_planner" type="waypoint_pose_publisher.py" name="waypoint_pose_publisher" output="screen">
-        <param name="config_file" value="$(arg config_file)" />
+        <param name="config_file" value="$(find mono_planner)/config/$(arg config_file)" />
         <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
         <param name="frame_id" value="$(arg frame_id)" />
     </node>

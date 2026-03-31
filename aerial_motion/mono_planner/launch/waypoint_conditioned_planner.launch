@@ -2,7 +2,7 @@
 <launch>
     <arg name="ns" default="dragon" />
     <arg name="nonholo" default="false" />
-    <arg name="publish_rate_hz" default="60.0" />
+    <arg name="publish_rate_hz" default="40.0" />
     <arg name="total_trajectory_time" default="20.0" />
     <arg name="robot_frame_type" default="FLU" doc="Planner root/tail_pose frame type: FLU or LINK" />
     <arg name="robot_pose_topic" default="root/tail_pose" />

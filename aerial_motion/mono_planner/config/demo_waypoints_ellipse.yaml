@@ -1,0 +1,10 @@
+frame_id: world
+# Reference pose A is not included in this waypoint list:
+# A = [0.0, 1.0, 1.0, 0.0, 0.0, 3.141593]
+# The four waypoints below, together with A, split the ellipse into five equal
+# arc-length segments and are ordered clockwise from A.
+waypoints:
+  - [1.667997, 0.251065, 1.2, 0.0, 0.0, -1.024185]
+  - [0.930334, -1.227289, 0.8, 0.0, 0.0, -2.758935]
+  - [-0.930334, -1.227289, 1.2, 0.0, 0.0, 2.758935]
+  - [-1.667997, 0.251065, 0.8, 0.0, 0.0, 1.024185]
