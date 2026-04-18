@@ -205,6 +205,14 @@ Visualization Manager:
       Value: true
     - Class: rviz/MarkerArray
       Enabled: true
+      Marker Topic: /waypoint/ring_markers
+      Name: Waypoint Rings
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
       Marker Topic: /waypoint_conditioned_trajectory_marker
       Name: MarkerArray
       Namespaces:

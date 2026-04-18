@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
+import math
 import os
 
 import rospy
 import tf.transformations as tf_trans
 import yaml
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Point, PoseStamped
+from visualization_msgs.msg import Marker, MarkerArray
 
 try:
     import rospkg
@@ -14,6 +16,10 @@ except ImportError:
 
 
 class WaypointPosePublisher:
+    RING_RADIUS_METERS = 0.4
+    RING_THICKNESS_METERS = 0.02
+    RING_SEGMENTS = 72
+
     def __init__(self):
         rospy.init_node("waypoint_pose_publisher", anonymous=False)
 
@@ -38,9 +44,11 @@ class WaypointPosePublisher:
             rospy.Publisher(f"/waypoint/pose_{index}", PoseStamped, queue_size=1, latch=True)
             for index in range(len(self.pose_messages))
         ]
+        self.ring_marker_publisher = rospy.Publisher("/waypoint/ring_markers", MarkerArray, queue_size=1, latch=True)
+        self._publish_ring_markers()
 
         rospy.loginfo(
-            "Loaded %d waypoints from %s, publishing at %.1f Hz with frame_id '%s'.",
+            "Loaded %d waypoints from %s, publishing poses at %.1f Hz with frame_id '%s' and ring markers on /waypoint/ring_markers.",
             len(self.pose_messages),
             self.config_file,
             self.publish_rate_hz,
@@ -97,6 +105,49 @@ class WaypointPosePublisher:
             pose_messages.append(pose_msg)
 
         return pose_messages
+
+    def _build_ring_markers(self, stamp):
+        marker_array = MarkerArray()
+
+        for index, pose_msg in enumerate(self.pose_messages):
+            marker = Marker()
+            marker.header.frame_id = pose_msg.header.frame_id
+            marker.header.stamp = stamp
+            marker.ns = "waypoint_rings"
+            marker.id = index
+            marker.type = Marker.LINE_STRIP
+            marker.action = Marker.ADD
+            marker.lifetime = rospy.Duration(0.0)
+            marker.pose.position.x = pose_msg.pose.position.x
+            marker.pose.position.y = pose_msg.pose.position.y
+            marker.pose.position.z = pose_msg.pose.position.z
+            marker.pose.orientation.x = pose_msg.pose.orientation.x
+            marker.pose.orientation.y = pose_msg.pose.orientation.y
+            marker.pose.orientation.z = pose_msg.pose.orientation.z
+            marker.pose.orientation.w = pose_msg.pose.orientation.w
+            marker.scale.x = self.RING_THICKNESS_METERS
+            marker.color.r = 0.0
+            marker.color.g = 0.0
+            marker.color.b = 1.0
+            marker.color.a = 1.0
+            marker.points = self._build_ring_points()
+            marker_array.markers.append(marker)
+
+        return marker_array
+
+    @classmethod
+    def _build_ring_points(cls):
+        points = []
+        for step in range(cls.RING_SEGMENTS + 1):
+            angle = 2.0 * math.pi * float(step) / float(cls.RING_SEGMENTS)
+            points.append(Point(x=0.0, y=cls.RING_RADIUS_METERS * math.cos(angle), z=cls.RING_RADIUS_METERS * math.sin(angle)))
+        return points
+
+    def _publish_ring_markers(self):
+        delete_all_marker = Marker()
+        delete_all_marker.action = Marker.DELETEALL
+        self.ring_marker_publisher.publish(MarkerArray(markers=[delete_all_marker]))
+        self.ring_marker_publisher.publish(self._build_ring_markers(rospy.Time.now()))
 
     def run(self):
         rate = rospy.Rate(self.publish_rate_hz)
