@@ -76,7 +76,7 @@ def position_to_point(position):
 
 class BaseWaypointConditionedPlannerNode(ABC):
     WAYPOINT_TOPIC_PATTERN = re.compile(r"^/?waypoint/pose_(\d+)$")
-    POSE_EPSILON = 1e-6
+    POSE_EPSILON = 0.05
     DISCOVERY_PERIOD = 1.0
     TRAJECTORY_MARKER_TOPIC = "/waypoint_conditioned_trajectory_marker"
     NODE_NAME = None
