@@ -25,6 +25,7 @@ topics=(
   "$robot_ns/joint_states"
   "$robot_ns/joints_ctrl"
   "$robot_ns/joy"
+  "$robot_ns/last_link/tail_pose"
   "$robot_ns/mocap/ground_pose"
   "$robot_ns/mocap/pose"
   "$robot_ns/motor_info"

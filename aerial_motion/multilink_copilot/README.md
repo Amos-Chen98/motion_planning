@@ -43,6 +43,12 @@ The copilot planner shares the same behavior across all demos:
 - Full-state publishing can be gated by significant root motion using the
   thresholds defined in the YAML configuration.
 
+Note: `copilot_planner.launch` also starts `last_link_tail_pose_publisher` by
+default. This auxiliary node publishes `last_link/tail_pose` from `root/pose`
+and the TF relation `dragon/root -> dragon/link4`. Set `pub_tail_pose:=false`
+to disable it, or launch it alone with
+`roslaunch multilink_copilot pub_last_link_tail_pose.launch`.
+
 ## 3. Demo Workflows
 
 Both demo flows use the same copilot planner. The main difference is which node

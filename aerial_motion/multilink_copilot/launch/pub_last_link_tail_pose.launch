@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="robot_ns" default="dragon" />
+    <arg name="root_frame" default="$(arg robot_ns)/root" />
+    <arg name="last_link_frame" default="$(arg robot_ns)/link4" />
+    <arg name="tail_offset_x" default="0.455" />
+
+    <group ns="$(arg robot_ns)">
+        <node pkg="multilink_copilot" type="last_link_tail_pose_publisher.py" name="last_link_tail_pose_publisher" output="screen">
+            <param name="root_frame" value="$(arg root_frame)" />
+            <param name="last_link_frame" value="$(arg last_link_frame)" />
+            <param name="tail_offset_x" value="$(arg tail_offset_x)" />
+        </node>
+    </group>
+</launch>
