@@ -12,5 +12,7 @@
         <param name="frame_id" value="$(arg frame_id)" />
     </node>
 
+    <include file="$(find mono_planner)/launch/demo/waypoint_ring_visualizer.launch" />
+
     <node if="$(arg launch_rviz)" pkg="rviz" type="rviz" name="mono_planner_rviz" args="-d $(arg rviz_config)" output="screen" />
 </launch>

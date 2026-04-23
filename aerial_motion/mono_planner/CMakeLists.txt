@@ -32,6 +32,7 @@ catkin_install_python(PROGRAMS
     scripts/ros_node/waypoint_conditioned_planner_node.py
     scripts/ros_node/traj_planner_node.py
     scripts/demo/waypoint_pose_publisher.py
+    scripts/demo/waypoint_ring_visualizer.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

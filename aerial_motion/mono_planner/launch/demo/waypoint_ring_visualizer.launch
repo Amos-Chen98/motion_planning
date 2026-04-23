@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<launch>
+    <node pkg="mono_planner" type="waypoint_ring_visualizer.py" name="waypoint_ring_visualizer" output="screen" />
+</launch>
