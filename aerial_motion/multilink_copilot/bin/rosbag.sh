@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+output_dir="$script_dir/../data_analysis/data/rosbag"
+
+mkdir -p "$output_dir"
+
 if [ $# -gt 0 ]; then
   robot_ns="$1"
   shift
@@ -52,5 +57,7 @@ topics=(
   "rosout"
   "rosout_agg"
 )
+
+cd "$output_dir"
 
 exec rosbag record "${topics[@]}" "$@"
