@@ -64,7 +64,7 @@ target_link_libraries(copilot_planner ${catkin_LIBRARIES} qpOASES)
 add_dependencies(copilot_planner aerial_robot_msgs_generate_messages_cpp)
 
 catkin_install_python(PROGRAMS
-    scripts/last_link_tail_pose_publisher.py
+    scripts/evaluation/last_link_tail_pose_publisher.py
     scripts/demo/dragon_dance_node.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
