@@ -2,7 +2,7 @@
 <launch>
     <arg name="robot_ns" default="dragon" />
     <arg name="target_pose_frame_type" default="FLU" />
-    <arg name="pub_tail_pose" default="true" />
+    <arg name="evaluation" default="true" />
 
     <group ns="$(arg robot_ns)">
         <node pkg="multilink_copilot" type="copilot_planner" name="copilot_planner" output="screen">
@@ -15,7 +15,7 @@
         </node>
     </group>
 
-    <include if="$(arg pub_tail_pose)" file="$(find multilink_copilot)/launch/pub_last_link_tail_pose.launch">
+    <include if="$(arg evaluation)" file="$(find multilink_copilot)/launch/evaluation/run_evaluation.launch">
         <arg name="robot_ns" value="$(arg robot_ns)" />
     </include>
 

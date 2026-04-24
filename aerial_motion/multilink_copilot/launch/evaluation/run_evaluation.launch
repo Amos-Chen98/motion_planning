@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="robot_ns" default="dragon" />
+    <arg name="root_frame" default="$(arg robot_ns)/root" />
+    <arg name="last_link_frame" default="$(arg robot_ns)/link4" />
+    <arg name="tail_offset_x" default="0.455" />
+    <arg name="start_path_length_threshold_m" default="1.422" />
+    <arg name="return_position_tolerance_m" default="0.10" />
+    <arg name="return_rearm_distance_m" default="0.15" />
+    <arg name="output_dir" default="$(find multilink_copilot)/data_analysis/data/envelope_width" />
+
+    <group ns="$(arg robot_ns)">
+        <node pkg="multilink_copilot" type="last_link_tail_pose_publisher.py" name="last_link_tail_pose_publisher" output="screen">
+            <param name="root_frame" value="$(arg root_frame)" />
+            <param name="last_link_frame" value="$(arg last_link_frame)" />
+            <param name="tail_offset_x" value="$(arg tail_offset_x)" />
+        </node>
+
+        <node pkg="multilink_copilot" type="envelope_width_evaluator.py" name="envelope_width_evaluator" output="screen">
+            <param name="start_path_length_threshold_m" value="$(arg start_path_length_threshold_m)" />
+            <param name="return_position_tolerance_m" value="$(arg return_position_tolerance_m)" />
+            <param name="return_rearm_distance_m" value="$(arg return_rearm_distance_m)" />
+            <param name="output_dir" value="$(arg output_dir)" />
+        </node>
+    </group>
+</launch>
