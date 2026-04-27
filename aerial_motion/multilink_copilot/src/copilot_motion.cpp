@@ -546,7 +546,7 @@ Eigen::VectorXd CopilotPlanner::computeJointAnglesFromSnakeTarget(const std::vec
 
 Eigen::VectorXd CopilotPlanner::computeWarmupJointPositions(const std::vector<Eigen::Vector3d>& target_positions)
 {
-  Eigen::VectorXd desired_joint_positions = buildFoldedReferenceJointPositions();
+  Eigen::VectorXd desired_joint_positions = clampLinkJointPositions(getCurrentLinkJointPositions());
   if (target_positions.empty())
   {
     return desired_joint_positions;

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <exception>
 #include <string>
+#include <vector>
 
 namespace multilink_copilot
 {
@@ -65,6 +66,7 @@ CopilotPlanner::CopilotPlanner()
   , robot_model_loader_("aerial_robot_model", "aerial_robot_model::RobotModel")
   , total_arc_length_(0.0)
   , trajectory_initialized_(false)
+  , has_latest_measured_link_joint_positions_(false)
   , has_latest_desired_joint_positions_(false)
   , has_last_stable_joint_positions_(false)
   , stability_debug_timer_started_(false)
@@ -74,6 +76,7 @@ CopilotPlanner::CopilotPlanner()
   initializeRobotModel();
 
   target_pose_sub_ = nh_.subscribe("root/target_pose", 1, &CopilotPlanner::targetPoseCallback, this); // root link's tail pose
+  joint_state_sub_ = nh_.subscribe("joint_states", 1, &CopilotPlanner::jointStateCallback, this);
   full_state_target_pub_ = nh_.advertise<aerial_robot_msgs::FullStateTarget>("full_state_target", 1);
   trajectory_viz_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("trajectory_visualization", 1);
   control_timer_ =
@@ -167,12 +170,20 @@ void CopilotPlanner::initializeRobotModel()
   link_joint_names_ = dragon_robot_model_->getLinkJointNames();
   link_joint_indices_ = dragon_robot_model_->getLinkJointIndices();
   link_joint_num_ = link_joint_indices_.size();
+  latest_measured_link_joint_positions_ = Eigen::VectorXd::Zero(link_joint_num_);
+  has_latest_measured_link_joint_positions_ = (link_joint_num_ == 0);
+  link_joint_name_to_local_index_.clear();
   pitch_joint_local_indices_.assign(std::max(0, link_num_ - 1), -1);
   yaw_joint_local_indices_.clear();
   yaw_joint_local_indices_.assign(std::max(0, link_num_ - 1), -1);
   for (int i = 0; i < link_joint_num_; ++i)
   {
     const std::string& joint_name = i < static_cast<int>(link_joint_names_.size()) ? link_joint_names_.at(i) : "";
+    if (!joint_name.empty())
+    {
+      link_joint_name_to_local_index_[joint_name] = i;
+    }
+
     int segment_index = -1;
 
     if (extractSegmentIndex(joint_name, "_pitch", segment_index) &&
@@ -220,6 +231,60 @@ void CopilotPlanner::targetPoseCallback(const geometry_msgs::PoseStamped::ConstP
   latest_target_pose_ = msg;
 }
 
+void CopilotPlanner::jointStateCallback(const sensor_msgs::JointStateConstPtr& msg)
+{
+  if (link_joint_num_ <= 0)
+  {
+    has_latest_measured_link_joint_positions_ = true;
+    latest_measured_link_joint_positions_.resize(0);
+    return;
+  }
+
+  Eigen::VectorXd measured_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
+  std::vector<bool> seen_joint_positions(static_cast<size_t>(link_joint_num_), false);
+  const size_t entry_count = std::min(msg->name.size(), msg->position.size());
+
+  for (size_t i = 0; i < entry_count; ++i)
+  {
+    const auto mapping = link_joint_name_to_local_index_.find(msg->name[i]);
+    if (mapping == link_joint_name_to_local_index_.end())
+    {
+      continue;
+    }
+
+    const double position = msg->position[i];
+    if (!std::isfinite(position))
+    {
+      ROS_WARN_THROTTLE(1.0, "[CopilotPlanner] Ignoring joint_states message with non-finite position for %s",
+                        msg->name[i].c_str());
+      return;
+    }
+
+    measured_joint_positions(mapping->second) = position;
+    seen_joint_positions[static_cast<size_t>(mapping->second)] = true;
+  }
+
+  const auto missing_joint = std::find(seen_joint_positions.begin(), seen_joint_positions.end(), false);
+  if (missing_joint != seen_joint_positions.end())
+  {
+    const size_t missing_index = static_cast<size_t>(std::distance(seen_joint_positions.begin(), missing_joint));
+    const std::string missing_name =
+        missing_index < link_joint_names_.size() ? link_joint_names_.at(missing_index)
+                                                 : std::string("joint") + std::to_string(missing_index + 1);
+    ROS_WARN_THROTTLE(1.0,
+                      "[CopilotPlanner] Waiting for a complete joint_states message; missing link joint %s",
+                      missing_name.c_str());
+    return;
+  }
+
+  latest_measured_link_joint_positions_ = clampLinkJointPositions(measured_joint_positions);
+  if (!has_latest_measured_link_joint_positions_)
+  {
+    ROS_INFO("[CopilotPlanner] Received first complete link joint state for warmup anchoring");
+  }
+  has_latest_measured_link_joint_positions_ = true;
+}
+
 void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
 {
   if (!latest_target_pose_)
@@ -232,6 +297,16 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   const Eigen::Vector3d root_position = getRootPositionFromLink1TailPose(latest_target_pose_->pose);
   updateTrajectoryBuffer(link1_tail_position, root_position);
 
+  if (!has_latest_measured_link_joint_positions_)
+  {
+    trajectory_viz_pub_.publish(getTrajectoryVisualization());
+    ROS_WARN_THROTTLE(1.0,
+                      "[CopilotPlanner] Waiting for complete joint_states before publishing full_state_target");
+    return;
+  }
+
+  restoreRobotModelToLinkJointPositions(latest_measured_link_joint_positions_);
+
   Eigen::VectorXd desired_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
   latest_snake_targets_.clear();
 
@@ -240,7 +315,7 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
     latest_snake_targets_ = computeSnakeTargetPositions();
     desired_joint_positions = computeJointAnglesFromSnakeTarget(latest_snake_targets_);
   }
-  else if (snake_mode_enabled_ && trajectory_initialized_)
+  else if (snake_mode_enabled_)
   {
     latest_snake_targets_ = computeWarmupTargetPositions();
     desired_joint_positions = computeWarmupJointPositions(latest_snake_targets_);

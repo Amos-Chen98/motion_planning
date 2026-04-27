@@ -344,6 +344,8 @@ bool CopilotPlanner::tryGetStableReferenceJointPositions(Eigen::VectorXd& stable
   std::vector<Eigen::VectorXd> reference_candidates;
   reference_candidates.reserve(6);
 
+  reference_candidates.push_back(getCurrentLinkJointPositions());
+
   if (has_last_stable_joint_positions_ && last_stable_joint_positions_.size() == link_joint_num_)
   {
     reference_candidates.push_back(last_stable_joint_positions_);
@@ -354,7 +356,6 @@ bool CopilotPlanner::tryGetStableReferenceJointPositions(Eigen::VectorXd& stable
     reference_candidates.push_back(latest_desired_joint_positions_);
   }
 
-  reference_candidates.push_back(getCurrentLinkJointPositions());
   reference_candidates.push_back(Eigen::VectorXd::Zero(link_joint_num_));
   reference_candidates.push_back(buildFoldedReferenceJointPositions());
   reference_candidates.push_back(buildDefaultReferenceJointPositions());

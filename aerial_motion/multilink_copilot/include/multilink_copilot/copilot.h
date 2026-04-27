@@ -4,6 +4,7 @@
 
 #include <ros/ros.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <sensor_msgs/JointState.h>
 #include <aerial_robot_msgs/FullStateTarget.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <dragon/model/hydrus_like_robot_model.h>
@@ -12,6 +13,7 @@
 #include <Eigen/Dense>
 #include <deque>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace multilink_copilot
@@ -44,6 +46,7 @@ private:
   ros::NodeHandle nh_;
   ros::NodeHandle pnh_;
   ros::Subscriber target_pose_sub_;
+  ros::Subscriber joint_state_sub_;
   ros::Publisher full_state_target_pub_;
   ros::Publisher trajectory_viz_pub_;
   ros::Timer control_timer_;
@@ -61,6 +64,7 @@ private:
   int link_joint_num_;
   std::vector<int> pitch_joint_local_indices_;
   std::vector<int> yaw_joint_local_indices_;
+  std::unordered_map<std::string, int> link_joint_name_to_local_index_;
   
   // Trajectory tracking
   std::deque<TrajectoryPoint> trajectory_buffer_;
@@ -91,6 +95,8 @@ private:
   
   // Current state
   geometry_msgs::PoseStamped::ConstPtr latest_target_pose_;  // Interpreted as the first-link tail target pose.
+  Eigen::VectorXd latest_measured_link_joint_positions_;
+  bool has_latest_measured_link_joint_positions_;
   Eigen::VectorXd latest_desired_joint_positions_;
   bool has_latest_desired_joint_positions_;
   Eigen::VectorXd last_stable_joint_positions_;
@@ -104,6 +110,7 @@ private:
   
   // Callbacks
   void targetPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
+  void jointStateCallback(const sensor_msgs::JointStateConstPtr& msg);
   void controlTimerCallback(const ros::TimerEvent& event);
   void stabilityDebugTimerCallback(const ros::TimerEvent& event);
   

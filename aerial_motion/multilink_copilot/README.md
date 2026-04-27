@@ -21,6 +21,8 @@ reference is generated:
 
 - Input `root/target_pose` (`geometry_msgs/PoseStamped`): target pose of the
   first-link tail.
+- Input `joint_states` (`sensor_msgs/JointState`): measured multilink joint
+  state used to anchor startup and warmup behavior to the robot's actual shape.
 - Output `full_state_target` (`aerial_robot_msgs/FullStateTarget`): full-state
   target for the multilink robot.
 - Output `trajectory_visualization` (`visualization_msgs/MarkerArray`):
@@ -40,6 +42,12 @@ The copilot planner shares the same behavior across all demos:
 - The launch file loads `multilink_copilot/config/copilot_planner.yaml` by
   default, and `target_pose_frame_type` can still be overridden from the launch
   arg.
+- The planner waits for the first complete `joint_states` message before
+  publishing `full_state_target`; until then it still tracks
+  `root/target_pose` and accumulates the internal trajectory buffer.
+- In snake-mode startup and warmup, the planner keeps the current measured joint
+  configuration as the baseline and only blends links toward the snake target
+  once enough trajectory has been observed for each link segment.
 - Full-state publishing can be gated by significant root motion using the
   thresholds defined in the YAML configuration.
 
