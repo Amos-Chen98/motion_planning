@@ -54,19 +54,20 @@ class SummaryStats:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     script_dir = Path(__file__).resolve().parent
+    package_dir = script_dir.parent
     parser = argparse.ArgumentParser(
         description="Clean PlotJuggler-exported rosbag CSV files."
     )
     parser.add_argument(
         "--input-dir",
         type=Path,
-        default=script_dir / "data" / "rosbag_csv_raw",
+        default=package_dir / "data" / "rosbag_csv_raw",
         help="Directory containing raw PlotJuggler CSV files.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=script_dir / "data" / "rosbag_csv",
+        default=package_dir / "data" / "rosbag_csv",
         help="Directory to write cleaned CSV files to.",
     )
     return parser.parse_args(argv)

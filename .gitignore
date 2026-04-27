@@ -105,4 +105,4 @@ __pycache__/
 
 # large files
 *.bag
-aerial_motion/multilink_copilot/data_analysis/data/
+aerial_motion/multilink_copilot/data/

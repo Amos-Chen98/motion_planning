@@ -7,7 +7,7 @@
     <arg name="start_path_length_threshold_m" default="1.422" />
     <arg name="return_position_tolerance_m" default="0.10" />
     <arg name="return_rearm_distance_m" default="0.15" />
-    <arg name="output_dir" default="$(find multilink_copilot)/data_analysis/data/envelope_width" />
+    <arg name="output_dir" default="$(find multilink_copilot)/data/envelope_width" />
 
     <group ns="$(arg robot_ns)">
         <node pkg="multilink_copilot" type="last_link_tail_pose_publisher.py" name="last_link_tail_pose_publisher" output="screen">

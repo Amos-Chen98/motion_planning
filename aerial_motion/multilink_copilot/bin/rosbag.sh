@@ -3,7 +3,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-output_dir="$script_dir/../data_analysis/data/rosbag"
+output_dir="$script_dir/../data/rosbag"
 
 mkdir -p "$output_dir"
 
