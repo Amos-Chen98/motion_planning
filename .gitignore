@@ -106,3 +106,5 @@ __pycache__/
 # large files
 *.bag
 aerial_motion/multilink_copilot/data/
+aerial_motion/multilink_copilot/bin/sync_data.filters.md5
+aerial_motion/multilink_copilot/bin/sync_data.local.env
