@@ -24,7 +24,7 @@ from traj_planner.waypoint_planner_common import BaseWaypointConditionedPlannerN
 
 
 class NonholonomicWaypointConditionedPlannerNode(BaseWaypointConditionedPlannerNode):
-    NODE_NAME = "nonholonomic_waypoint_conditioned_planner_node"
+    NODE_NAME = "nonholo_wpt_cond_planner"
     READY_LOG_MESSAGE = "Nonholonomic waypoint-conditioned planner ready: publish_rate_hz=%.1f total_trajectory_time=%.2f"
     TANGENT_EPSILON = 1e-6
     AXIS_EPSILON = 1e-3
@@ -140,5 +140,5 @@ if __name__ == "__main__":
     try:
         NonholonomicWaypointConditionedPlannerNode().run()
     except Exception as exc:
-        rospy.logerr("Failed to start nonholonomic_waypoint_conditioned_planner_node: %s", exc)
+        rospy.logerr("Failed to start %s: %s", NonholonomicWaypointConditionedPlannerNode.NODE_NAME, exc)
         raise

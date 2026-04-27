@@ -18,7 +18,7 @@ from traj_planner.waypoint_planner_common import BaseWaypointConditionedPlannerN
 
 
 class WaypointConditionedPlannerNode(BaseWaypointConditionedPlannerNode):
-    NODE_NAME = "waypoint_conditioned_planner_node"
+    NODE_NAME = "holo_wpt_cond_planner"
     READY_LOG_MESSAGE = "Waypoint-conditioned planner ready: publish_rate_hz=%.1f total_trajectory_time=%.2f"
 
     def __init__(self):
@@ -118,4 +118,4 @@ if __name__ == "__main__":
     try:
         WaypointConditionedPlannerNode().run()
     except Exception as exc:
-        rospy.logerr("Failed to start waypoint_conditioned_planner_node: %s", exc)
+        rospy.logerr("Failed to start %s: %s", WaypointConditionedPlannerNode.NODE_NAME, exc)

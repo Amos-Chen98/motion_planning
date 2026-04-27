@@ -78,7 +78,7 @@ class BaseWaypointConditionedPlannerNode(ABC):
     WAYPOINT_TOPIC_PATTERN = re.compile(r"^/?waypoint/pose_(\d+)$")
     POSE_EPSILON = 0.05
     DISCOVERY_PERIOD = 1.0
-    TRAJECTORY_MARKER_TOPIC = "/waypoint_conditioned_trajectory_marker"
+    TRAJECTORY_MARKER_TOPIC = "mono_planner/traj_marker"
     NODE_NAME = None
     READY_LOG_MESSAGE = None
     cache_waypoint_before_signature = False
