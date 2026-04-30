@@ -7,6 +7,7 @@
     <arg name="start_path_length_threshold_m" default="1.422" />
     <arg name="return_position_tolerance_m" default="0.10" />
     <arg name="return_rearm_distance_m" default="0.15" />
+    <arg name="distance_batch_size" default="512" />
     <arg name="output_dir" default="$(find multilink_copilot)/data/envelope_width" />
 
     <group ns="$(arg robot_ns)">
@@ -20,6 +21,7 @@
             <param name="start_path_length_threshold_m" value="$(arg start_path_length_threshold_m)" />
             <param name="return_position_tolerance_m" value="$(arg return_position_tolerance_m)" />
             <param name="return_rearm_distance_m" value="$(arg return_rearm_distance_m)" />
+            <param name="distance_batch_size" value="$(arg distance_batch_size)" />
             <param name="output_dir" value="$(arg output_dir)" />
         </node>
     </group>

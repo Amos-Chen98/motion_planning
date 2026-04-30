@@ -41,6 +41,7 @@
     <exec_depend>differential_kinematics</exec_depend>
     <exec_depend>dragon</exec_depend>
     <exec_depend>pluginlib</exec_depend>
+    <exec_depend>python3-numpy</exec_depend>
     <exec_depend>tf</exec_depend>
     <exec_depend>tf_conversions</exec_depend>
 

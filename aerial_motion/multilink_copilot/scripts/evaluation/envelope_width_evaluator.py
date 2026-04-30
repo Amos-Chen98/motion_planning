@@ -5,8 +5,11 @@ import math
 import os
 import time
 
+import numpy as np
 import rospy
 from geometry_msgs.msg import PoseStamped
+
+DISTANCE_EPSILON = 1e-12
 
 
 def euclidean_distance(point_a, point_b):
@@ -33,7 +36,7 @@ def point_to_segment_distance(point, segment_start, segment_end):
         + segment_vector[1] * segment_vector[1]
         + segment_vector[2] * segment_vector[2]
     )
-    if segment_length_squared <= 1e-12:
+    if segment_length_squared <= DISTANCE_EPSILON:
         return euclidean_distance(point, segment_start)
 
     projection = (
@@ -63,6 +66,124 @@ def point_to_polyline_distance(point, polyline_points):
     )
 
 
+def as_point_array(points):
+    point_array = np.asarray(points, dtype=np.float64)
+    if point_array.size == 0:
+        return np.empty((0, 3), dtype=np.float64)
+    if point_array.ndim != 2 or point_array.shape[1] != 3:
+        raise ValueError("Expected points with shape (N, 3).")
+    return point_array
+
+
+def iter_point_to_polyline_distance_batches(query_points, polyline_points, batch_size):
+    if batch_size <= 0:
+        raise ValueError("Batch size must be positive.")
+
+    polyline_array = as_point_array(polyline_points)
+    if polyline_array.shape[0] == 0:
+        raise ValueError("Polyline is empty.")
+
+    query_array = as_point_array(query_points)
+    if query_array.shape[0] == 0:
+        return
+
+    if polyline_array.shape[0] == 1:
+        anchor = polyline_array[0]
+        anchor_squared_norm = float(np.dot(anchor, anchor))
+        for start_index in range(0, query_array.shape[0], batch_size):
+            batch = query_array[start_index : start_index + batch_size]
+            batch_squared_norm = np.einsum("ij,ij->i", batch, batch)
+            squared_distance = batch_squared_norm + anchor_squared_norm - 2.0 * (batch @ anchor)
+            np.maximum(squared_distance, 0.0, out=squared_distance)
+            yield np.sqrt(squared_distance)
+        return
+
+    segment_start = polyline_array[:-1]
+    segment_vector = polyline_array[1:] - segment_start
+    segment_length_squared = np.einsum("ij,ij->i", segment_vector, segment_vector)
+
+    nondegenerate_mask = segment_length_squared > DISTANCE_EPSILON
+    regular_segment_start = segment_start[nondegenerate_mask]
+    regular_segment_vector = segment_vector[nondegenerate_mask]
+    regular_segment_length_squared = segment_length_squared[nondegenerate_mask]
+    regular_segment_start_squared_norm = np.einsum(
+        "ij,ij->i",
+        regular_segment_start,
+        regular_segment_start,
+    )
+    regular_segment_start_dot_vector = np.einsum(
+        "ij,ij->i",
+        regular_segment_start,
+        regular_segment_vector,
+    )
+
+    degenerate_segment_points = segment_start[~nondegenerate_mask]
+    degenerate_segment_points_squared_norm = np.einsum(
+        "ij,ij->i",
+        degenerate_segment_points,
+        degenerate_segment_points,
+    )
+
+    for start_index in range(0, query_array.shape[0], batch_size):
+        batch = query_array[start_index : start_index + batch_size]
+        batch_squared_norm = np.einsum("ij,ij->i", batch, batch)
+        minimum_squared_distance = np.full(batch.shape[0], np.inf, dtype=np.float64)
+
+        if regular_segment_start.shape[0] > 0:
+            point_to_start_dot = batch @ regular_segment_start.T
+            delta_squared_norm = (
+                batch_squared_norm[:, None]
+                + regular_segment_start_squared_norm[None, :]
+                - 2.0 * point_to_start_dot
+            )
+            point_to_vector_dot = batch @ regular_segment_vector.T
+            projection_numerator = point_to_vector_dot - regular_segment_start_dot_vector[None, :]
+            projection = projection_numerator / regular_segment_length_squared[None, :]
+            np.clip(projection, 0.0, 1.0, out=projection)
+
+            squared_distance = (
+                delta_squared_norm
+                - 2.0 * projection * projection_numerator
+                + projection * projection * regular_segment_length_squared[None, :]
+            )
+            np.maximum(squared_distance, 0.0, out=squared_distance)
+            minimum_squared_distance = np.minimum(minimum_squared_distance, np.min(squared_distance, axis=1))
+
+        if degenerate_segment_points.shape[0] > 0:
+            point_to_degenerate_dot = batch @ degenerate_segment_points.T
+            degenerate_squared_distance = (
+                batch_squared_norm[:, None]
+                + degenerate_segment_points_squared_norm[None, :]
+                - 2.0 * point_to_degenerate_dot
+            )
+            np.maximum(degenerate_squared_distance, 0.0, out=degenerate_squared_distance)
+            minimum_squared_distance = np.minimum(
+                minimum_squared_distance,
+                np.min(degenerate_squared_distance, axis=1),
+            )
+
+        yield np.sqrt(minimum_squared_distance)
+
+
+def point_to_polyline_distance_stats_batched(query_points, polyline_points, batch_size):
+    total_count = 0
+    total_sum = 0.0
+    max_distance = 0.0
+
+    for batch_distance in iter_point_to_polyline_distance_batches(
+        query_points,
+        polyline_points,
+        batch_size,
+    ):
+        if batch_distance.size == 0:
+            continue
+        total_count += int(batch_distance.size)
+        total_sum += float(np.sum(batch_distance, dtype=np.float64))
+        max_distance = max(max_distance, float(np.max(batch_distance)))
+
+    return total_count, total_sum, max_distance
+
+
 class TrajectorySample(object):
     __slots__ = ("stamp", "position")
 
@@ -86,6 +207,7 @@ class EnvelopeWidthEvaluator(object):
     DEFAULT_RETURN_POSITION_TOLERANCE_M = 0.10
     DEFAULT_RETURN_REARM_MARGIN_M = 0.05
     DEFAULT_OUTPUT_DIR = "~/.ros/multilink_copilot/envelope_metrics"
+    DEFAULT_DISTANCE_BATCH_SIZE = 128
     FINALIZATION_DELAY_SEC = 0.10
     LOG_THROTTLE_SEC = 2.0
 
@@ -104,6 +226,10 @@ class EnvelopeWidthEvaluator(object):
             rospy.get_param("~return_rearm_distance_m", self.default_return_rearm_distance())
         )
         self.output_dir = os.path.expanduser(rospy.get_param("~output_dir", self.DEFAULT_OUTPUT_DIR))
+        self.distance_batch_size = max(
+            1,
+            int(rospy.get_param("~distance_batch_size", self.DEFAULT_DISTANCE_BATCH_SIZE)),
+        )
 
         self.state = self.WAIT_INIT
         self.reference_frame_id = None
@@ -133,12 +259,13 @@ class EnvelopeWidthEvaluator(object):
         )
 
         rospy.loginfo(
-            "Envelope width evaluator listening on %s and %s; start threshold %.3f m, return tolerance %.3f m, return rearm distance %.3f m, output dir %s",
+            "Envelope width evaluator listening on %s and %s; start threshold %.3f m, return tolerance %.3f m, return rearm distance %.3f m, distance batch size %d, output dir %s",
             rospy.resolve_name(self.root_topic),
             rospy.resolve_name(self.last_link_topic),
             self.start_path_length_threshold_m,
             self.return_position_tolerance_m,
             self.return_rearm_distance_m,
+            self.distance_batch_size,
             self.output_dir,
         )
 
@@ -270,17 +397,23 @@ class EnvelopeWidthEvaluator(object):
             return
 
         root_polyline = [sample.position for sample in self.root_recording_samples]
-        envelope_widths = [
-            point_to_polyline_distance(sample.position, root_polyline)
-            for sample in filtered_last_link_samples
-        ]
+        last_link_positions = [sample.position for sample in filtered_last_link_samples]
+        total_count, total_sum, max_distance = point_to_polyline_distance_stats_batched(
+            last_link_positions,
+            root_polyline,
+            self.distance_batch_size,
+        )
+        if total_count <= 0:
+            rospy.logerr("Envelope width calculation produced no distances; not writing JSON.")
+            rospy.signal_shutdown("Envelope width evaluation failed.")
+            return
 
         result = {
             "start_ros_time": self.time_to_dict(self.start_ros_time),
             "end_ros_time": self.time_to_dict(self.end_ros_time),
             "envelope_metric": {
-                "mean": sum(envelope_widths) / float(len(envelope_widths)),
-                "max": max(envelope_widths),
+                "mean": total_sum / float(total_count),
+                "max": max_distance,
             },
         }
 
