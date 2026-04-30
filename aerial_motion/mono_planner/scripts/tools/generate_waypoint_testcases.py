@@ -10,8 +10,7 @@ RANDOM_SEED = 0
 FRAME_ID = "world"
 OUTPUT_DIR = Path("test_data")
 FILE_PREFIX = "case_"
-ROOT_POSITION = (0.0, 0.0, 1.0)
-ROOT_YAW = math.pi
+ROOT_POSITION = (0.5, 0.0, 1.0)
 ROLL = 0.0
 DIAMETER_RANGE = (1.0, 4.0)
 PITCH_RANGE = (-0.2, 0.2)
@@ -28,8 +27,6 @@ CIRCLE_TOLERANCE = 5e-6
 HALF_SPACE_EPSILON = 1e-6
 ROOT_XY_EXCLUSION_RADIUS = 0.5
 MIN_WAYPOINT_ANGULAR_SEPARATION = math.radians(60.0)
-MAX_YAW_STEP_DEGREES = 80.0
-MAX_YAW_STEP = math.radians(MAX_YAW_STEP_DEGREES)
 MAX_POSITION_SAMPLING_ATTEMPTS = 200
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -81,48 +78,6 @@ def forward_axis_from_pitch_yaw(pitch, yaw):
     )
 
 
-def find_closed_loop_yaw_step_violation(waypoint_yaws):
-    yaw_labels = ["ROOT"]
-    yaw_sequence = [ROOT_YAW]
-
-    for waypoint_index, yaw in enumerate(waypoint_yaws):
-        yaw_labels.append(f"waypoint_{waypoint_index}")
-        yaw_sequence.append(yaw)
-
-    yaw_labels.append("ROOT")
-    yaw_sequence.append(ROOT_YAW)
-
-    for step_index, (start_yaw, end_yaw) in enumerate(zip(yaw_sequence[:-1], yaw_sequence[1:])):
-        delta = wrap_angle(end_yaw - start_yaw)
-        if abs(delta) > MAX_YAW_STEP + ANGLE_TOLERANCE:
-            return {
-                "step_index": step_index,
-                "start_label": yaw_labels[step_index],
-                "end_label": yaw_labels[step_index + 1],
-                "start_yaw": start_yaw,
-                "end_yaw": end_yaw,
-                "delta": delta,
-            }
-
-    return None
-
-
-def closed_loop_yaw_violation_message(violation):
-    if violation["step_index"] == 0:
-        return "The first waypoint yaw differs from the root yaw by more than {:.0f} degrees.".format(
-            MAX_YAW_STEP_DEGREES
-        )
-    if violation["end_label"] == "ROOT":
-        return "The final waypoint yaw differs from the root yaw by more than {:.0f} degrees on the return-to-ROOT leg.".format(
-            MAX_YAW_STEP_DEGREES
-        )
-    return "Adjacent waypoint yaws differ by more than {:.0f} degrees between {} and {}.".format(
-        MAX_YAW_STEP_DEGREES,
-        violation["start_label"],
-        violation["end_label"],
-    )
-
-
 def rounded_value(value):
     rounded = round(float(value), ROUND_DIGITS)
     if abs(rounded) < 0.5 * 10 ** (-ROUND_DIGITS):
@@ -155,49 +110,67 @@ def build_segment_directions(ordered_positions):
     return segment_directions
 
 
-def build_candidate_waypoints(ordered_positions, pitches):
-    segment_directions = build_segment_directions(ordered_positions)
+def validate_segment_directions(segment_directions):
     if segment_directions is None:
-        return None
-
+        return "Generated waypoints contain a zero-length segment."
     if dot(ROOT_FORWARD_AXIS, segment_directions[0]) <= DOT_EPSILON:
-        return None
+        return "Root forward axis is incompatible with the first segment."
     if dot(ROOT_FORWARD_AXIS, segment_directions[-1]) <= DOT_EPSILON:
+        return "Root forward axis is incompatible with the last segment."
+    return None
+
+
+def yaw_from_segment_bisector(incoming_direction, outgoing_direction):
+    yaw_x = incoming_direction[0] + outgoing_direction[0]
+    yaw_y = incoming_direction[1] + outgoing_direction[1]
+    if yaw_x * yaw_x + yaw_y * yaw_y <= SEGMENT_EPSILON:
         return None
+    return math.atan2(yaw_y, yaw_x)
+
+
+def validate_waypoint_forward_axis(forward_axis, incoming_direction, outgoing_direction, waypoint_index):
+    if dot(forward_axis, incoming_direction) <= DOT_EPSILON:
+        return f"Waypoint {waypoint_index} faces away from its incoming segment."
+    if dot(forward_axis, outgoing_direction) <= DOT_EPSILON:
+        return f"Waypoint {waypoint_index} faces away from its outgoing segment."
+    return None
+
+
+def build_nonholonomic_waypoints(ordered_positions, pitches):
+    if len(ordered_positions) != len(pitches):
+        raise ValueError("ordered_positions and pitches must have the same length.")
+
+    segment_directions = build_segment_directions(ordered_positions)
+    violation = validate_segment_directions(segment_directions)
+    if violation is not None:
+        return None, violation
 
     waypoints = []
-    waypoint_yaws = []
-
-    for waypoint_index, position in enumerate(ordered_positions):
+    for waypoint_index, (position, pitch) in enumerate(zip(ordered_positions, pitches)):
         incoming_direction = segment_directions[waypoint_index]
         outgoing_direction = segment_directions[waypoint_index + 1]
-        yaw_x = incoming_direction[0] + outgoing_direction[0]
-        yaw_y = incoming_direction[1] + outgoing_direction[1]
-        if yaw_x * yaw_x + yaw_y * yaw_y <= SEGMENT_EPSILON:
-            return None
+        yaw = yaw_from_segment_bisector(incoming_direction, outgoing_direction)
+        if yaw is None:
+            return None, f"Waypoint {waypoint_index} does not have a well-defined horizontal segment bisector."
 
-        pitch = pitches[waypoint_index]
-        yaw = math.atan2(yaw_y, yaw_x)
         forward_axis = forward_axis_from_pitch_yaw(pitch, yaw)
-
-        if dot(forward_axis, incoming_direction) <= DOT_EPSILON:
-            return None
-        if dot(forward_axis, outgoing_direction) <= DOT_EPSILON:
-            return None
-
-        waypoints.append(
-            [
-                position[0],
-                position[1],
-                position[2],
-                ROLL,
-                pitch,
-                yaw,
-            ]
+        violation = validate_waypoint_forward_axis(
+            forward_axis,
+            incoming_direction,
+            outgoing_direction,
+            waypoint_index,
         )
-        waypoint_yaws.append(yaw)
+        if violation is not None:
+            return None, violation
 
-    if find_closed_loop_yaw_step_violation(waypoint_yaws) is not None:
+        waypoints.append([position[0], position[1], position[2], ROLL, pitch, yaw])
+
+    return waypoints, None
+
+
+def build_candidate_waypoints(ordered_positions, pitches):
+    waypoints, _violation = build_nonholonomic_waypoints(ordered_positions, pitches)
+    if waypoints is None:
         return None
 
     return [[rounded_value(value) for value in waypoint] for waypoint in waypoints]
@@ -210,7 +183,7 @@ def validate_generated_case(waypoints, circle_center, radius):
     z_value = waypoints[0][2]
     ordered_positions = []
     waypoint_angles = []
-    waypoint_yaws = []
+    pitches = []
 
     root_xy_distance = xy_distance(ROOT_POSITION, circle_center)
     if not math.isclose(root_xy_distance, radius, rel_tol=0.0, abs_tol=CIRCLE_TOLERANCE):
@@ -251,29 +224,17 @@ def validate_generated_case(waypoints, circle_center, radius):
 
         ordered_positions.append((x_value, y_value, z_current))
         waypoint_angles.append(current_angle)
-        waypoint_yaws.append(yaw)
+        pitches.append(pitch)
 
-    yaw_violation = find_closed_loop_yaw_step_violation(waypoint_yaws)
-    if yaw_violation is not None:
-        raise ValueError(closed_loop_yaw_violation_message(yaw_violation))
+    expected_waypoints, violation = build_nonholonomic_waypoints(ordered_positions, pitches)
+    if violation is not None:
+        raise ValueError(violation)
 
-    segment_directions = build_segment_directions(ordered_positions)
-    if segment_directions is None:
-        raise ValueError("Generated waypoints contain a zero-length segment.")
-
-    if dot(ROOT_FORWARD_AXIS, segment_directions[0]) <= DOT_EPSILON:
-        raise ValueError("Root forward axis is incompatible with the first segment.")
-    if dot(ROOT_FORWARD_AXIS, segment_directions[-1]) <= DOT_EPSILON:
-        raise ValueError("Root forward axis is incompatible with the last segment.")
-
-    for waypoint_index, waypoint in enumerate(waypoints):
-        pitch = waypoint[4]
-        yaw = waypoint[5]
-        forward_axis = forward_axis_from_pitch_yaw(pitch, yaw)
-        if dot(forward_axis, segment_directions[waypoint_index]) <= DOT_EPSILON:
-            raise ValueError(f"Waypoint {waypoint_index} faces away from its incoming segment.")
-        if dot(forward_axis, segment_directions[waypoint_index + 1]) <= DOT_EPSILON:
-            raise ValueError(f"Waypoint {waypoint_index} faces away from its outgoing segment.")
+    for waypoint_index, (waypoint, expected_waypoint) in enumerate(zip(waypoints, expected_waypoints)):
+        if angular_distance(waypoint[5], expected_waypoint[5]) > ANGLE_TOLERANCE:
+            raise ValueError(
+                f"Waypoint {waypoint_index} yaw {waypoint[5]} does not match the segment-bisector construction."
+            )
 
 
 def sample_waypoint_positions(rng, circle_center, radius, center_z):
