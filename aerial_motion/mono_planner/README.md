@@ -22,52 +22,17 @@ If it reports missing `libdynamicedt3d.so.1.8` while running, add the following 
 export LD_LIBRARY_PATH=~/.local/lib:$LD_LIBRARY_PATH
 ```
 
-## 2. Waypoint-Conditioned Planners
+## 2. Waypoint Planners
 
-`waypoint_conditioned_planner.launch` supports two planner variants that share the
-same ROS interface:
+This section groups the planners into two categories:
 
-- Holonomic planner: intended for rigid-body robots that can track arbitrary pose
-  trajectories.
-- Nonholonomic planner: constrains the published orientation to follow the
-  trajectory tangent and enforces forward-motion feasibility at each knot.
+- Single-Waypoint Planner: a standalone roundtrip demo through one waypoint.
+- Multiple-Waypoint Planners: two variants started from
+  `waypoint_conditioned_planner.launch`.
 
-### 2.1. Common Interface
+### 2.1. Shared Setup
 
-Both variants use the same topics and launch arguments:
-
-- Input `root/tail_pose` (`geometry_msgs/PoseStamped`): robot root pose input.
-- Input `waypoint/pose_x` (`geometry_msgs/PoseStamped`): waypoint topics discovered
-  automatically from the ROS graph.
-- Output `root/target_pose` (`geometry_msgs/PoseStamped`): sampled target pose
-  along the planned trajectory.
-- Launch args:
-  `nonholo`, `publish_rate_hz`, `total_trajectory_time`, `robot_frame_type`,
-  `robot_pose_topic`, `target_pose_topic`, and `ns`.
-
-### 2.2. Common Behavior
-
-Both variants share the same replanning and root-pose semantics:
-
-- The first received `root/tail_pose` is latched as the fixed terminal pose for all
-  future plans.
-- The latest received `root/tail_pose` is used as the initial pose when a new plan
-  is generated.
-- The first plan is attempted automatically once the required root and waypoint
-  inputs are available.
-- Replans are triggered only by waypoint content changes or waypoint topic-set changes. The replan takes the latest `root/tail_pose` as the initial state.
-- In `LINK` mode, the incoming `root/tail_pose` orientation is rotated by 180
-  degrees about the robot's local `Z` axis before planning. This is specially for multi-link robots such as DRAGON.
-
-### 2.3. Quick Start
-
-1. Launch the waypoint pose publisher:
-
-```bash
-roslaunch mono_planner waypoint_pose_publisher.launch
-```
-
-2. Publish the current root tail pose:
+Publish the current root tail pose:
 
 ```bash
 rostopic pub -r 10 dragon/root/tail_pose geometry_msgs/PoseStamped "header:
@@ -88,45 +53,74 @@ pose:
     w: 1.0"
 ```
 
-3. Launch one of the planner variants:
+### 2.2. Shared Topics and Outputs
+
+Both planner categories share the same high-level ROS contract:
+
+- Input: `root/tail_pose` (`geometry_msgs/PoseStamped`) plus waypoint pose
+  topics.
+- Output: `root/target_pose` (`geometry_msgs/PoseStamped`).
+- Visualization: `mono_planner/traj_marker` (`visualization_msgs/MarkerArray`).
+
+The exact waypoint topic pattern and startup flow depend on the planner
+category.
+
+### 2.3. Single-Waypoint Planner
+
+`single_wpt_planner.py` is a standalone single-shot planner. It waits for one
+`root/tail_pose` and one `/waypoint/pose_0`, freezes that pair as a planning
+snapshot, and constructs a single 3D circle for the trajectory
+`root -> waypoint_0 -> root`.
+
+Prepare the waypoint input with the dedicated single-waypoint config:
 
 ```bash
-# Holonomic planner
-roslaunch mono_planner waypoint_conditioned_planner.launch robot_frame_type:=LINK
-
-# Nonholonomic planner
-roslaunch mono_planner waypoint_conditioned_planner.launch nonholo:=true robot_frame_type:=LINK
+roslaunch mono_planner waypoint_pose_publisher.launch config_file:=config/single_waypoint.yaml
 ```
 
-The following GIF shows the Holonomic planner (video speed: 2x):
+Then launch the planner:
+```bash
+roslaunch mono_planner single_wpt_planner.launch
+```
+
+### 2.4. Multiple-Waypoint Planners
+
+These planners run through `waypoint_conditioned_planner.launch`. They discover
+`waypoint/pose_x` topics automatically, use the first received `root/tail_pose`
+as the fixed return pose, and replan from the latest `root/tail_pose` when
+waypoints change.
+
+Prepare waypoint input with the default waypoint publisher configuration:
+
+```bash
+roslaunch mono_planner waypoint_pose_publisher.launch
+```
+
+#### 2.4.1. Holonomic Planner
+
+The holonomic variant is intended for rigid-body robots that can track arbitrary
+pose trajectories. It plans the sequence
+`current root -> waypoint_0 -> waypoint_1 -> ... -> startup root` without
+requiring the published orientation to follow the trajectory tangent.
+
+Launch it with:
+
+```bash
+roslaunch mono_planner waypoint_conditioned_planner.launch robot_frame_type:=LINK
+```
+
+Holonomic planner demo (video speed: 2x):
 
 ![Holonomic planner demo](media/waypoint-conditioned-planning.gif)
 
+#### 2.4.2. Nonholonomic Planner
 
-### 2.4. Holonomic Planner
+The nonholonomic variant keeps the same launch entry point and waypoint flow,
+but constrains the published `root/target_pose` orientation so that the robot
+body `X` axis follows the local motion direction.
 
-This variant is intended for holonomic robots. It tracks the pose sequence
+Launch it with:
 
-`current root -> waypoint_0 -> waypoint_1 -> ... -> startup root`
-
-without imposing a tangent-following body-frame constraint on the output
-orientation.
-
-### 2.5. Nonholonomic Planner
-
-This variant keeps the same ROS interface, but the published `root/target_pose`
-orientation is constrained by the trajectory tangent so that the robot body `X`
-axis points along the motion direction.
-
-Unlike the holonomic planner, the nonholonomic planner also treats the
-orientations in `root/tail_pose` and `waypoint/pose_x` as hard knot constraints.
-If any waypoint or root orientation is incompatible with a forward-moving
-trajectory, the planner rejects the plan instead of publishing a command sequence.
-
-When you prepare your own waypoint file, each waypoint orientation must be
-compatible with the ordered path
-`current root -> waypoint_0 -> waypoint_1 -> ... -> startup root`. In practice,
-the body `X` axis defined by each waypoint orientation must point generally along
-the local forward travel direction. If a waypoint orientation points sideways or
-backwards relative to either adjacent path segment, the planner reports that the
-segment is incompatible and no trajectory is published.
+```bash
+roslaunch mono_planner waypoint_conditioned_planner.launch nonholo:=true robot_frame_type:=LINK
+```

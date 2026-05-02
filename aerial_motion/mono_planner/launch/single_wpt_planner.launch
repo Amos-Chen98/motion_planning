@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="robot_ns" default="dragon" />
+    <arg name="publish_rate_hz" default="40.0" />
+    <arg name="total_trajectory_time" default="20.0" />
+    <arg name="robot_frame_type" default="LINK" doc="Retained for compatibility; ignored by single_wpt_planner circular geometry." />
+    <arg name="launch_prefix" default="" doc="Use a terminal prefix such as 'xterm -e' if keyboard confirmation is required from roslaunch." />
+
+    <group ns="$(arg robot_ns)">
+        <node pkg="mono_planner" type="single_wpt_planner.py" name="single_wpt_planner" output="screen" launch-prefix="$(arg launch_prefix)">
+            <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
+            <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
+            <param name="robot_frame_type" value="$(arg robot_frame_type)" />
+        </node>
+    </group>
+</launch>

@@ -30,6 +30,7 @@ catkin_package(
 catkin_install_python(PROGRAMS
     scripts/ros_node/nonholo_wpt_cond_planner.py
     scripts/ros_node/holo_wpt_cond_planner.py
+    scripts/ros_node/single_wpt_planner.py
     scripts/ros_node/traj_planner_node.py
     scripts/demo/waypoint_pose_publisher.py
     scripts/demo/waypoint_ring_visualizer.py
