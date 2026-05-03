@@ -20,4 +20,6 @@
                 data_port: 1511
         </rosparam>
     </node>
+
+    <node pkg="mono_planner" type="waypoint_ring_visualizer.py" name="waypoint_ring_visualizer" output="screen" />
 </launch>
