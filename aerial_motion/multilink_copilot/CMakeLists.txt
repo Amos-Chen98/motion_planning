@@ -70,6 +70,8 @@ catkin_install_python(PROGRAMS
     scripts/evaluation/last_link_tail_pose_publisher.py
     scripts/evaluation/run_waypoint_conditioned_maneuvering_batch.py
     scripts/demo/dragon_dance_node.py
+    scripts/evaluation/replay_rosbag.py
+    scripts/evaluation/replay_tf_bridge.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

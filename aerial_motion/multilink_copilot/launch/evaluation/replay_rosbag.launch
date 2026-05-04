@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="bag" />
+    <arg name="robot_ns" default="dragon" />
+    <arg name="rviz" default="true" />
+    <arg name="play_args" default="--clock" />
+    <arg name="world_frame" default="world" />
+    <arg name="robot_model" default="$(find dragon)/robots/quad/v1_5_202601.urdf.xacro" />
+    <arg name="rviz_config" default="$(find mono_planner)/rviz/wpt_cond_manv.rviz" />
+
+    <param name="/use_sim_time" value="true" />
+
+    <group ns="$(arg robot_ns)">
+        <param name="robot_description" command="$(find xacro)/xacro '$(arg robot_model)' robot_name:=$(arg robot_ns)" />
+
+        <node pkg="robot_state_publisher" type="robot_state_publisher" name="replay_robot_state_publisher" output="screen">
+            <param name="tf_prefix" value="$(arg robot_ns)" />
+        </node>
+    </group>
+
+    <node pkg="multilink_copilot" type="replay_tf_bridge.py" name="replay_tf_bridge" output="screen">
+        <param name="robot_ns" value="$(arg robot_ns)" />
+        <param name="world_frame" value="$(arg world_frame)" />
+    </node>
+
+    <node if="$(arg rviz)" pkg="rviz" type="rviz" name="replay_rviz" args="-d $(arg rviz_config)" output="screen" />
+
+    <node pkg="rosbag" type="play" name="rosbag_play" output="screen" required="true" args="$(arg play_args) $(arg bag)">
+        <remap from="/tf" to="/bag_tf" />
+        <remap from="/tf_static" to="/bag_tf_static" />
+    </node>
+</launch>

@@ -188,3 +188,38 @@ multilink_copilot/config/copilot_planner.yaml
 ```
 
 The launch file loads this YAML by default. `target_pose_frame_type` can still be overridden from the launch arg.
+
+## 5. Rosbag Replay
+
+Recorded bags are stored under:
+
+```bash
+multilink_copilot/data/rosbag
+```
+
+Use the replay helper to choose a bag interactively and visualize it in RViz:
+
+```bash
+rosrun multilink_copilot replay_rosbag.py
+```
+
+The helper launches `launch/evaluation/replay_rosbag.launch`, loads the Dragon URDF from
+`dragon/robots/quad/v1_5_202601.urdf.xacro`, starts `rosbag play` with
+`--clock`, and opens `mono_planner/rviz/wpt_cond_manv.rviz`. Bag `/tf` is
+replayed through a small bridge that forwards only `world -> dragon/root`, so
+`robot_state_publisher` can regenerate the complete Dragon link tree from
+`dragon/joint_states` without duplicate TF publishers.
+
+Common noninteractive forms:
+
+```bash
+rosrun multilink_copilot replay_rosbag.py --latest
+rosrun multilink_copilot replay_rosbag.py --pause
+```
+
+You can also launch a specific bag directly. The launch file lives under
+`launch/evaluation/`; `roslaunch` resolves it by filename:
+
+```bash
+roslaunch multilink_copilot replay_rosbag.launch bag:=$(rospack find multilink_copilot)/data/rosbag/2026-05-04-11-38-33.bag
+```
