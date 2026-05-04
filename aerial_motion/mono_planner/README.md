@@ -87,8 +87,11 @@ roslaunch mono_planner single_wpt_planner.launch
 
 These planners run through `waypoint_conditioned_planner.launch`. They discover
 `waypoint/pose_x` topics automatically, use the first received `root/tail_pose`
-as the fixed return pose, and replan from the latest `root/tail_pose` when
-waypoints change.
+as the fixed return pose, and by default freeze the first waypoint set that
+produces a successful plan. In the default `replan:=false` mode, later
+`waypoint/pose_x` updates and waypoint topic-set changes are ignored. Set
+`replan:=true` to replan from the latest `root/tail_pose` when waypoints
+change.
 
 Prepare waypoint input with the default waypoint publisher configuration:
 
@@ -109,6 +112,12 @@ Launch it with:
 roslaunch mono_planner waypoint_conditioned_planner.launch robot_frame_type:=LINK
 ```
 
+To keep replanning whenever waypoint poses or the waypoint topic set changes:
+
+```bash
+roslaunch mono_planner waypoint_conditioned_planner.launch robot_frame_type:=LINK replan:=true
+```
+
 Holonomic planner demo (video speed: 2x):
 
 ![Holonomic planner demo](media/waypoint-conditioned-planning.gif)
@@ -123,4 +132,10 @@ Launch it with:
 
 ```bash
 roslaunch mono_planner waypoint_conditioned_planner.launch nonholo:=true robot_frame_type:=LINK
+```
+
+To keep replanning whenever waypoint poses or the waypoint topic set changes:
+
+```bash
+roslaunch mono_planner waypoint_conditioned_planner.launch nonholo:=true robot_frame_type:=LINK replan:=true
 ```

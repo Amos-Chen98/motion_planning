@@ -28,6 +28,19 @@ def normalize_topic_name(topic_name):
     return topic_name
 
 
+def get_boolean_param(param_name, default_value):
+    value = rospy.get_param(param_name, default_value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    raise ValueError("{} must be a boolean value.".format(param_name))
+
+
 def canonicalize_quaternion(quaternion):
     normalized = np.asarray(quaternion, dtype=float)
     norm = np.linalg.norm(normalized)
@@ -92,6 +105,7 @@ class BaseWaypointConditionedPlannerNode(ABC):
         self.publish_rate_hz = float(rospy.get_param("~publish_rate_hz", 60.0))
         self.total_trajectory_time = float(rospy.get_param("~total_trajectory_time", 20.0))
         configured_robot_frame_type = str(rospy.get_param("~robot_frame_type", "FLU"))
+        self.replan = get_boolean_param("~replan", False)
         self.robot_frame_type = configured_robot_frame_type.upper()
         if self.publish_rate_hz <= 0.0:
             raise ValueError("~publish_rate_hz must be greater than 0.")
@@ -108,6 +122,9 @@ class BaseWaypointConditionedPlannerNode(ABC):
         self.waypoint_topic_indices = {}
         self.latest_waypoints = {}
         self.latest_waypoint_signatures = {}
+        self.has_successful_plan = False
+        self.waypoints_frozen = False
+        self.frozen_waypoint_count = 0
 
         self.trajectory_samples = []
         self.trajectory_frame_id = "world"
@@ -135,6 +152,12 @@ class BaseWaypointConditionedPlannerNode(ABC):
             )
         else:
             rospy.loginfo("Interpreting root/tail_pose as FLU without conversion.")
+        if self.replan:
+            rospy.loginfo("Waypoint-triggered replanning is enabled (~replan:=true).")
+        else:
+            rospy.loginfo(
+                "Waypoint-triggered replanning is disabled (~replan:=false); waypoint inputs will freeze after the first successful plan."
+            )
 
     def convert_root_pose_for_planning(self, pose_stamped):
         converted_pose = copy.deepcopy(pose_stamped)
@@ -178,6 +201,8 @@ class BaseWaypointConditionedPlannerNode(ABC):
         topic_name = normalize_topic_name(topic_name)
 
         with self.lock:
+            if self.waypoints_frozen:
+                return
             waypoint_index = self.waypoint_topic_indices.get(topic_name)
             if waypoint_index is None:
                 return
@@ -222,6 +247,10 @@ class BaseWaypointConditionedPlannerNode(ABC):
             return self.on_invalid_pose_signature(source_name, waypoint_index, exc)
 
     def discover_waypoint_topics(self, _event):
+        with self.lock:
+            if self.waypoints_frozen:
+                return
+
         try:
             published_topics = rospy.get_published_topics()
         except rospy.ROSException as exc:
@@ -242,6 +271,8 @@ class BaseWaypointConditionedPlannerNode(ABC):
         topics_to_add = []
 
         with self.lock:
+            if self.waypoints_frozen:
+                return
             current_topics = set(self.waypoint_subscribers.keys())
             discovered_topic_names = set(discovered_topics.keys())
 
@@ -314,12 +345,23 @@ class BaseWaypointConditionedPlannerNode(ABC):
             self.on_planning_failure("Trajectory setup failed while replanning ({})".format(reason), exc)
             return
 
+        freeze_waypoints = False
         with self.lock:
             self.trajectory_samples = planning_artifacts.samples
             self.trajectory_frame_id = frame_id
             self.publish_index = 0
+            self.has_successful_plan = True
+            if not self.replan and not self.waypoints_frozen:
+                self.waypoints_frozen = True
+                self.frozen_waypoint_count = len(ordered_waypoint_entries)
+                freeze_waypoints = True
 
         self.log_planning_success(len(ordered_waypoints), len(planning_artifacts.samples), reason)
+        if freeze_waypoints:
+            rospy.loginfo(
+                "Waypoint inputs are now frozen after the first successful plan (%d waypoint topics locked).",
+                self.frozen_waypoint_count,
+            )
         self.publish_trajectory_markers(
             frame_id,
             planning_artifacts.trajectory_positions,
