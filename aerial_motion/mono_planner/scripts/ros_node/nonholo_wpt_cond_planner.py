@@ -49,7 +49,7 @@ class NonholonomicWaypointConditionedPlannerNode(BaseWaypointConditionedPlannerN
         if source_name == "root/tail_pose":
             rospy.logerr("Received invalid root/tail_pose orientation: %s", exc)
         else:
-            rospy.logerr("Received invalid orientation on waypoint/pose_%d: %s", waypoint_index, exc)
+            rospy.logerr("Received invalid orientation on %s: %s", source_name, exc)
         return None
 
     def on_planning_failure(self, log_prefix, exc):

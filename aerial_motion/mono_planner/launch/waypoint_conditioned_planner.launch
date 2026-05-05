@@ -8,6 +8,7 @@
     <arg name="robot_frame_type" default="FLU" doc="Planner root/tail_pose frame type: FLU or LINK" />
     <arg name="robot_pose_topic" default="root/tail_pose" />
     <arg name="target_pose_topic" default="root/target_pose" />
+    <arg name="waypoint_topic_prefix" default="/waypoint/pose_" />
 
     <group ns="$(arg ns)">
         <node unless="$(arg nonholo)" pkg="mono_planner" type="holo_wpt_cond_planner.py" name="holo_wpt_cond_planner" output="screen">
@@ -15,6 +16,7 @@
             <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
             <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
             <param name="robot_frame_type" value="$(arg robot_frame_type)" />
+            <param name="waypoint_topic_prefix" value="$(arg waypoint_topic_prefix)" />
             <remap from="root/tail_pose" to="$(arg robot_pose_topic)" />
             <remap from="root/target_pose" to="$(arg target_pose_topic)" />
         </node>
@@ -24,6 +26,7 @@
             <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
             <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
             <param name="robot_frame_type" value="$(arg robot_frame_type)" />
+            <param name="waypoint_topic_prefix" value="$(arg waypoint_topic_prefix)" />
             <remap from="root/tail_pose" to="$(arg robot_pose_topic)" />
             <remap from="root/target_pose" to="$(arg target_pose_topic)" />
         </node>

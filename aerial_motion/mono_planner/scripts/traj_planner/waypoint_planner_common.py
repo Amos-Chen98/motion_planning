@@ -88,7 +88,7 @@ def position_to_point(position):
 
 
 class BaseWaypointConditionedPlannerNode(ABC):
-    WAYPOINT_TOPIC_PATTERN = re.compile(r"^/?waypoint/pose_(\d+)$")
+    DEFAULT_WAYPOINT_TOPIC_PREFIX = "/waypoint/pose_"
     POSE_EPSILON = 0.05
     DISCOVERY_PERIOD = 1.0
     TRAJECTORY_MARKER_TOPIC = "mono_planner/traj_marker"
@@ -107,6 +107,10 @@ class BaseWaypointConditionedPlannerNode(ABC):
         configured_robot_frame_type = str(rospy.get_param("~robot_frame_type", "FLU"))
         self.replan = get_boolean_param("~replan", False)
         self.robot_frame_type = configured_robot_frame_type.upper()
+        self.waypoint_topic_prefix = self.resolve_waypoint_topic_prefix(
+            rospy.get_param("~waypoint_topic_prefix", self.DEFAULT_WAYPOINT_TOPIC_PREFIX)
+        )
+        self.waypoint_topic_pattern = re.compile(r"^{}(\d+)$".format(re.escape(self.waypoint_topic_prefix)))
         if self.publish_rate_hz <= 0.0:
             raise ValueError("~publish_rate_hz must be greater than 0.")
         if self.total_trajectory_time <= 0.0:
@@ -152,12 +156,20 @@ class BaseWaypointConditionedPlannerNode(ABC):
             )
         else:
             rospy.loginfo("Interpreting root/tail_pose as FLU without conversion.")
+        rospy.loginfo("Discovering waypoint topics matching %s<index>.", self.waypoint_topic_prefix)
         if self.replan:
             rospy.loginfo("Waypoint-triggered replanning is enabled (~replan:=true).")
         else:
             rospy.loginfo(
                 "Waypoint-triggered replanning is disabled (~replan:=false); waypoint inputs will freeze after the first successful plan."
             )
+
+    @staticmethod
+    def resolve_waypoint_topic_prefix(topic_prefix):
+        topic_prefix = str(topic_prefix).strip()
+        if not topic_prefix:
+            raise ValueError("~waypoint_topic_prefix must be a non-empty topic prefix.")
+        return normalize_topic_name(rospy.resolve_name(topic_prefix))
 
     def convert_root_pose_for_planning(self, pose_stamped):
         converted_pose = copy.deepcopy(pose_stamped)
@@ -216,7 +228,7 @@ class BaseWaypointConditionedPlannerNode(ABC):
                 self.latest_waypoints[waypoint_index] = copy.deepcopy(msg)
             new_signature = self.compute_pose_signature(
                 msg,
-                "waypoint/pose_{}".format(waypoint_index),
+                topic_name,
                 waypoint_index=waypoint_index,
             )
             if not self.cache_waypoint_before_signature:
@@ -234,8 +246,8 @@ class BaseWaypointConditionedPlannerNode(ABC):
 
         self.invalidate_current_trajectory()
         self.try_plan(
-            "waypoint/pose_{} {}".format(
-                waypoint_index,
+            "{} {}".format(
+                topic_name,
                 "received" if previous_signature is None else "updated",
             )
         )
@@ -261,10 +273,11 @@ class BaseWaypointConditionedPlannerNode(ABC):
         for topic_name, topic_type in published_topics:
             if topic_type != "geometry_msgs/PoseStamped":
                 continue
-            match = self.WAYPOINT_TOPIC_PATTERN.match(topic_name)
+            normalized_topic_name = normalize_topic_name(topic_name)
+            match = self.waypoint_topic_pattern.match(normalized_topic_name)
             if match is None:
                 continue
-            discovered_topics[normalize_topic_name(topic_name)] = int(match.group(1))
+            discovered_topics[normalized_topic_name] = int(match.group(1))
 
         topics_changed = False
         topics_to_remove = []
@@ -321,7 +334,11 @@ class BaseWaypointConditionedPlannerNode(ABC):
 
         ordered_waypoints = [waypoint for _, waypoint in ordered_waypoint_entries]
         if not ordered_waypoints:
-            rospy.loginfo_throttle(2.0, "Waiting for at least one waypoint/pose_x topic before planning.")
+            rospy.loginfo_throttle(
+                2.0,
+                "Waiting for at least one waypoint topic matching %s<index> before planning.",
+                self.waypoint_topic_prefix,
+            )
             return
 
         frame_id = (
