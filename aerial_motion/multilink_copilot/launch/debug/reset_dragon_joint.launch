@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<launch>
+    <node pkg="multilink_copilot" type="reset_dragon_joint.py" name="reset_dragon_joint" output="screen" />
+</launch>

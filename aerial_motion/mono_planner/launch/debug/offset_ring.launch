@@ -1,5 +1,5 @@
 <launch>
-    <arg name="offset_m" default="0.15" />
+    <arg name="offset_m" default="0.1" />
 
     <node pkg="mono_planner" type="offset_ring.py" name="offset_ring" output="screen">
         <param name="offset_m" value="$(arg offset_m)" />
