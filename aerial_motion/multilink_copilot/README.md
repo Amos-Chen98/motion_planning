@@ -189,7 +189,14 @@ multilink_copilot/config/copilot_planner.yaml
 
 The launch file loads this YAML by default. `target_pose_frame_type` can still be overridden from the launch arg.
 
-## 5. Rosbag Replay
+## 5. Evaluation
+
+The evaluation tools support two common workflows:
+
+- Replay a recorded rosbag for visual inspection or offline analysis.
+- Run the envelope-width evaluator during a live experiment or rosbag replay.
+
+### 5.1 Replay Rosbag
 
 Recorded bags are stored under:
 
@@ -222,4 +229,41 @@ You can also launch a specific bag directly. The launch file lives under
 
 ```bash
 roslaunch multilink_copilot replay_rosbag.launch bag:=$(rospack find multilink_copilot)/data/rosbag/2026-05-04-11-38-33.bag
+```
+
+### 5.2 Run Evaluation
+
+Run the evaluation launch during a live waypoint-conditioned maneuver or while
+replaying a recorded bag:
+
+```bash
+roslaunch multilink_copilot run_evaluation.launch
+```
+
+This launch starts:
+
+- `last_link_tail_pose_publisher.py`: publishes `last_link/tail_pose` from
+  `root/pose` and the TF relation `dragon/root -> dragon/link4`.
+- `envelope_width_evaluator.py`: detects when `dragon/root/pose` and
+  `dragon/last_link/tail_pose` cross the waypoint ring planes, then writes an
+  envelope-width JSON result.
+
+By default, results are written to:
+
+```bash
+multilink_copilot/data/envelope_width
+```
+
+Common launch arguments:
+
+```bash
+roslaunch multilink_copilot run_evaluation.launch robot_ns:=dragon
+roslaunch multilink_copilot run_evaluation.launch output_dir:=/tmp/envelope_width
+```
+
+`copilot_planner.launch` includes this evaluation launch by default. To run the
+planner without evaluation, use:
+
+```bash
+roslaunch multilink_copilot copilot_planner.launch evaluation:=false
 ```

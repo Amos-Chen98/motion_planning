@@ -27,8 +27,7 @@ export LD_LIBRARY_PATH=~/.local/lib:$LD_LIBRARY_PATH
 This section groups the planners into two categories:
 
 - Single-Waypoint Planner: a standalone roundtrip demo through one waypoint.
-- Multiple-Waypoint Planners: two variants started from
-  `waypoint_conditioned_planner.launch`.
+- Multiple-Waypoint Planners: two variants started from `waypoint_conditioned_planner.launch`.
 
 ### 2.1. Shared Setup
 
@@ -57,20 +56,15 @@ pose:
 
 Both planner categories share the same high-level ROS contract:
 
-- Input: `root/tail_pose` (`geometry_msgs/PoseStamped`) plus waypoint pose
-  topics.
+- Input: `root/tail_pose` (`geometry_msgs/PoseStamped`) plus waypoint pose topics.
 - Output: `root/target_pose` (`geometry_msgs/PoseStamped`).
 - Visualization: `mono_planner/traj_marker` (`visualization_msgs/MarkerArray`).
 
-The exact waypoint topic pattern and startup flow depend on the planner
-category.
+The exact waypoint topic pattern and startup flow depend on the planner category.
 
 ### 2.3. Single-Waypoint Planner
 
-`single_wpt_planner.py` is a standalone single-shot planner. It waits for one
-`root/tail_pose` and one `/waypoint/pose_0`, freezes that pair as a planning
-snapshot, and constructs a single 3D circle for the trajectory
-`root -> waypoint_0 -> root`.
+`single_wpt_planner.py` is a standalone single-shot planner. It waits for one `root/tail_pose` and one `/waypoint/pose_0`, freezes that pair as a planning snapshot, and constructs a single 3D circle for the trajectory `root -> waypoint_0 -> root`.
 
 Prepare the waypoint input with the dedicated single-waypoint config:
 
@@ -79,19 +73,14 @@ roslaunch mono_planner waypoint_pose_publisher.launch config_file:=config/single
 ```
 
 Then launch the planner:
+
 ```bash
 roslaunch mono_planner single_wpt_planner.launch
 ```
 
 ### 2.4. Multiple-Waypoint Planners
 
-These planners run through `waypoint_conditioned_planner.launch`. They discover
-`waypoint/pose_x` topics automatically, use the first received `root/tail_pose`
-as the fixed return pose, and by default freeze the first waypoint set that
-produces a successful plan. In the default `replan:=false` mode, later
-`waypoint/pose_x` updates and waypoint topic-set changes are ignored. Set
-`replan:=true` to replan from the latest `root/tail_pose` when waypoints
-change.
+These planners run through `waypoint_conditioned_planner.launch`. They discover `waypoint/pose_x` topics automatically, use the first received `root/tail_pose` as the default fixed return pose, and by default freeze the first planning input set that produces a successful plan. Set `goal_pose:=/goal_pose` to use a published `geometry_msgs/PoseStamped` as the terminal pose instead. In the default `replan:=false` mode, later `goal_pose`, `waypoint/pose_x`, and waypoint topic-set changes are ignored. Set `replan:=true` to replan from the latest `root/tail_pose` when those inputs change.
 
 Prepare waypoint input with the default waypoint publisher configuration:
 
@@ -101,10 +90,7 @@ roslaunch mono_planner waypoint_pose_publisher.launch
 
 #### 2.4.1. Holonomic Planner
 
-The holonomic variant is intended for rigid-body robots that can track arbitrary
-pose trajectories. It plans the sequence
-`current root -> waypoint_0 -> waypoint_1 -> ... -> startup root` without
-requiring the published orientation to follow the trajectory tangent.
+The holonomic variant is intended for rigid-body robots that can track arbitrary pose trajectories. It plans the sequence `current root -> waypoint_0 -> waypoint_1 -> ... -> terminal pose` without requiring the published orientation to follow the trajectory tangent.
 
 Launch it with:
 
@@ -124,9 +110,7 @@ Holonomic planner demo (video speed: 2x):
 
 #### 2.4.2. Nonholonomic Planner
 
-The nonholonomic variant keeps the same launch entry point and waypoint flow,
-but constrains the published `root/target_pose` orientation so that the robot
-body `X` axis follows the local motion direction.
+The nonholonomic variant keeps the same launch entry point and waypoint flow, but constrains the published `root/target_pose` orientation so that the robot body `X` axis follows the local motion direction.
 
 Launch it with:
 
