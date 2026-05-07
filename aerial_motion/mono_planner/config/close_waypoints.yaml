@@ -1,0 +1,11 @@
+frame_id: world
+# Three nonholonomic waypoints on the XY-plane circle centered at [0, 1]
+# with radius 1.0. The points are near [0, 2] at angular positions
+# 110, 90, and 70 degrees, giving 20-degree angular spacing.
+#
+# These yaw values point each waypoint body X axis along the circle tangent in
+# the clockwise direction, matching the waypoint order 110 -> 90 -> 70 degrees.
+waypoints:
+  - [-0.342020, 1.939693, 1.0, 0.0, 0.0, 0.349066]
+  - [0.0, 2.0, 1.0, 0.0, 0.0, 0.0]
+  - [0.342020, 1.939693, 1.0, 0.0, 0.0, -0.349066]
