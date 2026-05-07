@@ -110,6 +110,7 @@ class BaseWaypointConditionedPlannerNode(ABC):
         self.waypoint_topic_prefix = self.resolve_waypoint_topic_prefix(
             rospy.get_param("~waypoint_topic_prefix", self.DEFAULT_WAYPOINT_TOPIC_PREFIX)
         )
+        self.goal_pose_topic = self.resolve_optional_pose_topic(rospy.get_param("~goal_pose", ""))
         self.waypoint_topic_pattern = re.compile(r"^{}(\d+)$".format(re.escape(self.waypoint_topic_prefix)))
         if self.publish_rate_hz <= 0.0:
             raise ValueError("~publish_rate_hz must be greater than 0.")
@@ -122,6 +123,8 @@ class BaseWaypointConditionedPlannerNode(ABC):
 
         self.startup_root_pose = None
         self.latest_root_pose = None
+        self.latest_goal_pose = None
+        self.latest_goal_pose_signature = None
         self.waypoint_subscribers = {}
         self.waypoint_topic_indices = {}
         self.latest_waypoints = {}
@@ -143,6 +146,9 @@ class BaseWaypointConditionedPlannerNode(ABC):
             latch=True,
         )
         self.root_pose_sub = rospy.Subscriber("root/tail_pose", PoseStamped, self.root_pose_cb, queue_size=1)
+        self.goal_pose_sub = None
+        if self.goal_pose_topic is not None:
+            self.goal_pose_sub = rospy.Subscriber(self.goal_pose_topic, PoseStamped, self.goal_pose_cb, queue_size=1)
         self.discovery_timer = rospy.Timer(rospy.Duration(self.DISCOVERY_PERIOD), self.discover_waypoint_topics)
 
         rospy.loginfo(
@@ -156,12 +162,16 @@ class BaseWaypointConditionedPlannerNode(ABC):
             )
         else:
             rospy.loginfo("Interpreting root/tail_pose as FLU without conversion.")
+        if self.goal_pose_topic is None:
+            rospy.loginfo("No goal pose topic configured; future plans will terminate at the startup root/tail_pose.")
+        else:
+            rospy.loginfo("Using goal pose topic %s as the terminal pose.", self.goal_pose_topic)
         rospy.loginfo("Discovering waypoint topics matching %s<index>.", self.waypoint_topic_prefix)
         if self.replan:
-            rospy.loginfo("Waypoint-triggered replanning is enabled (~replan:=true).")
+            rospy.loginfo("Input-triggered replanning is enabled (~replan:=true).")
         else:
             rospy.loginfo(
-                "Waypoint-triggered replanning is disabled (~replan:=false); waypoint inputs will freeze after the first successful plan."
+                "Input-triggered replanning is disabled (~replan:=false); planning inputs will freeze after the first successful plan."
             )
 
     @staticmethod
@@ -170,6 +180,13 @@ class BaseWaypointConditionedPlannerNode(ABC):
         if not topic_prefix:
             raise ValueError("~waypoint_topic_prefix must be a non-empty topic prefix.")
         return normalize_topic_name(rospy.resolve_name(topic_prefix))
+
+    @staticmethod
+    def resolve_optional_pose_topic(topic_name):
+        topic_name = str(topic_name).strip()
+        if not topic_name:
+            return None
+        return normalize_topic_name(rospy.resolve_name(topic_name))
 
     def convert_root_pose_for_planning(self, pose_stamped):
         converted_pose = copy.deepcopy(pose_stamped)
@@ -206,8 +223,45 @@ class BaseWaypointConditionedPlannerNode(ABC):
             self.latest_root_pose = root_pose
 
         if bootstrap_plan:
-            rospy.loginfo("Captured startup root/tail_pose; future plans will terminate at this pose.")
+            if self.goal_pose_topic is None:
+                rospy.loginfo("Captured startup root/tail_pose; future plans will terminate at this pose.")
+            else:
+                rospy.loginfo(
+                    "Captured startup root/tail_pose; future plans will terminate at goal pose topic %s.",
+                    self.goal_pose_topic,
+                )
             self.try_plan("startup root/tail_pose received")
+
+    def goal_pose_cb(self, msg):
+        with self.lock:
+            if self.waypoints_frozen:
+                return
+
+            previous_signature = self.latest_goal_pose_signature
+            previous_frame = ""
+            if self.latest_goal_pose is not None:
+                previous_frame = self.latest_goal_pose.header.frame_id
+
+            new_signature = self.compute_pose_signature(msg, self.goal_pose_topic)
+            self.latest_goal_pose = copy.deepcopy(msg)
+            self.latest_goal_pose_signature = new_signature
+
+            frame_changed = previous_frame != msg.header.frame_id
+            pose_changed = (
+                previous_signature is None
+                or new_signature is None
+                or not np.allclose(previous_signature, new_signature, atol=self.POSE_EPSILON, rtol=0.0)
+            )
+            if not pose_changed and not frame_changed:
+                return
+
+        self.invalidate_current_trajectory()
+        self.try_plan(
+            "{} {}".format(
+                self.goal_pose_topic,
+                "received" if previous_signature is None else "updated",
+            )
+        )
 
     def waypoint_pose_cb(self, msg, topic_name):
         topic_name = normalize_topic_name(topic_name)
@@ -376,7 +430,7 @@ class BaseWaypointConditionedPlannerNode(ABC):
         self.log_planning_success(len(ordered_waypoints), len(planning_artifacts.samples), reason)
         if freeze_waypoints:
             rospy.loginfo(
-                "Waypoint inputs are now frozen after the first successful plan (%d waypoint topics locked).",
+                "Planning inputs are now frozen after the first successful plan (%d waypoint topics locked).",
                 self.frozen_waypoint_count,
             )
         self.publish_trajectory_markers(
@@ -394,7 +448,7 @@ class BaseWaypointConditionedPlannerNode(ABC):
 
     def log_planning_success(self, waypoint_count, sample_count, reason):
         rospy.loginfo(
-            "Planned %d-waypoint trajectory from current root to startup root (%d samples, %.2f s total) because %s.",
+            "Planned %d-waypoint trajectory from current root to terminal pose (%d samples, %.2f s total) because %s.",
             waypoint_count,
             sample_count,
             self.total_trajectory_time,
@@ -404,7 +458,10 @@ class BaseWaypointConditionedPlannerNode(ABC):
     def collect_planning_inputs(self):
         with self.lock:
             start_root_pose_snapshot = copy.deepcopy(self.latest_root_pose)
-            terminal_root_pose_snapshot = copy.deepcopy(self.startup_root_pose)
+            if self.goal_pose_topic is None:
+                terminal_root_pose_snapshot = copy.deepcopy(self.startup_root_pose)
+            else:
+                terminal_root_pose_snapshot = copy.deepcopy(self.latest_goal_pose)
 
             discovered_indices = sorted(self.waypoint_topic_indices.values())
             missing_indices = []
@@ -417,18 +474,39 @@ class BaseWaypointConditionedPlannerNode(ABC):
                 else:
                     ordered_waypoints = [(index, copy.deepcopy(self.latest_waypoints[index])) for index in discovered_indices]
 
-        if start_root_pose_snapshot is None or terminal_root_pose_snapshot is None:
+        if start_root_pose_snapshot is None:
             rospy.loginfo_throttle(2.0, "Waiting for root/tail_pose before planning.")
             return None
 
+        if terminal_root_pose_snapshot is None:
+            if self.goal_pose_topic is None:
+                rospy.loginfo_throttle(2.0, "Waiting for startup root/tail_pose before planning.")
+            else:
+                rospy.loginfo_throttle(
+                    2.0,
+                    "Waiting for goal pose on %s before planning.",
+                    self.goal_pose_topic,
+                )
+            return None
+
         current_root_frame = start_root_pose_snapshot.header.frame_id or ""
-        startup_root_frame = terminal_root_pose_snapshot.header.frame_id or ""
-        if current_root_frame != startup_root_frame:
+        terminal_frame = terminal_root_pose_snapshot.header.frame_id or ""
+        if self.goal_pose_topic is None:
+            if current_root_frame != terminal_frame:
+                rospy.logerr_throttle(
+                    2.0,
+                    "Frame mismatch detected: current root/tail_pose uses '%s' but startup root/tail_pose uses '%s'; no TF transform will be applied.",
+                    current_root_frame or "<empty>",
+                    terminal_frame or "<empty>",
+                )
+                return None
+        elif terminal_frame and current_root_frame != terminal_frame:
             rospy.logerr_throttle(
                 2.0,
-                "Frame mismatch detected: current root/tail_pose uses '%s' but startup root/tail_pose uses '%s'; no TF transform will be applied.",
+                "Frame mismatch detected: current root/tail_pose uses '%s' but goal pose %s uses '%s'; no TF transform will be applied.",
                 current_root_frame or "<empty>",
-                startup_root_frame or "<empty>",
+                self.goal_pose_topic,
+                terminal_frame,
             )
             return None
 

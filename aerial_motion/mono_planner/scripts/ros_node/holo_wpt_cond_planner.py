@@ -47,7 +47,7 @@ class WaypointConditionedPlannerNode(BaseWaypointConditionedPlannerNode):
 
     def log_planning_success(self, waypoint_count, sample_count, reason):
         rospy.loginfo(
-            "Planned %d-waypoint trajectory from current root to startup root (%d samples, %.2f s total) because %s.",
+            "Planned %d-waypoint trajectory from current root to terminal pose (%d samples, %.2f s total) because %s.",
             waypoint_count,
             sample_count,
             self.total_trajectory_time,

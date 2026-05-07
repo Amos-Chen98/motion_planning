@@ -2,13 +2,14 @@
 <launch>
     <arg name="ns" default="dragon" />
     <arg name="nonholo" default="false" />
-    <arg name="replan" default="false" doc="If true, replan whenever waypoint poses or the waypoint topic set changes." />
+    <arg name="replan" default="false" doc="If true, replan whenever goal pose, waypoint poses, or the waypoint topic set changes." />
     <arg name="publish_rate_hz" default="40.0" />
     <arg name="total_trajectory_time" default="60.0" />
     <arg name="robot_frame_type" default="FLU" doc="Planner root/tail_pose frame type: FLU or LINK" />
     <arg name="robot_pose_topic" default="root/tail_pose" />
     <arg name="target_pose_topic" default="root/target_pose" />
     <arg name="waypoint_topic_prefix" default="/waypoint/pose_" />
+    <arg name="goal_pose" default="" doc="Optional terminal goal pose topic, for example /goal_pose. Empty uses the startup root/tail_pose. Goal pose is always interpreted in the FLU frame convention." />
 
     <group ns="$(arg ns)">
         <node unless="$(arg nonholo)" pkg="mono_planner" type="holo_wpt_cond_planner.py" name="holo_wpt_cond_planner" output="screen">
@@ -17,6 +18,7 @@
             <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
             <param name="robot_frame_type" value="$(arg robot_frame_type)" />
             <param name="waypoint_topic_prefix" value="$(arg waypoint_topic_prefix)" />
+            <param name="goal_pose" value="$(arg goal_pose)" />
             <remap from="root/tail_pose" to="$(arg robot_pose_topic)" />
             <remap from="root/target_pose" to="$(arg target_pose_topic)" />
         </node>
@@ -27,6 +29,7 @@
             <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
             <param name="robot_frame_type" value="$(arg robot_frame_type)" />
             <param name="waypoint_topic_prefix" value="$(arg waypoint_topic_prefix)" />
+            <param name="goal_pose" value="$(arg goal_pose)" />
             <remap from="root/tail_pose" to="$(arg robot_pose_topic)" />
             <remap from="root/target_pose" to="$(arg target_pose_topic)" />
         </node>
