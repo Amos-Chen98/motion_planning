@@ -2,6 +2,7 @@
 
 import argparse
 import atexit
+import json
 import os
 import pty
 import shlex
@@ -25,7 +26,8 @@ BRINGUP_DELAY_SEC = 5.0
 KEY_COMMAND_DELAY_SEC = 1.0
 ARM_TO_TAKEOFF_DELAY_SEC = 2.0
 HOVER_TIMEOUT_SEC = 40.0
-CASE_TIMEOUT_SEC = 55.0
+CASE_TIMEOUT_SEC = 75.0
+EVALUATION_JSON_WRITE_GRACE_SEC = 15.0
 PROCESS_STARTUP_GRACE_SEC = 2.0
 PROCESS_STOP_SIGINT_TIMEOUT_SEC = 5.0
 PROCESS_STOP_SIGTERM_TIMEOUT_SEC = 5.0
@@ -533,23 +535,60 @@ class WaypointConditionedBatchRunner:
     def wait_for_case_completion(self, case_name, publisher, planner, evaluator, case_output_dir):
         deadline = time.monotonic() + CASE_TIMEOUT_SEC
         while time.monotonic() < deadline:
+            json_path = self.find_complete_json_file(case_output_dir)
+            if json_path is not None:
+                return CaseResult(
+                    case_name=case_name,
+                    success=True,
+                    reason="completed",
+                    json_path=str(json_path),
+                )
+
             if publisher.poll() is not None:
                 return CaseResult(case_name=case_name, success=False, reason="Waypoint publisher exited unexpectedly.")
             if planner.poll() is not None:
                 return CaseResult(case_name=case_name, success=False, reason="Waypoint-conditioned planner exited unexpectedly.")
             if evaluator.poll() is not None:
-                json_files = sorted(case_output_dir.glob("*.json"))
-                if not json_files:
-                    return CaseResult(case_name=case_name, success=False, reason="Evaluation exited without writing JSON.")
+                json_path = self.wait_for_complete_json_file(case_output_dir, EVALUATION_JSON_WRITE_GRACE_SEC)
+                if json_path is None:
+                    return CaseResult(
+                        case_name=case_name,
+                        success=False,
+                        reason=(
+                            "Evaluation exited without writing a complete JSON "
+                            f"within {EVALUATION_JSON_WRITE_GRACE_SEC:.1f} s."
+                        ),
+                    )
                 return CaseResult(
                     case_name=case_name,
                     success=True,
                     reason="completed",
-                    json_path=str(json_files[-1]),
+                    json_path=str(json_path),
                 )
             short_sleep(0.5)
 
         return CaseResult(case_name=case_name, success=False, reason=f"Timed out after {CASE_TIMEOUT_SEC:.1f} s.")
+
+    def wait_for_complete_json_file(self, case_output_dir, timeout_sec):
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            json_path = self.find_complete_json_file(case_output_dir)
+            if json_path is not None:
+                return json_path
+            short_sleep(0.5)
+        return self.find_complete_json_file(case_output_dir)
+
+    def find_complete_json_file(self, case_output_dir):
+        for json_path in reversed(sorted(case_output_dir.glob("*.json"))):
+            try:
+                if json_path.stat().st_size == 0:
+                    continue
+                with json_path.open("r", encoding="utf-8") as input_file:
+                    json.load(input_file)
+            except (OSError, json.JSONDecodeError):
+                continue
+            return json_path
+        return None
 
     def start_process(self, name, command, persistent=False):
         print(f"Starting {name}: {' '.join(command)}")

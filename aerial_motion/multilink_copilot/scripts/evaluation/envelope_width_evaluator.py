@@ -520,12 +520,11 @@ class EnvelopeWidthEvaluator(object):
         if abs(start_distance) <= GEOMETRY_EPSILON and abs(end_distance) <= GEOMETRY_EPSILON:
             return None
 
-        if abs(start_distance) <= GEOMETRY_EPSILON:
-            interpolation_ratio = 0.0
-        elif abs(end_distance) <= GEOMETRY_EPSILON:
-            interpolation_ratio = 1.0
-        elif start_distance * end_distance > 0.0:
+        if start_distance >= -GEOMETRY_EPSILON or end_distance < -GEOMETRY_EPSILON:
             return None
+
+        if abs(end_distance) <= GEOMETRY_EPSILON:
+            interpolation_ratio = 1.0
         else:
             interpolation_ratio = start_distance / (start_distance - end_distance)
 
