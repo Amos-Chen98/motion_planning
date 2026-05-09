@@ -3,6 +3,7 @@
 import argparse
 import atexit
 import json
+import math
 import os
 import pty
 import shlex
@@ -11,24 +12,52 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from aerial_robot_msgs.msg import FullStateTarget
 import rosgraph
+from rosgraph_msgs.msg import Log
 import rospy
 from std_msgs.msg import UInt8
 
 
 ROBOT_NS = "dragon"
 HOVER_STATE = 5
+RESET_FULL_STATE_TARGET_TOPIC = f"/{ROBOT_NS}/full_state_target"
+RESET_FRAME_ID = "world"
+RESET_ROOT_POSITION = (0.0, 0.0, 1.0)
+RESET_JOINT_NAMES = (
+    "joint1_pitch",
+    "joint1_yaw",
+    "joint2_pitch",
+    "joint2_yaw",
+    "joint3_pitch",
+    "joint3_yaw",
+)
+RESET_JOINT_POSITIONS = (
+    0.0,
+    math.pi / 2.0,
+    0.0,
+    math.pi / 2.0,
+    0.0,
+    math.pi / 2.0,
+)
+RESET_WAIT_SEC = 5.0
+RESET_SUBSCRIBER_WAIT_SEC = 2.0
 BRINGUP_DELAY_SEC = 5.0
 KEY_COMMAND_DELAY_SEC = 1.0
 ARM_TO_TAKEOFF_DELAY_SEC = 2.0
 HOVER_TIMEOUT_SEC = 40.0
-CASE_TIMEOUT_SEC = 75.0
+TOTAL_TRAJECTORY_TIME_SEC = 50.0
+CASE_TIMEOUT_SEC = 25.0
 EVALUATION_JSON_WRITE_GRACE_SEC = 15.0
 PROCESS_STARTUP_GRACE_SEC = 2.0
+WAYPOINT_PUBLISHER_READY_DELAY_SEC = 3.0
+PLANNER_ERROR_REASON_MAX_CHARS = 240
+PLANNER_ROSOUT_TOPIC = "/rosout_agg"
 PROCESS_STOP_SIGINT_TIMEOUT_SEC = 5.0
 PROCESS_STOP_SIGTERM_TIMEOUT_SEC = 5.0
 ROS_MASTER_TIMEOUT_SEC = 60.0
@@ -43,10 +72,23 @@ PACKAGE_DIR = SCRIPT_PATH.parents[2]
 MONO_PLANNER_DIR = PACKAGE_DIR.parent / "mono_planner"
 DEFAULT_CASE_DIR = MONO_PLANNER_DIR / "test_data"
 DEFAULT_OUTPUT_ROOT = PACKAGE_DIR / "data" / "envelope_width" / "waypoint_conditioned_batch"
+PLANNER_NODE_NAMES = (
+    f"/{ROBOT_NS}/holo_wpt_cond_planner",
+    f"/{ROBOT_NS}/nonholo_wpt_cond_planner",
+)
 
 
 def timestamp_string():
     return time.strftime("%Y%m%d%H%M%S", time.localtime())
+
+
+def current_time_string():
+    return time.strftime("%Y-%m-%d %H:%M:%S %z", time.localtime())
+
+
+def normalize_ros_name(name):
+    stripped_name = str(name or "").strip("/")
+    return f"/{stripped_name}" if stripped_name else ""
 
 
 def short_sleep(duration_sec):
@@ -83,6 +125,48 @@ class CaseResult:
     success: bool
     reason: str
     json_path: str = ""
+
+
+class RosoutErrorMonitor:
+    def __init__(self, node_names):
+        self.node_names = {normalize_ros_name(node_name) for node_name in node_names}
+        self.start_stamp = rospy.Time.now()
+        self.error_line = None
+        self.lock = threading.Lock()
+        self.subscriber = rospy.Subscriber(PLANNER_ROSOUT_TOPIC, Log, self._callback, queue_size=100)
+
+    def poll(self):
+        with self.lock:
+            return self.error_line
+
+    def close(self):
+        if self.subscriber is None:
+            return
+        self.subscriber.unregister()
+        self.subscriber = None
+
+    def _callback(self, msg):
+        if msg.level < Log.ERROR:
+            return
+        if normalize_ros_name(msg.name) not in self.node_names:
+            return
+        if self.message_is_before_monitor_start(msg):
+            return
+
+        with self.lock:
+            if self.error_line is None:
+                self.error_line = self.format_error_line(msg)
+
+    def message_is_before_monitor_start(self, msg):
+        if self.start_stamp == rospy.Time(0):
+            return False
+        if msg.header.stamp == rospy.Time(0):
+            return False
+        return msg.header.stamp < self.start_stamp
+
+    def format_error_line(self, msg):
+        level_name = "FATAL" if msg.level >= Log.FATAL else "ERROR"
+        return f"[{level_name}] [{normalize_ros_name(msg.name)}]: {msg.msg}"[:PLANNER_ERROR_REASON_MAX_CHARS]
 
 
 class ManagedProcess:
@@ -382,6 +466,8 @@ class WaypointConditionedBatchRunner:
         self.current_case_processes = []
         self.case_results = []
         self._ros_initialized = False
+        self.reset_full_state_publisher = None
+        self.copilot_process = None
         self._cleanup_done = False
         self._use_terminal_tabs = terminal_tabs_supported()
         self._terminal_window_opened = False
@@ -400,11 +486,12 @@ class WaypointConditionedBatchRunner:
 
         self.launch_bringup()
         self.launch_keyboard_command_and_takeoff()
-        self.launch_persistent_copilot()
 
         for case_file in case_files:
+            self.launch_persistent_copilot()
             result = self.run_case(case_file)
             self.case_results.append(result)
+            self.reset_dragon_pose()
 
         self.print_summary()
         if any(not result.success for result in self.case_results):
@@ -472,6 +559,7 @@ class WaypointConditionedBatchRunner:
         )
         short_sleep(PROCESS_STARTUP_GRACE_SEC)
         self.ensure_process_alive(copilot, "copilot_planner.launch exited during startup.")
+        self.copilot_process = copilot
 
     def run_case(self, case_file):
         case_name = case_file.stem
@@ -481,10 +569,25 @@ class WaypointConditionedBatchRunner:
         self.current_case_processes = []
 
         print(f"\n=== Running {case_name} ===")
+        print(f"Current time: {current_time_string()}")
         print(f"Case file: {relative_case_path}")
         print(f"Output dir: {case_output_dir}")
 
+        planner_error_monitor = None
         try:
+            publisher = self.start_process(
+                f"{case_name}_publisher",
+                [
+                    "roslaunch",
+                    "mono_planner",
+                    "waypoint_pose_publisher.launch",
+                    f"config_file:={relative_case_path}",
+                    "launch_rviz:=true",
+                ],
+            )
+            short_sleep(WAYPOINT_PUBLISHER_READY_DELAY_SEC)
+            self.ensure_process_alive(publisher, f"Waypoint publisher exited during startup for {case_name}.")
+
             evaluator = self.start_process(
                 f"{case_name}_evaluation",
                 [
@@ -498,43 +601,49 @@ class WaypointConditionedBatchRunner:
             short_sleep(PROCESS_STARTUP_GRACE_SEC)
             self.ensure_process_alive(evaluator, f"Evaluation launch exited during startup for {case_name}.")
 
-            publisher = self.start_process(
-                f"{case_name}_publisher",
-                [
-                    "roslaunch",
-                    "mono_planner",
-                    "waypoint_pose_publisher.launch",
-                    f"config_file:={relative_case_path}",
-                    "launch_rviz:=true",
-                ],
-            )
-            short_sleep(PROCESS_STARTUP_GRACE_SEC)
-            self.ensure_process_alive(publisher, f"Waypoint publisher exited during startup for {case_name}.")
-
+            planner_error_monitor = RosoutErrorMonitor(PLANNER_NODE_NAMES)
+            planner_command = [
+                "roslaunch",
+                "mono_planner",
+                "waypoint_conditioned_planner.launch",
+                "nonholo:=true",
+                "robot_frame_type:=LINK",
+                f"total_trajectory_time:={TOTAL_TRAJECTORY_TIME_SEC:g}",
+                f"ns:={ROBOT_NS}",
+            ]
             planner = self.start_process(
                 f"{case_name}_planner",
-                [
-                    "roslaunch",
-                    "mono_planner",
-                    "waypoint_conditioned_planner.launch",
-                    "nonholo:=true",
-                    "robot_frame_type:=LINK",
-                    "total_trajectory_time:=50",
-                    f"ns:={ROBOT_NS}",
-                ],
+                planner_command,
             )
             short_sleep(PROCESS_STARTUP_GRACE_SEC)
+            planner_error_line = planner_error_monitor.poll()
+            if planner_error_line is not None:
+                return self.planner_error_case_result(case_name, planner_error_line)
             self.ensure_process_alive(planner, f"Waypoint-conditioned planner exited during startup for {case_name}.")
 
-            return self.wait_for_case_completion(case_name, publisher, planner, evaluator, case_output_dir)
+            return self.wait_for_case_completion(
+                case_name,
+                publisher,
+                planner,
+                evaluator,
+                case_output_dir,
+                planner_error_monitor,
+            )
         except Exception as exc:
             return CaseResult(case_name=case_name, success=False, reason=str(exc))
         finally:
+            if planner_error_monitor is not None:
+                planner_error_monitor.close()
             self.stop_current_case_processes()
 
-    def wait_for_case_completion(self, case_name, publisher, planner, evaluator, case_output_dir):
-        deadline = time.monotonic() + CASE_TIMEOUT_SEC
+    def wait_for_case_completion(self, case_name, publisher, planner, evaluator, case_output_dir, planner_error_monitor):
+        total_timeout_sec = TOTAL_TRAJECTORY_TIME_SEC + CASE_TIMEOUT_SEC
+        deadline = time.monotonic() + total_timeout_sec
         while time.monotonic() < deadline:
+            planner_error_line = planner_error_monitor.poll()
+            if planner_error_line is not None:
+                return self.planner_error_case_result(case_name, planner_error_line)
+
             json_path = self.find_complete_json_file(case_output_dir)
             if json_path is not None:
                 return CaseResult(
@@ -547,6 +656,9 @@ class WaypointConditionedBatchRunner:
             if publisher.poll() is not None:
                 return CaseResult(case_name=case_name, success=False, reason="Waypoint publisher exited unexpectedly.")
             if planner.poll() is not None:
+                planner_error_line = planner_error_monitor.poll()
+                if planner_error_line is not None:
+                    return self.planner_error_case_result(case_name, planner_error_line)
                 return CaseResult(case_name=case_name, success=False, reason="Waypoint-conditioned planner exited unexpectedly.")
             if evaluator.poll() is not None:
                 json_path = self.wait_for_complete_json_file(case_output_dir, EVALUATION_JSON_WRITE_GRACE_SEC)
@@ -567,7 +679,21 @@ class WaypointConditionedBatchRunner:
                 )
             short_sleep(0.5)
 
-        return CaseResult(case_name=case_name, success=False, reason=f"Timed out after {CASE_TIMEOUT_SEC:.1f} s.")
+        return CaseResult(
+            case_name=case_name,
+            success=False,
+            reason=(
+                f"Timed out after {total_timeout_sec:.1f} s "
+                f"(trajectory {TOTAL_TRAJECTORY_TIME_SEC:.1f} s + extra wait {CASE_TIMEOUT_SEC:.1f} s)."
+            ),
+        )
+
+    def planner_error_case_result(self, case_name, planner_error_line):
+        return CaseResult(
+            case_name=case_name,
+            success=False,
+            reason=f"Waypoint-conditioned planner reported ERROR: {planner_error_line}",
+        )
 
     def wait_for_complete_json_file(self, case_output_dir, timeout_sec):
         deadline = time.monotonic() + timeout_sec
@@ -624,6 +750,89 @@ class WaypointConditionedBatchRunner:
             print(f"Stopping {process.name}")
             process.stop()
 
+    def stop_copilot_process(self):
+        if self.copilot_process is None:
+            return
+
+        process = self.copilot_process
+        self.copilot_process = None
+        self.remove_persistent_process(process)
+        print(f"Stopping {process.name}")
+        process.stop()
+
+    def remove_persistent_process(self, process):
+        try:
+            self.persistent_processes.remove(process)
+        except ValueError:
+            pass
+
+    def reset_dragon_pose(self):
+        self.stop_copilot_process()
+        print(
+            "Publishing Dragon reset target to {}: root position {}, joints {}".format(
+                RESET_FULL_STATE_TARGET_TOPIC,
+                list(RESET_ROOT_POSITION),
+                list(RESET_JOINT_POSITIONS),
+            )
+        )
+        self.publish_reset_full_state_target()
+        print(f"Waiting {RESET_WAIT_SEC:.1f} s after Dragon reset.")
+        short_sleep(RESET_WAIT_SEC)
+
+    def publish_reset_full_state_target(self):
+        self.ensure_reset_full_state_publisher()
+        self.wait_for_reset_full_state_subscriber()
+        self.reset_full_state_publisher.publish(self.build_reset_full_state_target())
+
+    def ensure_reset_full_state_publisher(self):
+        if self.reset_full_state_publisher is not None:
+            return
+
+        self.ensure_ros_node()
+        self.reset_full_state_publisher = rospy.Publisher(
+            RESET_FULL_STATE_TARGET_TOPIC,
+            FullStateTarget,
+            queue_size=1,
+        )
+
+    def wait_for_reset_full_state_subscriber(self):
+        deadline = time.monotonic() + RESET_SUBSCRIBER_WAIT_SEC
+        while time.monotonic() < deadline and not rospy.is_shutdown():
+            if self.reset_full_state_publisher.get_num_connections() > 0:
+                return
+            short_sleep(0.1)
+
+        print(
+            "Warning: no subscriber connected to {} within {:.1f} s; publishing reset target anyway.".format(
+                RESET_FULL_STATE_TARGET_TOPIC,
+                RESET_SUBSCRIBER_WAIT_SEC,
+            )
+        )
+
+    def build_reset_full_state_target(self):
+        stamp = rospy.Time.now()
+
+        msg = FullStateTarget()
+        msg.header.stamp = stamp
+        msg.header.frame_id = RESET_FRAME_ID
+
+        msg.root_state.header.stamp = stamp
+        msg.root_state.header.frame_id = RESET_FRAME_ID
+        msg.root_state.pose.pose.position.x = RESET_ROOT_POSITION[0]
+        msg.root_state.pose.pose.position.y = RESET_ROOT_POSITION[1]
+        msg.root_state.pose.pose.position.z = RESET_ROOT_POSITION[2]
+        msg.root_state.pose.pose.orientation.x = 0.0
+        msg.root_state.pose.pose.orientation.y = 0.0
+        msg.root_state.pose.pose.orientation.z = 0.0
+        msg.root_state.pose.pose.orientation.w = 1.0
+
+        msg.joint_state.header.stamp = stamp
+        msg.joint_state.header.frame_id = RESET_FRAME_ID
+        msg.joint_state.name = list(RESET_JOINT_NAMES)
+        msg.joint_state.position = list(RESET_JOINT_POSITIONS)
+
+        return msg
+
     def cleanup(self):
         if self._cleanup_done:
             return
@@ -638,6 +847,7 @@ class WaypointConditionedBatchRunner:
                 rospy.signal_shutdown("Batch runner cleanup requested.")
 
             self.stop_current_case_processes()
+            self.stop_copilot_process()
             while self.persistent_processes:
                 process = self.persistent_processes.pop()
                 print(f"Stopping {process.name}")
