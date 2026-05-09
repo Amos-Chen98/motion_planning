@@ -5,7 +5,7 @@ import math
 import random
 from pathlib import Path
 
-NUM_CASES = 100
+NUM_CASES = 400
 RANDOM_SEED = 0
 FRAME_ID = "world"
 OUTPUT_DIR = Path("test_data")
@@ -26,6 +26,7 @@ ANGLE_TOLERANCE = 1e-9
 CIRCLE_TOLERANCE = 5e-6
 HALF_SPACE_EPSILON = 1e-6
 ROOT_XY_EXCLUSION_RADIUS = 0.5
+TERMINAL_CLEARANCE = 1.5
 MIN_WAYPOINT_ANGULAR_SEPARATION = math.radians(60.0)
 MAX_POSITION_SAMPLING_ATTEMPTS = 200
 
@@ -136,6 +137,16 @@ def validate_waypoint_forward_axis(forward_axis, incoming_direction, outgoing_di
     return None
 
 
+def validate_terminal_clearance(ordered_positions):
+    terminal_distance = math.dist(ordered_positions[-1], ROOT_POSITION)
+    if terminal_distance <= TERMINAL_CLEARANCE + CIRCLE_TOLERANCE:
+        return (
+            f"Waypoint {WAYPOINT_COUNT} is {terminal_distance:.3f} m from ROOT_POSITION; "
+            f"expected more than {TERMINAL_CLEARANCE:.3f} m."
+        )
+    return None
+
+
 def build_nonholonomic_waypoints(ordered_positions, pitches):
     if len(ordered_positions) != len(pitches):
         raise ValueError("ordered_positions and pitches must have the same length.")
@@ -226,6 +237,10 @@ def validate_generated_case(waypoints, circle_center, radius):
         waypoint_angles.append(current_angle)
         pitches.append(pitch)
 
+    violation = validate_terminal_clearance(ordered_positions)
+    if violation is not None:
+        raise ValueError(violation)
+
     expected_waypoints, violation = build_nonholonomic_waypoints(ordered_positions, pitches)
     if violation is not None:
         raise ValueError(violation)
@@ -293,11 +308,21 @@ def generate_waypoint_case(rng):
         pitches = [rng.uniform(*PITCH_RANGE) for _ in range(WAYPOINT_COUNT)]
 
         for ordered_positions in itertools.permutations(positions):
+            if validate_terminal_clearance(ordered_positions) is not None:
+                continue
+
             waypoints = build_candidate_waypoints(ordered_positions, pitches)
             if waypoints is None:
                 continue
 
-            validate_generated_case(waypoints, circle_center, radius)
+            rounded_positions = [tuple(waypoint[:3]) for waypoint in waypoints]
+            if validate_terminal_clearance(rounded_positions) is not None:
+                continue
+
+            try:
+                validate_generated_case(waypoints, circle_center, radius)
+            except ValueError:
+                continue
             return waypoints
 
     raise RuntimeError(
