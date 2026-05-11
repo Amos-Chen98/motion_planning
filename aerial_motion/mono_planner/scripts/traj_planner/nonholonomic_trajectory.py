@@ -161,6 +161,7 @@ class NonholonomicQuinticTrajectory:
         axis_epsilon,
         feasibility_epsilon,
         rotation_tolerance,
+        knot_labels=None,
     ):
         self.knot_positions = np.asarray(knot_positions, dtype=float)
         self.knot_rotations = np.asarray(knot_rotations, dtype=float)
@@ -180,6 +181,12 @@ class NonholonomicQuinticTrajectory:
             raise ValueError("At least one waypoint is required to build a trajectory.")
         if self.total_time <= 0.0:
             raise ValueError("Total trajectory time must be positive.")
+        if knot_labels is None:
+            self.knot_labels = ["knot {}".format(index) for index in range(self.knot_positions.shape[0])]
+        else:
+            if len(knot_labels) != self.knot_positions.shape[0]:
+                raise ValueError("Knot labels must have the same knot count as knot positions.")
+            self.knot_labels = [str(label) for label in knot_labels]
 
         self.segment_count = self.knot_positions.shape[0] - 1
         self.segment_displacements = np.diff(self.knot_positions, axis=0)
@@ -214,8 +221,22 @@ class NonholonomicQuinticTrajectory:
             start_alignment = np.dot(chord, self.knot_forward_axes[segment_index])
             end_alignment = np.dot(chord, self.knot_forward_axes[segment_index + 1])
             if start_alignment <= self.feasibility_epsilon or end_alignment <= self.feasibility_epsilon:
+                start_label = self.knot_labels[segment_index]
+                end_label = self.knot_labels[segment_index + 1]
+                invalid_labels = []
+                if start_alignment <= self.feasibility_epsilon:
+                    invalid_labels.append(start_label)
+                if end_alignment <= self.feasibility_epsilon:
+                    invalid_labels.append(end_label)
+                axis_phrase = "forward axes are" if len(invalid_labels) > 1 else "forward axis is"
                 raise ValueError(
-                    "Segment {} is incompatible with the waypoint/root forward-axis constraint.".format(segment_index)
+                    "Segment {} invalid: {} {} incompatible with desired direction {} -> {}.".format(
+                        segment_index,
+                        " and ".join(invalid_labels),
+                        axis_phrase,
+                        start_label,
+                        end_label,
+                    )
                 )
 
     def build_knot_velocities(self):

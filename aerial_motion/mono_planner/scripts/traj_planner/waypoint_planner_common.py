@@ -386,7 +386,8 @@ class BaseWaypointConditionedPlannerNode(ABC):
 
         start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoint_entries = planning_inputs
 
-        ordered_waypoints = [waypoint for _, waypoint in ordered_waypoint_entries]
+        ordered_waypoints = [waypoint for _, _, waypoint in ordered_waypoint_entries]
+        waypoint_source_names = [source_name for _, source_name, _ in ordered_waypoint_entries]
         if not ordered_waypoints:
             rospy.loginfo_throttle(
                 2.0,
@@ -407,6 +408,7 @@ class BaseWaypointConditionedPlannerNode(ABC):
                 start_root_pose_snapshot,
                 terminal_root_pose_snapshot,
                 ordered_waypoints,
+                waypoint_source_names,
                 frame_id,
             )
         except np.linalg.LinAlgError as exc:
@@ -463,7 +465,10 @@ class BaseWaypointConditionedPlannerNode(ABC):
             else:
                 terminal_root_pose_snapshot = copy.deepcopy(self.latest_goal_pose)
 
-            discovered_indices = sorted(self.waypoint_topic_indices.values())
+            waypoint_topics_by_index = {
+                index: topic_name for topic_name, index in self.waypoint_topic_indices.items()
+            }
+            discovered_indices = sorted(waypoint_topics_by_index)
             missing_indices = []
             if not discovered_indices:
                 ordered_waypoints = []
@@ -472,7 +477,14 @@ class BaseWaypointConditionedPlannerNode(ABC):
                 if missing_indices:
                     ordered_waypoints = None
                 else:
-                    ordered_waypoints = [(index, copy.deepcopy(self.latest_waypoints[index])) for index in discovered_indices]
+                    ordered_waypoints = [
+                        (
+                            index,
+                            waypoint_topics_by_index[index],
+                            copy.deepcopy(self.latest_waypoints[index]),
+                        )
+                        for index in discovered_indices
+                    ]
 
         if start_root_pose_snapshot is None:
             rospy.loginfo_throttle(2.0, "Waiting for root/tail_pose before planning.")
@@ -586,7 +598,7 @@ class BaseWaypointConditionedPlannerNode(ABC):
     def warn_if_frame_mismatch(self, root_frame_id, ordered_waypoint_entries):
         mismatched_indices = [
             waypoint_index
-            for waypoint_index, waypoint in ordered_waypoint_entries
+            for waypoint_index, _source_name, waypoint in ordered_waypoint_entries
             if waypoint.header.frame_id and waypoint.header.frame_id != root_frame_id
         ]
         if mismatched_indices:
@@ -642,7 +654,14 @@ class BaseWaypointConditionedPlannerNode(ABC):
         self.trajectory_marker_pub.publish(MarkerArray(markers=[delete_all_marker]))
 
     @abstractmethod
-    def build_plan(self, start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints, frame_id):
+    def build_plan(
+        self,
+        start_root_pose_snapshot,
+        terminal_root_pose_snapshot,
+        ordered_waypoints,
+        waypoint_source_names,
+        frame_id,
+    ):
         raise NotImplementedError
 
     @abstractmethod

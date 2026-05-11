@@ -32,8 +32,20 @@ class NonholonomicWaypointConditionedPlannerNode(BaseWaypointConditionedPlannerN
     ROTATION_TOLERANCE = 1e-5
     cache_waypoint_before_signature = True
 
-    def build_plan(self, start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints, frame_id):
-        trajectory = self.build_trajectory(start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints)
+    def build_plan(
+        self,
+        start_root_pose_snapshot,
+        terminal_root_pose_snapshot,
+        ordered_waypoints,
+        waypoint_source_names,
+        frame_id,
+    ):
+        trajectory = self.build_trajectory(
+            start_root_pose_snapshot,
+            terminal_root_pose_snapshot,
+            ordered_waypoints,
+            waypoint_source_names,
+        )
         sample_times = self.build_sample_times()
         sampled_positions, sampled_poses = self.sample_trajectory(trajectory, sample_times, frame_id)
         return PlanningArtifacts(
@@ -65,10 +77,20 @@ class NonholonomicWaypointConditionedPlannerNode(BaseWaypointConditionedPlannerN
             reason,
         )
 
-    def build_trajectory(self, start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints):
+    def build_trajectory(
+        self,
+        start_root_pose_snapshot,
+        terminal_root_pose_snapshot,
+        ordered_waypoints,
+        waypoint_source_names,
+    ):
         knot_poses = [start_root_pose_snapshot]
         knot_poses.extend(ordered_waypoints)
         knot_poses.append(terminal_root_pose_snapshot)
+        terminal_source_name = self.goal_pose_topic if self.goal_pose_topic is not None else "startup root/tail_pose"
+        knot_labels = ["root/tail_pose"]
+        knot_labels.extend(waypoint_source_names)
+        knot_labels.append(terminal_source_name)
 
         knot_positions = []
         knot_rotations = []
@@ -85,6 +107,7 @@ class NonholonomicWaypointConditionedPlannerNode(BaseWaypointConditionedPlannerN
             self.AXIS_EPSILON,
             self.FEASIBILITY_EPSILON,
             self.ROTATION_TOLERANCE,
+            knot_labels=knot_labels,
         )
 
     def sample_trajectory(self, trajectory, sample_times, frame_id):

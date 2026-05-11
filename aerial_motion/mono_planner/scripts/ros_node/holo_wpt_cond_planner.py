@@ -25,7 +25,14 @@ class WaypointConditionedPlannerNode(BaseWaypointConditionedPlannerNode):
         self.traj_planner = SE3TrajectoryPlanner()
         super().__init__()
 
-    def build_plan(self, start_root_pose_snapshot, terminal_root_pose_snapshot, ordered_waypoints, _frame_id):
+    def build_plan(
+        self,
+        start_root_pose_snapshot,
+        terminal_root_pose_snapshot,
+        ordered_waypoints,
+        _waypoint_source_names,
+        _frame_id,
+    ):
         state_sequence = self.build_state_sequence(
             start_root_pose_snapshot,
             terminal_root_pose_snapshot,
