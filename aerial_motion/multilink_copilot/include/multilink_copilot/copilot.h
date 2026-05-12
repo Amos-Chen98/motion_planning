@@ -81,6 +81,7 @@ private:
   bool publish_only_on_significant_root_motion_;
   double publish_root_translation_threshold_;
   double publish_root_rotation_threshold_;
+  bool verbose_;
   int stability_qp_max_iterations_;
   double stability_qp_joint_step_limit_;
   double stability_qp_regularization_;
@@ -138,6 +139,7 @@ private:
                           Eigen::VectorXd& stable_joint_positions);
   bool evaluateStability(const Eigen::VectorXd& joint_positions, StabilityMetrics& metrics);
   bool satisfiesSafeStability(const StabilityMetrics& metrics) const;
+  std::string describeStabilityViolations(const StabilityMetrics& metrics) const;
   bool tryGetStableReferenceJointPositions(Eigen::VectorXd& stable_reference);
   void restoreRobotModelToLinkJointPositions(const Eigen::VectorXd& joint_positions);
   

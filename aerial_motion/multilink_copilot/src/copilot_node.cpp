@@ -100,6 +100,7 @@ void CopilotPlanner::loadParameters()
   pnh_.param("publish_only_on_significant_root_motion", publish_only_on_significant_root_motion_, false);
   pnh_.param("publish_root_translation_threshold", publish_root_translation_threshold_, 0.05);
   pnh_.param("publish_root_rotation_threshold", publish_root_rotation_threshold_, 0.0872664626);
+  pnh_.param("verbose", verbose_, false);
   pnh_.param("stability_qp_max_iterations", stability_qp_max_iterations_, 20);
   pnh_.param("stability_qp_joint_step_limit", stability_qp_joint_step_limit_, 0.1);
   pnh_.param("stability_qp_regularization", stability_qp_regularization_, 1e-3);
@@ -121,6 +122,7 @@ void CopilotPlanner::loadParameters()
            publish_only_on_significant_root_motion_ ? "true" : "false");
   ROS_INFO("  publish_root_translation_threshold: %.3f m", publish_root_translation_threshold_);
   ROS_INFO("  publish_root_rotation_threshold: %.3f rad", publish_root_rotation_threshold_);
+  ROS_INFO("  verbose: %s", verbose_ ? "true" : "false");
   ROS_INFO("  stability_qp_max_iterations: %d", stability_qp_max_iterations_);
   ROS_INFO("  stability_qp_joint_step_limit: %.3f", stability_qp_joint_step_limit_);
   ROS_INFO("  stability_fc_rp_min_thre: %.3f", stability_fc_rp_min_thre_);
@@ -343,7 +345,7 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   latest_desired_joint_positions_ = stable_joint_positions;
   has_latest_desired_joint_positions_ = true;
 
-  if (!stability_debug_timer_started_)
+  if (verbose_ && !stability_debug_timer_started_)
   {
     stability_debug_timer_.start();
     stability_debug_timer_started_ = true;

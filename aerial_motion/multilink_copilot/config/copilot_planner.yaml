@@ -8,10 +8,6 @@ trajectory_buffer_max_length: 10.0
 # Snake motion
 snake_mode_enabled: true
 
-# Target pose coordinate frame.
-# This value can be overridden by the launch arg `target_pose_frame_type`.
-target_pose_frame_type: FLU
-
 # Publish gating for full_state_target.
 # When enabled, the planner only publishes after the root pose has moved enough
 # relative to the last published root pose.

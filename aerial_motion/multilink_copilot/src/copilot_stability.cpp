@@ -14,52 +14,16 @@
 
 namespace multilink_copilot
 {
-namespace
-{
-std::string formatJointPositions(const KDL::JntArray& joint_positions)
-{
-  std::ostringstream stream;
-  stream << "[";
-  for (unsigned int i = 0; i < joint_positions.rows(); ++i)
-  {
-    if (i > 0)
-    {
-      stream << ' ';
-    }
-    stream << joint_positions(i);
-  }
-  stream << "]";
-  return stream.str();
-}
-
-std::string formatPose(const geometry_msgs::Pose& pose)
-{
-  std::ostringstream stream;
-  stream << "pos: [" << pose.position.x << ' ' << pose.position.y << ' ' << pose.position.z
-         << "], quat(xyzw): [" << pose.orientation.x << ' ' << pose.orientation.y << ' ' << pose.orientation.z
-         << ' ' << pose.orientation.w << "]";
-  return stream.str();
-}
-
-std::string formatTargetPose(const geometry_msgs::PoseStamped::ConstPtr& target_pose)
-{
-  if (!target_pose)
-  {
-    return "unavailable";
-  }
-
-  return formatPose(target_pose->pose);
-}
-
-}  // namespace
 
 bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_joint_positions,
                                                  Eigen::VectorXd& stable_joint_positions)
 {
   const Eigen::VectorXd precheck_joint_positions = clampLinkJointPositions(getCurrentLinkJointPositions());
   const Eigen::VectorXd desired_joint_positions = clampLinkJointPositions(nominal_joint_positions);
+  StabilityMetrics desired_metrics;
+  evaluateStability(desired_joint_positions, desired_metrics);
 
-  if (checkStability(desired_joint_positions, false))
+  if (desired_metrics.safe)
   {
     stable_joint_positions = desired_joint_positions;
     last_stable_joint_positions_ = stable_joint_positions;
@@ -98,10 +62,16 @@ bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_
 
   if ((desired_joint_positions - stable_joint_positions).norm() > stability_qp_convergence_tol_)
   {
+    StabilityMetrics stable_metrics;
+    evaluateStability(stable_joint_positions, stable_metrics);
+
     ROS_WARN_STREAM_THROTTLE(0.5,
                              "[CopilotPlanner] Solved a conservative stable joint target"
-                                 << ", desired: [" << desired_joint_positions.transpose() << "]"
-                                 << ", stable: [" << stable_joint_positions.transpose() << "]");
+                                 << ", desired_violation: " << describeStabilityViolations(desired_metrics)
+                                 << ", stable_metrics: (fc_rp_min: " << stable_metrics.fc_rp_min
+                                 << ", thrust range: [" << stable_metrics.static_thrust_min << ", "
+                                 << stable_metrics.static_thrust_max
+                                 << "], overlap clearance: " << stable_metrics.overlap_clearance << ")");
   }
 
   return true;
@@ -187,6 +157,60 @@ bool CopilotPlanner::satisfiesSafeStability(const StabilityMetrics& metrics) con
   return true;
 }
 
+std::string CopilotPlanner::describeStabilityViolations(const StabilityMetrics& metrics) const
+{
+  std::ostringstream stream;
+  bool has_violation = false;
+
+  const auto append_separator = [&stream, &has_violation]() {
+    if (has_violation)
+    {
+      stream << "; ";
+    }
+    has_violation = true;
+  };
+
+  if (metrics.fc_rp_min + stability_qp_feasibility_tol_ < stability_fc_rp_min_thre_)
+  {
+    append_separator();
+    stream << "fc_rp_min below threshold (" << metrics.fc_rp_min << " < " << stability_fc_rp_min_thre_ << ")";
+  }
+
+  if (stability_check_fc_t_ && metrics.fc_t_min + stability_qp_feasibility_tol_ < stability_fc_t_min_thre_)
+  {
+    append_separator();
+    stream << "fc_t_min below threshold (" << metrics.fc_t_min << " < " << stability_fc_t_min_thre_ << ")";
+  }
+
+  if (metrics.static_thrust_min + stability_qp_feasibility_tol_ < stability_static_thrust_min_)
+  {
+    append_separator();
+    stream << "static_thrust_min below safe range (" << metrics.static_thrust_min << " < "
+           << stability_static_thrust_min_ << ")";
+  }
+
+  if (metrics.static_thrust_max - stability_qp_feasibility_tol_ > stability_static_thrust_max_)
+  {
+    append_separator();
+    stream << "static_thrust_max above safe range (" << metrics.static_thrust_max << " > "
+           << stability_static_thrust_max_ << ")";
+  }
+
+  if (metrics.overlap_clearance + stability_qp_feasibility_tol_ < stability_overlap_min_clearance_)
+  {
+    append_separator();
+    stream << "overlap_clearance below threshold (" << metrics.overlap_clearance << " < "
+           << stability_overlap_min_clearance_ << ")";
+  }
+
+  if (!has_violation)
+  {
+    stream << "none";
+  }
+
+  return stream.str();
+}
+
 bool CopilotPlanner::checkStability(const Eigen::VectorXd& joint_positions, bool report_result)
 {
   const Eigen::VectorXd clamped_joint_positions = clampLinkJointPositions(joint_positions);
@@ -194,44 +218,30 @@ bool CopilotPlanner::checkStability(const Eigen::VectorXd& joint_positions, bool
   evaluateStability(clamped_joint_positions, metrics);
 
   const bool is_stable = metrics.safe;
-  if (!is_stable && report_result)
+  if (!report_result)
   {
-    const KDL::JntArray kdl_joint_positions = buildUpdatedJointPositions(clamped_joint_positions);
-    const std::string root_pose_string =
-        latest_target_pose_ ? formatPose(convertLink1TailPoseToRootPose(latest_target_pose_->pose)) : "unavailable";
-    ROS_WARN_STREAM_THROTTLE(
-        0.5, "[CopilotPlanner] Conservative stability check failed"
-                 << ", root_pose: " << root_pose_string
-                 << ", link1_tail_pose: " << formatTargetPose(latest_target_pose_)
-                 << ", raw_model_stable: " << (metrics.raw_model_stable ? "true" : "false")
-                 << ", link_joint_positions: [" << clamped_joint_positions.transpose() << "]"
-                 << ", full_joint_positions: " << formatJointPositions(kdl_joint_positions)
-                 << ", fc_rp_min/thre: " << metrics.fc_rp_min << "/" << stability_fc_rp_min_thre_
-                 << ", static_thrust[min,max]/safe_range: [" << metrics.static_thrust_min << ", "
-                 << metrics.static_thrust_max << "]/[" << stability_static_thrust_min_ << ", "
-                 << stability_static_thrust_max_ << "]"
-                 << ", overlap_clearance/thre: " << metrics.overlap_clearance << "/"
-                 << stability_overlap_min_clearance_
-                 << ", fc_t_min/thre: " << metrics.fc_t_min << "/" << stability_fc_t_min_thre_);
+    return is_stable;
+  }
+
+  if (is_stable)
+  {
+    ROS_INFO_STREAM("[CopilotPlanner] Current target is stable"
+                    << " (fc_rp_min: " << metrics.fc_rp_min << ", thrust range: ["
+                    << metrics.static_thrust_min << ", " << metrics.static_thrust_max
+                    << "], overlap clearance: " << metrics.overlap_clearance << ")");
+  }
+  else
+  {
+    ROS_WARN_STREAM("[CopilotPlanner] Current target is unstable"
+                    << " (fc_rp_min: " << metrics.fc_rp_min << ", thrust range: ["
+                    << metrics.static_thrust_min << ", " << metrics.static_thrust_max
+                    << "], overlap clearance: " << metrics.overlap_clearance
+                    << ", violation: " << describeStabilityViolations(metrics) << ")");
 
     if (!metrics.raw_model_stable)
     {
       dragon_robot_model_->stabilityCheck(true);
     }
-  }
-
-  if (is_stable && report_result)
-  {
-    ROS_INFO_STREAM("[CopilotPlanner] Target configuration is conservatively stable"
-                    << " (fc_rp_min: " << metrics.fc_rp_min << ", thrust range: ["
-                    << metrics.static_thrust_min << ", " << metrics.static_thrust_max
-                    << "], overlap clearance: " << metrics.overlap_clearance << ")");
-  }
-  else if (report_result)
-  {
-    ROS_WARN_STREAM_THROTTLE(0.5,
-                             "[CopilotPlanner] Target configuration is conservatively unstable"
-                                 << ", joint_positions: [" << clamped_joint_positions.transpose() << "]");
   }
 
   return is_stable;
