@@ -26,8 +26,8 @@ bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_
   if (desired_metrics.safe)
   {
     stable_joint_positions = desired_joint_positions;
-    last_stable_joint_positions_ = stable_joint_positions;
-    has_last_stable_joint_positions_ = true;
+    latest_stable_joint_positions_ = stable_joint_positions;
+    has_latest_stable_joint_positions_ = true;
     restoreRobotModelToLinkJointPositions(stable_joint_positions);
     return true;
   }
@@ -57,8 +57,8 @@ bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_
 
   stable_joint_positions = clampLinkJointPositions(stable_joint_positions);
   restoreRobotModelToLinkJointPositions(stable_joint_positions);
-  last_stable_joint_positions_ = stable_joint_positions;
-  has_last_stable_joint_positions_ = true;
+  latest_stable_joint_positions_ = stable_joint_positions;
+  has_latest_stable_joint_positions_ = true;
 
   if ((desired_joint_positions - stable_joint_positions).norm() > stability_qp_convergence_tol_)
   {
@@ -308,20 +308,6 @@ Eigen::VectorXd CopilotPlanner::getCurrentLinkJointPositions() const
   return current_link_joint_positions;
 }
 
-Eigen::VectorXd CopilotPlanner::buildFoldedReferenceJointPositions() const
-{
-  Eigen::VectorXd folded_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
-  for (const int local_index : yaw_joint_local_indices_)
-  {
-    if (local_index >= 0 && local_index < link_joint_num_)
-    {
-      folded_joint_positions(local_index) = M_PI / 2.0;
-    }
-  }
-
-  return clampLinkJointPositions(folded_joint_positions);
-}
-
 Eigen::VectorXd CopilotPlanner::buildDefaultReferenceJointPositions() const
 {
   Eigen::VectorXd default_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
@@ -352,23 +338,14 @@ Eigen::VectorXd CopilotPlanner::buildDefaultReferenceJointPositions() const
 bool CopilotPlanner::tryGetStableReferenceJointPositions(Eigen::VectorXd& stable_reference)
 {
   std::vector<Eigen::VectorXd> reference_candidates;
-  reference_candidates.reserve(6);
+  reference_candidates.reserve(2);
 
   reference_candidates.push_back(getCurrentLinkJointPositions());
 
-  if (has_last_stable_joint_positions_ && last_stable_joint_positions_.size() == link_joint_num_)
+  if (has_latest_stable_joint_positions_ && latest_stable_joint_positions_.size() == link_joint_num_)
   {
-    reference_candidates.push_back(last_stable_joint_positions_);
+    reference_candidates.push_back(latest_stable_joint_positions_);
   }
-
-  if (has_latest_desired_joint_positions_ && latest_desired_joint_positions_.size() == link_joint_num_)
-  {
-    reference_candidates.push_back(latest_desired_joint_positions_);
-  }
-
-  reference_candidates.push_back(Eigen::VectorXd::Zero(link_joint_num_));
-  reference_candidates.push_back(buildFoldedReferenceJointPositions());
-  reference_candidates.push_back(buildDefaultReferenceJointPositions());
 
   for (const Eigen::VectorXd& raw_candidate : reference_candidates)
   {
@@ -376,8 +353,8 @@ bool CopilotPlanner::tryGetStableReferenceJointPositions(Eigen::VectorXd& stable
     if (checkStability(candidate, false))
     {
       stable_reference = candidate;
-      last_stable_joint_positions_ = stable_reference;
-      has_last_stable_joint_positions_ = true;
+      latest_stable_joint_positions_ = stable_reference;
+      has_latest_stable_joint_positions_ = true;
       restoreRobotModelToLinkJointPositions(stable_reference);
       return true;
     }

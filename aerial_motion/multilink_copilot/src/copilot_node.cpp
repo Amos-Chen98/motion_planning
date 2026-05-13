@@ -67,8 +67,8 @@ CopilotPlanner::CopilotPlanner()
   , total_arc_length_(0.0)
   , trajectory_initialized_(false)
   , has_latest_measured_link_joint_positions_(false)
-  , has_latest_desired_joint_positions_(false)
-  , has_last_stable_joint_positions_(false)
+  , has_latest_published_joint_positions_(false)
+  , has_latest_stable_joint_positions_(false)
   , stability_debug_timer_started_(false)
   , has_last_published_root_pose_(false)
 {
@@ -342,8 +342,8 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
     return;
   }
 
-  latest_desired_joint_positions_ = stable_joint_positions;
-  has_latest_desired_joint_positions_ = true;
+  latest_published_joint_positions_ = stable_joint_positions;
+  has_latest_published_joint_positions_ = true;
 
   if (verbose_ && !stability_debug_timer_started_)
   {
@@ -383,12 +383,12 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
 
 void CopilotPlanner::stabilityDebugTimerCallback(const ros::TimerEvent&)
 {
-  if (!has_latest_desired_joint_positions_)
+  if (!has_latest_published_joint_positions_)
   {
     return;
   }
 
-  checkStability(latest_desired_joint_positions_);
+  checkStability(latest_published_joint_positions_);
 }
 
 bool CopilotPlanner::shouldPublishFullStateTarget(const geometry_msgs::Pose& root_target_pose) const

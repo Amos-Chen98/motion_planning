@@ -98,10 +98,10 @@ private:
   geometry_msgs::PoseStamped::ConstPtr latest_target_pose_;  // Interpreted as the first-link tail target pose.
   Eigen::VectorXd latest_measured_link_joint_positions_;
   bool has_latest_measured_link_joint_positions_;
-  Eigen::VectorXd latest_desired_joint_positions_;
-  bool has_latest_desired_joint_positions_;
-  Eigen::VectorXd last_stable_joint_positions_;
-  bool has_last_stable_joint_positions_;
+  Eigen::VectorXd latest_published_joint_positions_;
+  bool has_latest_published_joint_positions_;
+  Eigen::VectorXd latest_stable_joint_positions_;
+  bool has_latest_stable_joint_positions_;
   bool stability_debug_timer_started_;
   geometry_msgs::Pose last_published_root_pose_;
   bool has_last_published_root_pose_;
@@ -147,7 +147,6 @@ private:
   KDL::JntArray buildUpdatedJointPositions(const Eigen::VectorXd& joint_positions) const;
   Eigen::VectorXd clampLinkJointPositions(const Eigen::VectorXd& joint_positions) const;
   Eigen::VectorXd getCurrentLinkJointPositions() const;
-  Eigen::VectorXd buildFoldedReferenceJointPositions() const;
   Eigen::VectorXd buildDefaultReferenceJointPositions() const;
   geometry_msgs::Pose convertLink1TailPoseToRootPose(const geometry_msgs::Pose& pose) const;
   Eigen::Vector3d getLink1TailPositionFromPose(const geometry_msgs::Pose& pose) const;
