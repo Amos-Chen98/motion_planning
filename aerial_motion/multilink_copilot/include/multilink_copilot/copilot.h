@@ -41,6 +41,35 @@ public:
     double overlap_clearance = 0.0;
   };
 
+  enum class StableCandidateSource
+  {
+    kCurrentMeasured,
+    kLatestStable,
+    kStableHistory,
+    kDesiredSeed,
+    kProjected,
+    kRepair
+  };
+
+  struct StableHistoryEntry
+  {
+    Eigen::VectorXd joint_positions;
+    Eigen::Vector3d target_direction = Eigen::Vector3d::UnitX();
+    ros::Time stamp;
+    StableCandidateSource source = StableCandidateSource::kProjected;
+  };
+
+  struct StableCandidate
+  {
+    Eigen::VectorXd joint_positions;
+    StabilityMetrics metrics;
+    StableCandidateSource source = StableCandidateSource::kCurrentMeasured;
+    double target_direction_angle = 0.0;
+    double desired_distance = 0.0;
+    double measured_distance = 0.0;
+    double violation_score = 0.0;
+  };
+
 private:
   // ROS handles
   ros::NodeHandle nh_;
@@ -93,6 +122,9 @@ private:
   double stability_static_thrust_min_;
   double stability_static_thrust_max_;
   double stability_overlap_min_clearance_;
+  int stability_candidate_history_size_;
+  int stability_candidate_top_k_;
+  int stability_candidate_max_repairs_;
   
   // Current state
   geometry_msgs::PoseStamped::ConstPtr latest_target_pose_;  // Interpreted as the first-link tail target pose.
@@ -102,6 +134,7 @@ private:
   bool has_latest_published_joint_positions_;
   Eigen::VectorXd latest_stable_joint_positions_;
   bool has_latest_stable_joint_positions_;
+  std::deque<StableHistoryEntry> stable_joint_history_;
   bool stability_debug_timer_started_;
   geometry_msgs::Pose last_published_root_pose_;
   bool has_last_published_root_pose_;
@@ -136,11 +169,35 @@ private:
                                    Eigen::VectorXd& stable_joint_positions);
   bool solveStableJointQp(const Eigen::VectorXd& desired_joint_positions,
                           const Eigen::VectorXd& reference_joint_positions,
-                          Eigen::VectorXd& stable_joint_positions);
+                          Eigen::VectorXd& stable_joint_positions,
+                          bool allow_unstable_seed = false);
   bool evaluateStability(const Eigen::VectorXd& joint_positions, StabilityMetrics& metrics);
   bool satisfiesSafeStability(const StabilityMetrics& metrics) const;
   std::string describeStabilityViolations(const StabilityMetrics& metrics) const;
-  bool tryGetStableReferenceJointPositions(Eigen::VectorXd& stable_reference);
+  double computeStabilityViolationScore(const StabilityMetrics& metrics) const;
+  std::vector<StableCandidate> buildStableCandidates(const Eigen::VectorXd& desired_joint_positions,
+                                                     const Eigen::VectorXd& measured_joint_positions,
+                                                     const Eigen::Vector3d& current_target_direction);
+  bool tryGetStableReferenceJointPositions(const std::vector<StableCandidate>& candidate_pool,
+                                           Eigen::VectorXd& stable_reference,
+                                           StableCandidateSource& reference_source);
+  bool tryRepairStableJointPositions(const Eigen::VectorXd& desired_joint_positions,
+                                     const std::vector<StableCandidate>& candidate_pool,
+                                     Eigen::VectorXd& stable_joint_positions,
+                                     StableCandidateSource& repaired_source);
+  StableCandidate buildStableCandidate(const Eigen::VectorXd& raw_joint_positions,
+                                       StableCandidateSource source,
+                                       const Eigen::VectorXd& desired_joint_positions,
+                                       const Eigen::VectorXd& measured_joint_positions,
+                                       double target_direction_angle = 0.0);
+  std::vector<StableHistoryEntry> getNearestStableHistoryEntries(const Eigen::VectorXd& desired_joint_positions,
+                                                                 const Eigen::VectorXd& measured_joint_positions,
+                                                                 const Eigen::Vector3d& current_target_direction) const;
+  void rememberStableJointPositions(const Eigen::VectorXd& stable_joint_positions, StableCandidateSource source);
+  Eigen::Vector3d getCurrentTargetDirection() const;
+  double computeTargetDirectionAngle(const Eigen::Vector3d& lhs, const Eigen::Vector3d& rhs) const;
+  bool areSimilarJointPositions(const Eigen::VectorXd& lhs, const Eigen::VectorXd& rhs) const;
+  const char* describeStableCandidateSource(StableCandidateSource source) const;
   void restoreRobotModelToLinkJointPositions(const Eigen::VectorXd& joint_positions);
   
   // Helper functions

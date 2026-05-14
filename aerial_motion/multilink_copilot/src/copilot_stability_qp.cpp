@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <vector>
 
@@ -185,7 +186,8 @@ void appendOverlapConstraint(const boost::shared_ptr<Dragon::HydrusLikeRobotMode
 
 bool CopilotPlanner::solveStableJointQp(const Eigen::VectorXd& desired_joint_positions,
                                         const Eigen::VectorXd& reference_joint_positions,
-                                        Eigen::VectorXd& stable_joint_positions)
+                                        Eigen::VectorXd& stable_joint_positions,
+                                        bool allow_unstable_seed)
 {
   const Eigen::VectorXd desired_full = clampLinkJointPositions(desired_joint_positions);
 
@@ -197,13 +199,20 @@ bool CopilotPlanner::solveStableJointQp(const Eigen::VectorXd& desired_joint_pos
 
   Eigen::VectorXd current_joint_positions = clampLinkJointPositions(reference_joint_positions);
   StabilityMetrics current_metrics;
-  if (!evaluateStability(current_joint_positions, current_metrics) || !current_metrics.safe)
+  if (!evaluateStability(current_joint_positions, current_metrics))
+  {
+    return false;
+  }
+
+  if (!allow_unstable_seed && !current_metrics.safe)
   {
     return false;
   }
 
   Eigen::VectorXd best_joint_positions = current_joint_positions;
-  double best_joint_error = (best_joint_positions - desired_full).norm();
+  bool has_best_stable_candidate = current_metrics.safe;
+  double best_joint_error =
+      has_best_stable_candidate ? (best_joint_positions - desired_full).norm() : std::numeric_limits<double>::infinity();
 
   const Eigen::VectorXd joint_lower_bounds =
       buildJointLimitVector(dragon_robot_model_->getLinkJointLowerLimits(), link_joint_num_, -M_PI);
@@ -220,10 +229,11 @@ bool CopilotPlanner::solveStableJointQp(const Eigen::VectorXd& desired_joint_pos
 
     const Eigen::VectorXd current_joint_vector = current_joint_positions;
     const double current_joint_error = (current_joint_vector - desired_full).norm();
-    if (iter_metrics.safe && current_joint_error < best_joint_error)
+    if (iter_metrics.safe && (!has_best_stable_candidate || current_joint_error < best_joint_error))
     {
       best_joint_positions = current_joint_positions;
       best_joint_error = current_joint_error;
+      has_best_stable_candidate = true;
     }
 
     if (iter_metrics.safe && current_joint_error <= stability_qp_convergence_tol_)
@@ -316,7 +326,7 @@ bool CopilotPlanner::solveStableJointQp(const Eigen::VectorXd& desired_joint_pos
   }
 
   stable_joint_positions = best_joint_positions;
-  return checkStability(stable_joint_positions, false);
+  return has_best_stable_candidate && checkStability(stable_joint_positions, false);
 }
 
 }  // namespace multilink_copilot

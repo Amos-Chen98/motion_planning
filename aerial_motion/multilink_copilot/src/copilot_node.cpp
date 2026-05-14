@@ -6,6 +6,7 @@
 #include <tf/transform_datatypes.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <exception>
 #include <string>
@@ -112,6 +113,12 @@ void CopilotPlanner::loadParameters()
   pnh_.param("stability_static_thrust_min", stability_static_thrust_min_, 15.6);
   pnh_.param("stability_static_thrust_max", stability_static_thrust_max_, 23.6);
   pnh_.param("stability_overlap_min_clearance", stability_overlap_min_clearance_, 0.01);
+  pnh_.param("stability_candidate_history_size", stability_candidate_history_size_, 32);
+  pnh_.param("stability_candidate_top_k", stability_candidate_top_k_, 6);
+  pnh_.param("stability_candidate_max_repairs", stability_candidate_max_repairs_, 2);
+  stability_candidate_history_size_ = std::max(0, stability_candidate_history_size_);
+  stability_candidate_top_k_ = std::max(0, stability_candidate_top_k_);
+  stability_candidate_max_repairs_ = std::max(0, stability_candidate_max_repairs_);
 
   ROS_INFO("[CopilotPlanner] Loaded parameters:");
   ROS_INFO("  control_loop_rate: %.1f Hz", control_loop_rate_);
@@ -130,6 +137,9 @@ void CopilotPlanner::loadParameters()
            stability_static_thrust_max_);
   ROS_INFO("  stability_overlap_min_clearance: %.3f", stability_overlap_min_clearance_);
   ROS_INFO("  stability_check_fc_t: %s", stability_check_fc_t_ ? "true" : "false");
+  ROS_INFO("  stability_candidate_history_size: %d", stability_candidate_history_size_);
+  ROS_INFO("  stability_candidate_top_k: %d", stability_candidate_top_k_);
+  ROS_INFO("  stability_candidate_max_repairs: %d", stability_candidate_max_repairs_);
 }
 
 void CopilotPlanner::initializeRobotModel()
@@ -307,6 +317,8 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
     return;
   }
 
+  const auto planning_start_time = std::chrono::steady_clock::now();
+
   restoreRobotModelToLinkJointPositions(latest_measured_link_joint_positions_);
 
   Eigen::VectorXd desired_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
@@ -328,7 +340,14 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   }
 
   Eigen::VectorXd stable_joint_positions;
-  if (!computeStableJointPositions(desired_joint_positions, stable_joint_positions))
+  const bool stable_solved = computeStableJointPositions(desired_joint_positions, stable_joint_positions);
+
+  const auto planning_end_time = std::chrono::steady_clock::now();
+  const double planning_duration_ms =
+      std::chrono::duration<double, std::milli>(planning_end_time - planning_start_time).count();
+  ROS_INFO_THROTTLE(1.0, "[CopilotPlanner] Joint cmd planning time: %.3f ms", planning_duration_ms);
+
+  if (!stable_solved)
   {
     ROS_ERROR_THROTTLE(1.0, "[CopilotPlanner] Failed to find a stable joint target; skipping this control cycle");
     return;
