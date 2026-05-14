@@ -32,7 +32,6 @@ public:
 
   struct StabilityMetrics
   {
-    bool raw_model_stable = false;
     bool safe = false;
     double fc_rp_min = 0.0;
     double fc_t_min = 0.0;

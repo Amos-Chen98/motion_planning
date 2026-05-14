@@ -175,7 +175,6 @@ bool CopilotPlanner::evaluateStability(const Eigen::VectorXd& joint_positions, S
   updateRobotModelForTargetConfiguration(kdl_joint_positions);
   dragon_robot_model_->updateJacobians(kdl_joint_positions, false);
 
-  metrics.raw_model_stable = dragon_robot_model_->stabilityCheck(false);
   metrics.fc_rp_min = dragon_robot_model_->getFeasibleControlRollPitchMin();
   metrics.fc_t_min = dragon_robot_model_->getFeasibleControlTMin();
 
@@ -658,10 +657,7 @@ bool CopilotPlanner::checkStability(const Eigen::VectorXd& joint_positions, bool
                     << "], overlap clearance: " << metrics.overlap_clearance
                     << ", violation: " << describeStabilityViolations(metrics) << ")");
 
-    if (!metrics.raw_model_stable)
-    {
-      dragon_robot_model_->stabilityCheck(true);
-    }
+    dragon_robot_model_->stabilityCheck(true);
   }
 
   return is_stable;
