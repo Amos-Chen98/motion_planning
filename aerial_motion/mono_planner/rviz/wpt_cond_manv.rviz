@@ -86,6 +86,166 @@ Visualization Manager:
         Expand Link Details: false
         Expand Tree: false
         Link Tree Style: Links in Alphabetic Order
+        battery1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        battery2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        battery3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        battery4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        edf1_left:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        edf1_right:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        edf2_left:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        edf2_right:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        edf3_left:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        edf3_right:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        edf4_left:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        edf4_right:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        fc:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        gimbal1_pitch_module:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        gimbal1_roll_module:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        gimbal2_pitch_module:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        gimbal2_roll_module:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        gimbal3_pitch_module:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        gimbal3_roll_module:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        gimbal4_pitch_module:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        gimbal4_roll_module:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        inter_joint1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        inter_joint2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        inter_joint3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        lidar_imu:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        link3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        link4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        livox_mid360:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        root:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        thrust1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        thrust2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        thrust3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        thrust4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
       Name: RobotModel
       Robot Description: dragon/robot_description
       TF Prefix: dragon
@@ -208,7 +368,7 @@ Visualization Manager:
       Marker Topic: /waypoint/ring_markers
       Name: Waypoint Rings
       Namespaces:
-        {}
+        waypoint_rings: true
       Queue Size: 100
       Value: true
     - Class: rviz/MarkerArray
@@ -251,6 +411,15 @@ Visualization Manager:
       Topic: /dragon/root/tail_pose
       Unreliable: false
       Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /dragon/trajectory_markers
+      Name: MarkerArray
+      Namespaces:
+        last_link_tail_pose_trajectory: true
+        root_pose_trajectory: true
+      Queue Size: 100
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 255; 255; 255
@@ -279,7 +448,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 7.487255096435547
+      Distance: 6.26247501373291
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -287,9 +456,9 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 0.08397740870714188
-        Y: 1.1325222253799438
-        Z: 0.580128014087677
+        X: 0.22096514701843262
+        Y: 0.46218743920326233
+        Z: 0.21014715731143951
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false

@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="robot_ns" default="dragon" />
+    <arg name="root_frame" default="$(arg robot_ns)/root" />
+    <arg name="last_link_frame" default="$(arg robot_ns)/link4" />
+    <arg name="tail_offset_x" default="0.455" />
+    <arg name="root_topic" default="root/pose" />
+    <arg name="last_link_topic" default="last_link/tail_pose" />
+    <arg name="marker_topic" default="trajectory_markers" />
+    <arg name="publish_rate_hz" default="10.0" />
+    <arg name="line_width_m" default="0.03" />
+
+    <group ns="$(arg robot_ns)">
+        <node pkg="multilink_copilot" type="last_link_tail_pose_publisher.py" name="last_link_tail_pose_publisher" output="screen">
+            <param name="root_frame" value="$(arg root_frame)" />
+            <param name="last_link_frame" value="$(arg last_link_frame)" />
+            <param name="tail_offset_x" value="$(arg tail_offset_x)" />
+        </node>
+
+        <node pkg="multilink_copilot" type="trajectory_marker_publisher.py" name="trajectory_marker_publisher" output="screen">
+            <param name="root_topic" value="$(arg root_topic)" />
+            <param name="last_link_topic" value="$(arg last_link_topic)" />
+            <param name="marker_topic" value="$(arg marker_topic)" />
+            <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
+            <param name="line_width_m" value="$(arg line_width_m)" />
+        </node>
+    </group>
+</launch>

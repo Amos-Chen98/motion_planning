@@ -68,6 +68,7 @@ add_dependencies(copilot_planner aerial_robot_msgs_generate_messages_cpp)
 catkin_install_python(PROGRAMS
     scripts/evaluation/envelope_width_evaluator.py
     scripts/evaluation/last_link_tail_pose_publisher.py
+    scripts/evaluation/trajectory_marker_publisher.py
     scripts/evaluation/run_waypoint_conditioned_maneuvering_batch.py
     scripts/demo/dragon_dance_node.py
     scripts/debug/print_dragon_edf_positions.py
