@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+<launch>
+    <param name="/use_sim_time" value="false" />
+
+    <arg name="robot_ns" default="dragon" />
+    <arg name="link_num" default="4" />
+    <arg name="link_length" default="0.455" />
+    <arg name="target_pose_frame_type" default="FLU" />
+
+    <arg name="seed_frame_id" default="world" />
+    <arg name="seed_x" default="0.0" />
+    <arg name="seed_y" default="0.0" />
+    <arg name="seed_z" default="1.0" />
+    <arg name="seed_roll" default="0.0" />
+    <arg name="seed_pitch" default="0.0" />
+    <arg name="seed_yaw" default="0.0" />
+    <arg name="seed_publish_rate_hz" default="10.0" />
+
+    <arg name="waypoint_config" default="test_data/case_0001.yaml" />
+    <arg name="waypoint_publish_rate_hz" default="60.0" />
+    <arg name="planner_publish_rate_hz" default="40.0" />
+    <arg name="total_trajectory_time" default="60.0" />
+    <arg name="replan" default="false" />
+
+    <arg name="launch_rviz" default="true" />
+    <arg name="rviz_config" default="$(find multilink_copilot)/rviz/geometry_only_waypoint_sim.rviz" />
+
+    <group ns="$(arg robot_ns)">
+        <node pkg="multilink_copilot" type="root_tail_pose_seed_publisher.py" name="root_tail_pose_seed_publisher" output="screen">
+            <param name="topic" value="root/tail_pose" />
+            <param name="frame_id" value="$(arg seed_frame_id)" />
+            <param name="x" value="$(arg seed_x)" />
+            <param name="y" value="$(arg seed_y)" />
+            <param name="z" value="$(arg seed_z)" />
+            <param name="roll" value="$(arg seed_roll)" />
+            <param name="pitch" value="$(arg seed_pitch)" />
+            <param name="yaw" value="$(arg seed_yaw)" />
+            <param name="publish_rate_hz" value="$(arg seed_publish_rate_hz)" />
+        </node>
+
+        <node pkg="multilink_copilot" type="geometry_only_copilot_planner" name="geometry_only_copilot_planner" output="screen">
+            <rosparam command="load" file="$(find multilink_copilot)/config/geometry_only_copilot_planner.yaml" />
+            <param name="link_num" value="$(arg link_num)" />
+            <param name="link_length" value="$(arg link_length)" />
+            <param name="target_pose_frame_type" value="$(arg target_pose_frame_type)" />
+        </node>
+    </group>
+
+    <include file="$(find mono_planner)/launch/demo/waypoint_pose_publisher.launch">
+        <arg name="config_file" value="$(arg waypoint_config)" />
+        <arg name="publish_rate_hz" value="$(arg waypoint_publish_rate_hz)" />
+        <arg name="frame_id" value="$(arg seed_frame_id)" />
+        <arg name="launch_rviz" value="false" />
+    </include>
+
+    <include file="$(find mono_planner)/launch/waypoint_conditioned_planner.launch">
+        <arg name="ns" value="$(arg robot_ns)" />
+        <arg name="nonholo" value="true" />
+        <arg name="replan" value="$(arg replan)" />
+        <arg name="publish_rate_hz" value="$(arg planner_publish_rate_hz)" />
+        <arg name="total_trajectory_time" value="$(arg total_trajectory_time)" />
+        <arg name="robot_frame_type" value="LINK" />
+        <arg name="robot_pose_topic" value="root/tail_pose" />
+        <arg name="target_pose_topic" value="root/target_pose" />
+    </include>
+
+    <node if="$(arg launch_rviz)" pkg="rviz" type="rviz" name="geometry_only_copilot_rviz" args="-d $(arg rviz_config)" output="screen" />
+</launch>

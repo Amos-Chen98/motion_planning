@@ -1,0 +1,123 @@
+Panels:
+  - Class: rviz/Displays
+    Help Height: 138
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /Geometry Markers1
+        - /Mono Planner Trajectory1
+      Splitter Ratio: 0.5
+    Tree Height: 270
+  - Class: rviz/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+    Splitter Ratio: 0.5
+Preferences:
+  PromptSaveOnExit: true
+Toolbars:
+  toolButtonStyle: 2
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz/Grid
+      Color: 160; 160; 164
+      Enabled: false
+      Line Style:
+        Line Width: 0.029999999329447746
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Plane: XY
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+      Value: false
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /dragon/geometry/trajectory_markers
+      Name: Geometry Markers
+      Namespaces:
+        current_body_links: true
+        current_last_link_tail: true
+        current_root_link_tail: true
+        current_root_pose: true
+        current_tail_points: true
+        root_link_tail_history_time_colored: true
+      Queue Size: 100
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /dragon/mono_planner/traj_marker
+      Name: Mono Planner Trajectory
+      Namespaces:
+        trajectory_line: false
+        trajectory_waypoints: false
+      Queue Size: 100
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 255; 255; 255
+    Default Light: true
+    Fixed Frame: world
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+      Hide Inactive Objects: true
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/Measure
+    - Class: rviz/SetInitialPose
+      Theta std deviation: 0.2617993950843811
+      Topic: /initialpose
+      X std deviation: 0.5
+      Y std deviation: 0.5
+    - Class: rviz/SetGoal
+      Topic: /move_base_simple/goal
+    - Class: rviz/PublishPoint
+      Single click: true
+      Topic: /clicked_point
+  Value: true
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 3.163189649581909
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.05999999865889549
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Field of View: 0.7853981852531433
+      Focal Point:
+        X: -0.3744054138660431
+        Y: 0.04517120495438576
+        Z: 1.1368128061294556
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05000000074505806
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.009999999776482582
+      Pitch: 0.5800001621246338
+      Target Frame: <Fixed Frame>
+      Yaw: 2.1868081092834473
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: true
+  Height: 2632
+  Hide Left Dock: true
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd0000000200000000000001f7000009acfc0200000001fb000000100044006900730070006c006100790073000000006e000009ac0000018200ffffff000000010000010f00000342fc0200000001fb0000000a00560069006500770073000000003d000003420000013200ffffff00001400000009ac00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Views:
+    collapsed: false
+  Width: 5120
+  X: 0
+  Y: 54

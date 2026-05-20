@@ -65,12 +65,19 @@ add_executable(copilot_planner ${COPILOT_PLANNER_SOURCES})
 target_link_libraries(copilot_planner ${catkin_LIBRARIES} qpOASES)
 add_dependencies(copilot_planner aerial_robot_msgs_generate_messages_cpp)
 
+add_executable(geometry_only_copilot_planner
+    src/demo/geometry_only_copilot_planner.cpp
+)
+target_link_libraries(geometry_only_copilot_planner ${catkin_LIBRARIES})
+add_dependencies(geometry_only_copilot_planner aerial_robot_msgs_generate_messages_cpp)
+
 catkin_install_python(PROGRAMS
     scripts/evaluation/envelope_width_evaluator.py
     scripts/evaluation/last_link_tail_pose_publisher.py
     scripts/evaluation/trajectory_marker_publisher.py
     scripts/evaluation/run_waypoint_conditioned_maneuvering_batch.py
     scripts/demo/dragon_dance_node.py
+    scripts/demo/root_tail_pose_seed_publisher.py
     scripts/debug/print_dragon_edf_positions.py
     scripts/debug/reset_dragon_joint.py
     scripts/evaluation/replay_rosbag.py
@@ -81,7 +88,7 @@ catkin_install_python(PROGRAMS
 # ############
 # # Install ##
 # ############
-install(TARGETS copilot_planner
+install(TARGETS copilot_planner geometry_only_copilot_planner
     RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -96,6 +103,11 @@ install(DIRECTORY launch/
 
 install(DIRECTORY config/
     DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config
+    USE_SOURCE_PERMISSIONS
+)
+
+install(DIRECTORY rviz/
+    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/rviz
     USE_SOURCE_PERMISSIONS
 )
 
