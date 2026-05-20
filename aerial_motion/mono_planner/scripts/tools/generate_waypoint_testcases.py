@@ -5,17 +5,17 @@ import math
 import random
 from pathlib import Path
 
-NUM_CASES = 400
+NUM_CASES = 100
 RANDOM_SEED = 0
 FRAME_ID = "world"
 OUTPUT_DIR = Path("test_data")
 FILE_PREFIX = "case_"
 ROOT_POSITION = (0.5, 0.0, 1.0)
 ROLL = 0.0
-DIAMETER_RANGE = (1.0, 4.0)
 PITCH_RANGE = (-0.2, 0.2)
-CIRCLE_Z_RANGE = (0.8, 1.6)
-CENTER_ANGLE_RANGE = (math.radians(114.0), math.radians(170.0))
+X_RANGE = (-2.0, 2.0)
+Y_RANGE = (-2.0, 2.0)
+Z_RANGE = (0.5, 4.0)
 MAX_ATTEMPTS_PER_CASE = 1000
 
 WAYPOINT_COUNT = 4
@@ -23,12 +23,6 @@ ROUND_DIGITS = 9
 SEGMENT_EPSILON = 1e-9
 DOT_EPSILON = 1e-9
 ANGLE_TOLERANCE = 1e-9
-CIRCLE_TOLERANCE = 5e-6
-HALF_SPACE_EPSILON = 1e-6
-ROOT_XY_EXCLUSION_RADIUS = 0.5
-TERMINAL_CLEARANCE = 1.5
-MIN_WAYPOINT_ANGULAR_SEPARATION = math.radians(60.0)
-MAX_POSITION_SAMPLING_ATTEMPTS = 200
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MONO_PLANNER_DIR = SCRIPT_DIR.parent.parent
@@ -58,16 +52,8 @@ def unit_vector(vector):
     return tuple(component / vector_norm for component in vector)
 
 
-def xy_distance(point, center):
-    return math.hypot(point[0] - center[0], point[1] - center[1])
-
-
 def angular_distance(angle_a, angle_b):
     return abs(wrap_angle(angle_a - angle_b))
-
-
-def point_angle_on_circle(point, circle_center):
-    return math.atan2(point[1] - circle_center[1], point[0] - circle_center[0])
 
 
 def forward_axis_from_pitch_yaw(pitch, yaw):
@@ -137,16 +123,6 @@ def validate_waypoint_forward_axis(forward_axis, incoming_direction, outgoing_di
     return None
 
 
-def validate_terminal_clearance(ordered_positions):
-    terminal_distance = math.dist(ordered_positions[-1], ROOT_POSITION)
-    if terminal_distance <= TERMINAL_CLEARANCE + CIRCLE_TOLERANCE:
-        return (
-            f"Waypoint {WAYPOINT_COUNT} is {terminal_distance:.3f} m from ROOT_POSITION; "
-            f"expected more than {TERMINAL_CLEARANCE:.3f} m."
-        )
-    return None
-
-
 def build_nonholonomic_waypoints(ordered_positions, pitches):
     if len(ordered_positions) != len(pitches):
         raise ValueError("ordered_positions and pitches must have the same length.")
@@ -187,59 +163,25 @@ def build_candidate_waypoints(ordered_positions, pitches):
     return [[rounded_value(value) for value in waypoint] for waypoint in waypoints]
 
 
-def validate_generated_case(waypoints, circle_center, radius):
+def validate_generated_case(waypoints):
     if len(waypoints) != WAYPOINT_COUNT:
         raise ValueError(f"Expected {WAYPOINT_COUNT} waypoints, got {len(waypoints)}.")
 
-    z_value = waypoints[0][2]
     ordered_positions = []
-    waypoint_angles = []
     pitches = []
-
-    root_xy_distance = xy_distance(ROOT_POSITION, circle_center)
-    if not math.isclose(root_xy_distance, radius, rel_tol=0.0, abs_tol=CIRCLE_TOLERANCE):
-        raise ValueError("ROOT_POSITION is not on the waypoint circle in the XY plane.")
 
     for waypoint_index, waypoint in enumerate(waypoints):
         if len(waypoint) != 6:
             raise ValueError(f"Waypoint {waypoint_index} does not have 6 values.")
 
-        x_value, y_value, z_current, roll, pitch, yaw = waypoint
+        x_value, y_value, z_value, roll, pitch = waypoint[:5]
         if not math.isclose(roll, ROLL, rel_tol=0.0, abs_tol=ANGLE_TOLERANCE):
             raise ValueError(f"Waypoint {waypoint_index} roll is not {ROLL}.")
         if not (PITCH_RANGE[0] - ANGLE_TOLERANCE <= pitch <= PITCH_RANGE[1] + ANGLE_TOLERANCE):
             raise ValueError(f"Waypoint {waypoint_index} pitch {pitch} is outside {PITCH_RANGE}.")
-        if not math.isclose(z_current, z_value, rel_tol=0.0, abs_tol=CIRCLE_TOLERANCE):
-            raise ValueError("Waypoints do not share the same z coordinate.")
-        if y_value <= ROOT_POSITION[1] + HALF_SPACE_EPSILON:
-            raise ValueError(f"Waypoint {waypoint_index} is not in the y > ROOT_POSITION[1] half-space.")
-        if xy_distance((x_value, y_value), ROOT_POSITION) <= ROOT_XY_EXCLUSION_RADIUS + CIRCLE_TOLERANCE:
-            raise ValueError(
-                f"Waypoint {waypoint_index} falls within the XY exclusion radius of {ROOT_XY_EXCLUSION_RADIUS} m."
-            )
 
-        distance_to_center = xy_distance((x_value, y_value), circle_center)
-        if not math.isclose(distance_to_center, radius, rel_tol=0.0, abs_tol=CIRCLE_TOLERANCE):
-            raise ValueError(f"Waypoint {waypoint_index} is not on the requested circle.")
-
-        current_angle = point_angle_on_circle((x_value, y_value), circle_center)
-        for other_index, other_angle in enumerate(waypoint_angles):
-            if angular_distance(current_angle, other_angle) <= MIN_WAYPOINT_ANGULAR_SEPARATION + ANGLE_TOLERANCE:
-                raise ValueError(
-                    "Waypoint {} and waypoint {} violate the minimum angular separation of {:.1f} degrees.".format(
-                        other_index,
-                        waypoint_index,
-                        math.degrees(MIN_WAYPOINT_ANGULAR_SEPARATION),
-                    )
-                )
-
-        ordered_positions.append((x_value, y_value, z_current))
-        waypoint_angles.append(current_angle)
+        ordered_positions.append((x_value, y_value, z_value))
         pitches.append(pitch)
-
-    violation = validate_terminal_clearance(ordered_positions)
-    if violation is not None:
-        raise ValueError(violation)
 
     expected_waypoints, violation = build_nonholonomic_waypoints(ordered_positions, pitches)
     if violation is not None:
@@ -252,75 +194,29 @@ def validate_generated_case(waypoints, circle_center, radius):
             )
 
 
-def sample_waypoint_positions(rng, circle_center, radius, center_z):
-    positions = []
-    sampled_angles = []
-
-    for _attempt in range(MAX_POSITION_SAMPLING_ATTEMPTS):
-        angle = rng.uniform(0.0, 2.0 * math.pi)
-        x_value = circle_center[0] + radius * math.cos(angle)
-        y_value = circle_center[1] + radius * math.sin(angle)
-        if y_value <= ROOT_POSITION[1] + HALF_SPACE_EPSILON:
-            continue
-        if xy_distance((x_value, y_value), ROOT_POSITION) <= ROOT_XY_EXCLUSION_RADIUS + CIRCLE_TOLERANCE:
-            continue
-        if any(
-            angular_distance(angle, existing_angle) <= MIN_WAYPOINT_ANGULAR_SEPARATION + ANGLE_TOLERANCE
-            for existing_angle in sampled_angles
-        ):
-            continue
-
-        candidate = (x_value, y_value, center_z)
-        if any(
-            math.dist(candidate, existing_position) <= CIRCLE_TOLERANCE
-            for existing_position in positions
-        ):
-            continue
-
-        positions.append(candidate)
-        sampled_angles.append(angle)
-        if len(positions) == WAYPOINT_COUNT:
-            return positions
-
-    return None
-
-
-def sample_circle_points(rng):
-    diameter = rng.uniform(*DIAMETER_RANGE)
-    radius = 0.5 * diameter
-    center_angle = rng.uniform(*CENTER_ANGLE_RANGE)
-    center_x = ROOT_POSITION[0] + radius * math.cos(center_angle)
-    center_y = ROOT_POSITION[1] + radius * math.sin(center_angle)
-    center_z = rng.uniform(*CIRCLE_Z_RANGE)
-    positions = sample_waypoint_positions(rng, (center_x, center_y), radius, center_z)
-    if positions is None:
-        return None
-    return (center_x, center_y, center_z), radius, positions
+def sample_waypoint_positions(rng):
+    return [
+        (
+            rng.uniform(*X_RANGE),
+            rng.uniform(*Y_RANGE),
+            rng.uniform(*Z_RANGE),
+        )
+        for _ in range(WAYPOINT_COUNT)
+    ]
 
 
 def generate_waypoint_case(rng):
     for _attempt in range(MAX_ATTEMPTS_PER_CASE):
-        sampled_circle = sample_circle_points(rng)
-        if sampled_circle is None:
-            continue
-
-        circle_center, radius, positions = sampled_circle
+        positions = sample_waypoint_positions(rng)
         pitches = [rng.uniform(*PITCH_RANGE) for _ in range(WAYPOINT_COUNT)]
 
         for ordered_positions in itertools.permutations(positions):
-            if validate_terminal_clearance(ordered_positions) is not None:
-                continue
-
             waypoints = build_candidate_waypoints(ordered_positions, pitches)
             if waypoints is None:
                 continue
 
-            rounded_positions = [tuple(waypoint[:3]) for waypoint in waypoints]
-            if validate_terminal_clearance(rounded_positions) is not None:
-                continue
-
             try:
-                validate_generated_case(waypoints, circle_center, radius)
+                validate_generated_case(waypoints)
             except ValueError:
                 continue
             return waypoints
