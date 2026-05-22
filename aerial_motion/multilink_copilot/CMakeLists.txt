@@ -77,6 +77,8 @@ catkin_install_python(PROGRAMS
     scripts/evaluation/trajectory_marker_publisher.py
     scripts/evaluation/run_waypoint_conditioned_maneuvering_batch.py
     scripts/demo/dragon_dance_node.py
+    scripts/demo/root_circular_trajectory_node.py
+    scripts/demo/root_straight_trajectory_node.py
     scripts/demo/root_tail_pose_seed_publisher.py
     scripts/debug/print_dragon_edf_positions.py
     scripts/debug/reset_dragon_joint.py

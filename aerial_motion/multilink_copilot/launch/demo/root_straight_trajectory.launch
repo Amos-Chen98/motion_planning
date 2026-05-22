@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="robot_ns" default="dragon" />
+    <arg name="topic" default="root/target_pose" />
+    <arg name="start_pose_topic" default="root/tail_pose" />
+    <arg name="frame_id" default="world" />
+    <arg name="publish_rate_hz" default="40.0" />
+    <arg name="linear_speed" default="0.10" />
+    <arg name="marker_topic" default="root/trajectory_marker" />
+    <arg name="marker_line_width_m" default="0.03" />
+    <arg name="marker_sample_interval_m" default="0.05" />
+
+    <group ns="$(arg robot_ns)">
+        <node pkg="multilink_copilot" type="root_straight_trajectory_node.py" name="root_straight_trajectory" output="screen">
+            <param name="topic" value="$(arg topic)" />
+            <param name="start_pose_topic" value="$(arg start_pose_topic)" />
+            <param name="frame_id" value="$(arg frame_id)" />
+            <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
+            <param name="linear_speed" value="$(arg linear_speed)" />
+            <param name="marker_topic" value="$(arg marker_topic)" />
+            <param name="marker_line_width_m" value="$(arg marker_line_width_m)" />
+            <param name="marker_sample_interval_m" value="$(arg marker_sample_interval_m)" />
+        </node>
+    </group>
+</launch>
