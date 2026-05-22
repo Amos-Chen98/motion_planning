@@ -10,9 +10,16 @@
     <arg name="marker_topic" default="root/trajectory_marker" />
     <arg name="marker_line_width_m" default="0.03" />
     <arg name="marker_sample_interval_m" default="0.05" />
+    <arg name="run_duration_sec" default="60.0" />
+    <arg name="record_rosbag" default="true" />
+    <arg name="rosbag_output_prefix" default="$(find multilink_copilot)/data/rosbag/typical_behavior/root_circular_trajectory" />
+
+    <node pkg="rosbag" type="record" name="root_circular_trajectory_rosbag_record" output="screen"
+          if="$(arg record_rosbag)"
+          args="-o $(arg rosbag_output_prefix) /dragon/stability/fc_rp_min /dragon/stability/overlap_clearance" />
 
     <group ns="$(arg robot_ns)">
-        <node pkg="multilink_copilot" type="root_circular_trajectory_node.py" name="root_circular_trajectory" output="screen">
+        <node pkg="multilink_copilot" type="root_circular_trajectory_node.py" name="root_circular_trajectory" output="screen" required="true">
             <param name="topic" value="$(arg topic)" />
             <param name="start_pose_topic" value="$(arg start_pose_topic)" />
             <param name="frame_id" value="$(arg frame_id)" />
@@ -22,6 +29,7 @@
             <param name="marker_topic" value="$(arg marker_topic)" />
             <param name="marker_line_width_m" value="$(arg marker_line_width_m)" />
             <param name="marker_sample_interval_m" value="$(arg marker_sample_interval_m)" />
+            <param name="run_duration_sec" value="$(arg run_duration_sec)" />
         </node>
     </group>
 </launch>

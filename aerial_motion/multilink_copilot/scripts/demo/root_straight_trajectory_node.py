@@ -17,6 +17,7 @@ class RootStraightTrajectoryPublisher:
     DEFAULT_LINEAR_SPEED = 0.10
     DEFAULT_MARKER_LINE_WIDTH_M = 0.03
     DEFAULT_MARKER_SAMPLE_INTERVAL_M = 0.05
+    DEFAULT_RUN_DURATION_SEC = 0.0
     YAW = math.pi
     MARKER_NS = "root_target_trajectory"
     MARKER_ID = 0
@@ -34,6 +35,7 @@ class RootStraightTrajectoryPublisher:
         self.marker_sample_interval_m = float(
             rospy.get_param("~marker_sample_interval_m", self.DEFAULT_MARKER_SAMPLE_INTERVAL_M)
         )
+        self.run_duration_sec = float(rospy.get_param("~run_duration_sec", self.DEFAULT_RUN_DURATION_SEC))
 
         if not math.isfinite(self.publish_rate_hz) or self.publish_rate_hz <= 0.0:
             raise ValueError("~publish_rate_hz must be a finite value greater than 0.")
@@ -43,6 +45,8 @@ class RootStraightTrajectoryPublisher:
             raise ValueError("~marker_line_width_m must be a finite value greater than 0.")
         if not math.isfinite(self.marker_sample_interval_m) or self.marker_sample_interval_m <= 0.0:
             raise ValueError("~marker_sample_interval_m must be a finite value greater than 0.")
+        if not math.isfinite(self.run_duration_sec) or self.run_duration_sec < 0.0:
+            raise ValueError("~run_duration_sec must be a finite non-negative value.")
 
         self.publisher = rospy.Publisher(self.topic, PoseStamped, queue_size=1)
         self.marker_publisher = rospy.Publisher(self.marker_topic, Marker, queue_size=1, latch=True)
@@ -81,9 +85,17 @@ class RootStraightTrajectoryPublisher:
                 rate.sleep()
                 continue
 
-            elapsed = 0.0
-            if self.has_published_initial_pose:
-                elapsed = (rospy.Time.now() - self.start_time).to_sec()
+            elapsed = (rospy.Time.now() - self.start_time).to_sec()
+            if self.run_duration_sec > 0.0 and elapsed >= self.run_duration_sec:
+                rospy.loginfo(
+                    "Straight root-link trajectory reached run duration %.3f s; shutting down.",
+                    self.run_duration_sec,
+                )
+                rospy.signal_shutdown("run duration reached")
+                break
+
+            if not self.has_published_initial_pose:
+                elapsed = 0.0
 
             pose_msg = self.build_pose_message(elapsed)
             self.publisher.publish(pose_msg)
