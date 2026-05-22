@@ -77,6 +77,8 @@ private:
   ros::Subscriber joint_state_sub_;
   ros::Publisher full_state_target_pub_;
   ros::Publisher trajectory_viz_pub_;
+  ros::Publisher stability_fc_rp_min_pub_;
+  ros::Publisher stability_overlap_clearance_pub_;
   ros::Timer control_timer_;
   ros::Timer stability_debug_timer_;
 
@@ -109,6 +111,7 @@ private:
   bool publish_only_on_significant_root_motion_;
   double publish_root_translation_threshold_;
   double publish_root_rotation_threshold_;
+  bool publish_stability_metrics_;
   bool verbose_;
   int stability_qp_max_iterations_;
   double stability_qp_joint_step_limit_;
@@ -209,6 +212,8 @@ private:
   Eigen::Vector3d getRootPositionFromLink1TailPose(const geometry_msgs::Pose& pose) const;
   bool shouldPublishFullStateTarget(const geometry_msgs::Pose& root_target_pose) const;
   void recordPublishedRootPose(const geometry_msgs::Pose& root_target_pose);
+  void publishStabilityMetrics(const StabilityMetrics& metrics);
+  void publishCurrentStabilityMetrics();
   
   // Visualization
   visualization_msgs::MarkerArray getTrajectoryVisualization();

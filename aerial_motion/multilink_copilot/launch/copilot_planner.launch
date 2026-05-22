@@ -4,6 +4,7 @@
     <arg name="target_pose_frame_type" default="FLU" />
     <arg name="evaluation" default="false" />
     <arg name="verbose" default="false" />
+    <arg name="publish_stability_metrics" default="false" />
 
     <group ns="$(arg robot_ns)">
         <node pkg="multilink_copilot" type="copilot_planner" name="copilot_planner" output="screen">
@@ -14,6 +15,7 @@
             <!-- "FLU": Forward-Left-Up frame (requires 180° rotation about the local/body Z axis) -->
             <param name="target_pose_frame_type" value="$(arg target_pose_frame_type)" />
             <param name="verbose" value="$(arg verbose)" />
+            <param name="publish_stability_metrics" value="$(arg publish_stability_metrics)" />
         </node>
     </group>
 

@@ -7,6 +7,7 @@ find_package(catkin REQUIRED COMPONENTS
     roscpp
     rospy
     sensor_msgs
+    std_msgs
     geometry_msgs
     visualization_msgs
     aerial_robot_msgs
@@ -31,6 +32,7 @@ catkin_package(
     roscpp
     rospy
     sensor_msgs
+    std_msgs
     geometry_msgs
     visualization_msgs
     aerial_robot_msgs

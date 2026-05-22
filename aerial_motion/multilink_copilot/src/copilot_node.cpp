@@ -3,6 +3,7 @@
 
 #include <multilink_copilot/copilot.h>
 
+#include <std_msgs/Float64.h>
 #include <tf/transform_datatypes.h>
 
 #include <algorithm>
@@ -80,6 +81,11 @@ CopilotPlanner::CopilotPlanner()
   joint_state_sub_ = nh_.subscribe("joint_states", 1, &CopilotPlanner::jointStateCallback, this);
   full_state_target_pub_ = nh_.advertise<aerial_robot_msgs::FullStateTarget>("full_state_target", 1);
   trajectory_viz_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("trajectory_visualization", 1);
+  if (publish_stability_metrics_)
+  {
+    stability_fc_rp_min_pub_ = nh_.advertise<std_msgs::Float64>("stability/fc_rp_min", 1);
+    stability_overlap_clearance_pub_ = nh_.advertise<std_msgs::Float64>("stability/overlap_clearance", 1);
+  }
   control_timer_ =
       nh_.createTimer(ros::Duration(1.0 / control_loop_rate_), &CopilotPlanner::controlTimerCallback, this);
   stability_debug_timer_ =
@@ -101,6 +107,7 @@ void CopilotPlanner::loadParameters()
   pnh_.param("publish_only_on_significant_root_motion", publish_only_on_significant_root_motion_, false);
   pnh_.param("publish_root_translation_threshold", publish_root_translation_threshold_, 0.05);
   pnh_.param("publish_root_rotation_threshold", publish_root_rotation_threshold_, 0.0872664626);
+  pnh_.param("publish_stability_metrics", publish_stability_metrics_, false);
   pnh_.param("verbose", verbose_, false);
   pnh_.param("stability_qp_max_iterations", stability_qp_max_iterations_, 20);
   pnh_.param("stability_qp_joint_step_limit", stability_qp_joint_step_limit_, 0.1);
@@ -129,6 +136,7 @@ void CopilotPlanner::loadParameters()
            publish_only_on_significant_root_motion_ ? "true" : "false");
   ROS_INFO("  publish_root_translation_threshold: %.3f m", publish_root_translation_threshold_);
   ROS_INFO("  publish_root_rotation_threshold: %.3f rad", publish_root_rotation_threshold_);
+  ROS_INFO("  publish_stability_metrics: %s", publish_stability_metrics_ ? "true" : "false");
   ROS_INFO("  verbose: %s", verbose_ ? "true" : "false");
   ROS_INFO("  stability_qp_max_iterations: %d", stability_qp_max_iterations_);
   ROS_INFO("  stability_qp_joint_step_limit: %.3f", stability_qp_joint_step_limit_);
@@ -299,6 +307,8 @@ void CopilotPlanner::jointStateCallback(const sensor_msgs::JointStateConstPtr& m
 
 void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
 {
+  publishCurrentStabilityMetrics();
+
   if (!latest_target_pose_)
   {
     return;
@@ -408,6 +418,36 @@ void CopilotPlanner::stabilityDebugTimerCallback(const ros::TimerEvent&)
   }
 
   checkStability(latest_published_joint_positions_);
+}
+
+void CopilotPlanner::publishStabilityMetrics(const StabilityMetrics& metrics)
+{
+  if (!publish_stability_metrics_)
+  {
+    return;
+  }
+
+  std_msgs::Float64 fc_rp_min_msg;
+  fc_rp_min_msg.data = metrics.fc_rp_min;
+  stability_fc_rp_min_pub_.publish(fc_rp_min_msg);
+
+  std_msgs::Float64 overlap_clearance_msg;
+  overlap_clearance_msg.data = metrics.overlap_clearance;
+  stability_overlap_clearance_pub_.publish(overlap_clearance_msg);
+}
+
+void CopilotPlanner::publishCurrentStabilityMetrics()
+{
+  if (!publish_stability_metrics_ || !has_latest_measured_link_joint_positions_)
+  {
+    return;
+  }
+
+  StabilityMetrics current_metrics;
+  if (evaluateStability(latest_measured_link_joint_positions_, current_metrics))
+  {
+    publishStabilityMetrics(current_metrics);
+  }
 }
 
 bool CopilotPlanner::shouldPublishFullStateTarget(const geometry_msgs::Pose& root_target_pose) const
