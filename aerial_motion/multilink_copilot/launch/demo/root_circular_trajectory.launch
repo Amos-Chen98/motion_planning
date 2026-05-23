@@ -6,13 +6,13 @@
     <arg name="frame_id" default="world" />
     <arg name="publish_rate_hz" default="40.0" />
     <arg name="circle_radius" default="0.50" />
-    <arg name="circle_period" default="40.0" />
+    <arg name="circle_period" default="30.0" />
     <arg name="marker_topic" default="root/trajectory_marker" />
     <arg name="marker_line_width_m" default="0.03" />
     <arg name="marker_sample_interval_m" default="0.05" />
-    <arg name="run_duration_sec" default="60.0" />
+    <arg name="run_duration_sec" default="30.0" />
     <arg name="record_rosbag" default="true" />
-    <arg name="rosbag_output_prefix" default="$(find multilink_copilot)/data/rosbag/typical_behavior/root_circular_trajectory" />
+    <arg name="rosbag_output_prefix" default="$(find multilink_copilot)/data/rosbag/stability_metrics/root_circular_trajectory" />
 
     <node pkg="rosbag" type="record" name="root_circular_trajectory_rosbag_record" output="screen"
           if="$(arg record_rosbag)"

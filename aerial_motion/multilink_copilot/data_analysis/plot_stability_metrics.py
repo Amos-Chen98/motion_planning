@@ -21,20 +21,23 @@ BAG_PATH = (
     PACKAGE_DIR
     / "data"
     / "rosbag"
-    / "typical_behavior"
-    / "root_circular_trajectory_2026-05-22-20-27-57.bag"
+    / "stability_metrics"
+    / "root_straight_trajectory_2026-05-23-14-06-48.bag"
 )
 OUTPUT_DIR = PACKAGE_DIR / "data" / "figures" / "stability_metrics"
 SAVE_FIGURE = True
 SHOW_PLOT = True
+OUTPUT_FORMATS = ("pdf", "svg")
 SAVE_DPI = 200
 FIGURE_WIDTH_INCH = 3.5
 FIGURE_HEIGHT_INCH = FIGURE_WIDTH_INCH * 3.0 / 4.0
 FONT_SIZE_PT = 9
 METRIC_COLOR = "#0072B2"
 THRESHOLD_COLOR = "#D55E00"
+Y_AXIS_BOTTOM_DATA_MAX_FRACTION = 0.7
+Y_AXIS_TOP_MARGIN_FRACTION = 0.06
 
-FC_RP_MIN_THRESHOLD = 3.2
+FC_RP_MIN_THRESHOLD = 4.0
 OVERLAP_CLEARANCE_THRESHOLD = 0.01
 
 
@@ -65,7 +68,7 @@ METRICS = (
         legend_label="Minimum roll/pitch feasible-control margin",
         threshold_label=(
             r"Threshold: $\underline{d}_{\mathrm{rp}} = "
-            r"\SI{3.2}{\newton\meter}$"
+            rf"\SI{{{FC_RP_MIN_THRESHOLD}}}{{\newton\meter}}$"
         ),
         threshold=FC_RP_MIN_THRESHOLD,
         output_suffix="fc_rp_min",
@@ -74,7 +77,10 @@ METRICS = (
         topic="/dragon/stability/overlap_clearance",
         ylabel=r"Rotor clearance [\si{\meter}]",
         legend_label="Minimum rotor clearance",
-        threshold_label=r"Threshold: $\underline{c} = \SI{0.01}{\meter}$",
+        threshold_label=(
+            r"Threshold: $\underline{c} = "
+            rf"\SI{{{OVERLAP_CLEARANCE_THRESHOLD}}}{{\meter}}$"
+        ),
         threshold=OVERLAP_CLEARANCE_THRESHOLD,
         output_suffix="overlap_clearance",
     ),
@@ -203,18 +209,20 @@ def configure_plot_style(plt) -> None:
             ),
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
+            "svg.fonttype": "none",
         }
     )
 
 
 def metric_y_limits(values: tuple[float, ...], threshold: float) -> tuple[float, float]:
-    y_min = min(min(values), threshold)
-    y_max = max(max(values), threshold)
-    span = y_max - y_min
-    if span <= 0.0:
-        span = max(abs(y_max), 1.0)
-    margin = span * 0.06
-    return y_min - margin, y_max + margin
+    data_max = max(values)
+    display_max = max(data_max, threshold)
+    if display_max <= 0.0:
+        display_max = 1.0
+
+    y_min = data_max * Y_AXIS_BOTTOM_DATA_MAX_FRACTION
+    y_max = display_max * (1.0 + Y_AXIS_TOP_MARGIN_FRACTION)
+    return y_min, y_max
 
 
 def plot_metric_series(series: MetricSeries, plt):
@@ -254,9 +262,15 @@ def plot_metric_series(series: MetricSeries, plt):
     return fig
 
 
-def resolve_output_pdf_path(output_dir: Path, bag_path: Path, config: MetricConfig) -> Path:
+def resolve_output_path(
+    output_dir: Path, bag_path: Path, config: MetricConfig, output_format: str
+) -> Path:
     directory = Path(output_dir).expanduser().resolve()
-    return directory / "{}_{}.pdf".format(Path(bag_path).stem, config.output_suffix)
+    return directory / "{}_{}.{}".format(
+        Path(bag_path).stem,
+        config.output_suffix,
+        output_format,
+    )
 
 
 def print_summary(series: MetricSeries) -> None:
@@ -300,10 +314,16 @@ def main() -> int:
             figures.append(fig)
 
             if SAVE_FIGURE:
-                output_path = resolve_output_pdf_path(OUTPUT_DIR, BAG_PATH, config)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                fig.savefig(output_path, dpi=SAVE_DPI)
-                print("Saved plot: {}".format(output_path))
+                for output_format in OUTPUT_FORMATS:
+                    output_path = resolve_output_path(
+                        OUTPUT_DIR,
+                        BAG_PATH,
+                        config,
+                        output_format,
+                    )
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    fig.savefig(output_path, dpi=SAVE_DPI, format=output_format)
+                    print("Saved plot: {}".format(output_path))
 
         if SHOW_PLOT:
             plt.show()
