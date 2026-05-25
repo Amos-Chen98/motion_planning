@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Plot six-dimensional joints_ctrl commands from one rosbag."""
+"""Plot six-dimensional joints_ctrl commands from rosbags."""
 
 from __future__ import annotations
 
@@ -15,25 +15,30 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PACKAGE_DIR = SCRIPT_DIR.parent
 
 # Manually edit these parameters before running the script.
-BAG_PATH = PACKAGE_DIR / "data" / "rosbag" / "2026-05-06-18-14-00_four_ring_success.bag"
+PLACEHOLDER_BAG_PATH = (
+    PACKAGE_DIR / "data" / "rosbag" / "2026-05-06-18-14-00_four_ring_success.bag"
+)
+BAG_PATHS = (
+    PLACEHOLDER_BAG_PATH,
+    PLACEHOLDER_BAG_PATH,
+    PLACEHOLDER_BAG_PATH,
+)
 TOPIC = "/dragon/joints_ctrl"
 DURATION_SECONDS = 60.0
 OUTPUT_DIR = PACKAGE_DIR / "data" / "figures" / "joint_cmd"
-OUTPUT_SUFFIX = "joint_cmd"
-OUTPUT_LEGEND_SUFFIX = "joint_cmd_legend"
+OUTPUT_BASENAME = "joint_cmd_three_runs"
 SAVE_FIGURE = True
 SHOW_PLOT = True
 SAVE_DPI = 200
-IEEE_DOUBLE_COLUMN_TEXT_WIDTH_INCH = 43.0 * 12.0 / 72.27
-FIGURE_WIDTH_INCH = IEEE_DOUBLE_COLUMN_TEXT_WIDTH_INCH / 3.0
-FIGURE_HEIGHT_INCH = FIGURE_WIDTH_INCH * 3.0 / 4.0
-LEGEND_FIGURE_WIDTH_INCH = IEEE_DOUBLE_COLUMN_TEXT_WIDTH_INCH
-LEGEND_FIGURE_HEIGHT_INCH = 0.34
+FIGURE_WIDTH_INCH = 3.5
+FIGURE_HEIGHT_INCH = FIGURE_WIDTH_INCH * 9.0 / 16.0
 FONT_SIZE_PT = 9
-AXES_LEFT = 0.24
+AXES_LEFT = 0.18
 AXES_RIGHT = 0.965
-AXES_BOTTOM = 0.22
-AXES_TOP = 0.96
+AXES_BOTTOM = 0.2
+AXES_TOP = 0.75
+Y_LABEL_X = 0.075
+LEGEND_ANCHOR_Y = 0.995
 JOINT_COLORS = (
     "#4477AA",
     "#EE6677",
@@ -171,7 +176,7 @@ def import_pyplot(use_noninteractive_backend: bool):
 def configure_plot_style(plt) -> None:
     plt.rcParams.update(
         {
-            "font.family": "Times New Roman",
+            "font.family": "serif",
             "font.serif": ["Times New Roman"],
             "font.size": FONT_SIZE_PT,
             "axes.labelsize": FONT_SIZE_PT,
@@ -184,88 +189,99 @@ def configure_plot_style(plt) -> None:
             "legend.fontsize": FONT_SIZE_PT,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
-            "svg.fonttype": "path",
+            "svg.fonttype": "none",
         }
     )
 
 
 def plot_joint_control_series(
-    series: JointControlSeries,
+    series_list: tuple[JointControlSeries, ...],
     duration: float,
     plt,
 ):
     configure_plot_style(plt)
 
-    fig, ax = plt.subplots(figsize=(FIGURE_WIDTH_INCH, FIGURE_HEIGHT_INCH))
+    fig, axes = plt.subplots(
+        len(series_list),
+        1,
+        sharex=True,
+        figsize=(FIGURE_WIDTH_INCH, FIGURE_HEIGHT_INCH),
+    )
+    if len(series_list) == 1:
+        axes = (axes,)
+
     fig.subplots_adjust(
         left=AXES_LEFT,
         right=AXES_RIGHT,
         bottom=AXES_BOTTOM,
         top=AXES_TOP,
+        hspace=0.18,
+    )
+    fig.text(
+        Y_LABEL_X,
+        0.47,
+        "Joint command [rad]",
+        rotation="vertical",
+        ha="center",
+        va="center",
+        fontsize=FONT_SIZE_PT,
     )
 
     linestyles = ["-", "-", "-", "-", "-", "-"]
-    series_by_joint = list(zip(*series.positions))
-    for values, label, color, linestyle in zip(
-        series_by_joint,
-        JOINT_LABELS,
-        JOINT_COLORS,
-        linestyles,
-    ):
-        ax.plot(
-            series.times,
-            values,
-            label=label,
-            color=color,
-            linestyle=linestyle,
-            linewidth=1.0,
-        )
 
-    ax.axhline(0.0, color="0.35", linewidth=0.55, alpha=0.55)
-    ax.grid(True, which="major", color="0.82", linewidth=0.4, alpha=0.7)
-    ax.set_axisbelow(True)
+    for ax, series in zip(axes, series_list):
+        series_by_joint = list(zip(*series.positions))
+        for values, label, color, linestyle in zip(
+            series_by_joint,
+            JOINT_LABELS,
+            JOINT_COLORS,
+            linestyles,
+        ):
+            ax.plot(
+                series.times,
+                values,
+                label=label,
+                color=color,
+                linestyle=linestyle,
+                linewidth=1.0,
+            )
 
-    x_max = series.times[-1] if series.exhausted_before_requested_end else duration
+        ax.axhline(0.0, color="0.35", linewidth=0.55, alpha=0.55)
+        ax.grid(True, which="major", color="0.82", linewidth=0.4, alpha=0.7)
+        ax.set_axisbelow(True)
+
+    x_max = max(
+        series.times[-1] if series.exhausted_before_requested_end else duration
+        for series in series_list
+    )
     if x_max <= 0.0:
         x_max = 1.0
 
-    ax.set_xlim(0.0, x_max)
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Joint command [rad]")
-    return fig
+    axes[-1].set_xlim(0.0, x_max)
+    axes[-1].set_xlabel("Time [s]")
 
-
-def plot_joint_control_legend(plt):
-    configure_plot_style(plt)
-
-    from matplotlib.lines import Line2D
-
-    fig = plt.figure(figsize=(LEGEND_FIGURE_WIDTH_INCH, LEGEND_FIGURE_HEIGHT_INCH))
-    linestyles = ["-", "-", "-", "-", "-", "-"]
-    handles = [
-        Line2D([0], [0], color=color, linestyle=linestyle, linewidth=1.0)
-        for color, linestyle in zip(JOINT_COLORS, linestyles)
-    ]
+    handles, labels = axes[0].get_legend_handles_labels()
+    legend_order = [0, 1, 2, 3, 4, 5]
     fig.legend(
-        handles,
-        JOINT_LABELS,
-        loc="center",
-        ncol=len(JOINT_LABELS),
+        [handles[index] for index in legend_order],
+        [labels[index] for index in legend_order],
+        loc="upper center",
+        bbox_to_anchor=((AXES_LEFT + AXES_RIGHT) * 0.5, LEGEND_ANCHOR_Y),
+        ncol=3,
         frameon=True,
         framealpha=0.95,
         borderpad=0.3,
         labelspacing=0.2,
         handlelength=1.2,
-        handletextpad=0.8,
-        columnspacing=1.0,
+        handletextpad=0.35,
+        columnspacing=0.65,
     )
     return fig
 
 
-def resolve_output_svg_path(output_dir: Path, bag_path: Path, output_suffix: str) -> Path:
+def resolve_output_svg_path(output_dir: Path, output_basename: str) -> Path:
     directory = Path(output_dir).expanduser().resolve()
-    bag_stem = Path(bag_path).expanduser().resolve().stem
-    return directory / "{}_{}.svg".format(bag_stem, output_suffix)
+    return directory / "{}.svg".format(output_basename)
 
 
 def print_summary(series: JointControlSeries, duration: float) -> None:
@@ -296,35 +312,27 @@ def print_summary(series: JointControlSeries, duration: float) -> None:
 
 def main() -> int:
     try:
-        series = load_joint_control_series(BAG_PATH, TOPIC, DURATION_SECONDS)
-        print("Bag: {}".format(Path(BAG_PATH).expanduser().resolve()))
-        print_summary(series, DURATION_SECONDS)
+        series_list = tuple(
+            load_joint_control_series(bag_path, TOPIC, DURATION_SECONDS)
+            for bag_path in BAG_PATHS
+        )
+        for bag_path, series in zip(BAG_PATHS, series_list):
+            print("Bag: {}".format(Path(bag_path).expanduser().resolve()))
+            print_summary(series, DURATION_SECONDS)
 
         plt = import_pyplot(not SHOW_PLOT)
-        fig = plot_joint_control_series(series, DURATION_SECONDS, plt)
-        legend_fig = plot_joint_control_legend(plt)
+        fig = plot_joint_control_series(series_list, DURATION_SECONDS, plt)
 
         if SAVE_FIGURE:
-            output_path = resolve_output_svg_path(OUTPUT_DIR, BAG_PATH, OUTPUT_SUFFIX)
+            output_path = resolve_output_svg_path(OUTPUT_DIR, OUTPUT_BASENAME)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            plt.rcParams["svg.fonttype"] = "path"
             fig.savefig(output_path, dpi=SAVE_DPI)
             print("Saved plot: {}".format(output_path))
-
-            legend_output_path = resolve_output_svg_path(
-                OUTPUT_DIR,
-                BAG_PATH,
-                OUTPUT_LEGEND_SUFFIX,
-            )
-            plt.rcParams["svg.fonttype"] = "path"
-            legend_fig.savefig(legend_output_path, dpi=SAVE_DPI)
-            print("Saved legend: {}".format(legend_output_path))
 
         if SHOW_PLOT:
             plt.show()
 
         plt.close(fig)
-        plt.close(legend_fig)
         return 0
     except (RuntimeError, rosbag.ROSBagException) as exc:
         print("error: {}".format(exc), file=sys.stderr)
