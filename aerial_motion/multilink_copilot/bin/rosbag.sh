@@ -52,6 +52,8 @@ topics=(
   "$robot_ns/uav/nav"
   "$robot_ns/uav_info"
   "$robot_ns/uav_power"
+  "$robot_ns/stability/fc_rp_min"
+  "$robot_ns/stability/overlap_clearance"
   "/waypoint/pose_0"
   "/waypoint/pose_1"
   "/waypoint/pose_2"
