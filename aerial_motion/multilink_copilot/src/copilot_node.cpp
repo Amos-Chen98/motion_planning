@@ -3,6 +3,7 @@
 
 #include <multilink_copilot/copilot.h>
 
+#include <kdl/frames.hpp>
 #include <std_msgs/Float64.h>
 #include <tf/transform_datatypes.h>
 
@@ -107,6 +108,9 @@ void CopilotPlanner::loadParameters()
   pnh_.param("publish_only_on_significant_root_motion", publish_only_on_significant_root_motion_, false);
   pnh_.param("publish_root_translation_threshold", publish_root_translation_threshold_, 0.05);
   pnh_.param("publish_root_rotation_threshold", publish_root_rotation_threshold_, 0.0872664626);
+  pnh_.param("snake_ik_singularity_xz_norm_threshold", snake_ik_singularity_xz_norm_threshold_, 0.10);
+  pnh_.param("max_joint_step_before_publish", max_joint_step_before_publish_, 0.50);
+  pnh_.param("max_baselink_tilt_before_publish", max_baselink_tilt_before_publish_, 1.20);
   pnh_.param("publish_stability_metrics", publish_stability_metrics_, false);
   pnh_.param("verbose", verbose_, false);
   pnh_.param("stability_qp_max_iterations", stability_qp_max_iterations_, 20);
@@ -136,6 +140,9 @@ void CopilotPlanner::loadParameters()
            publish_only_on_significant_root_motion_ ? "true" : "false");
   ROS_INFO("  publish_root_translation_threshold: %.3f m", publish_root_translation_threshold_);
   ROS_INFO("  publish_root_rotation_threshold: %.3f rad", publish_root_rotation_threshold_);
+  ROS_INFO("  snake_ik_singularity_xz_norm_threshold: %.3f", snake_ik_singularity_xz_norm_threshold_);
+  ROS_INFO("  max_joint_step_before_publish: %.3f rad", max_joint_step_before_publish_);
+  ROS_INFO("  max_baselink_tilt_before_publish: %.3f rad", max_baselink_tilt_before_publish_);
   ROS_INFO("  publish_stability_metrics: %s", publish_stability_metrics_ ? "true" : "false");
   ROS_INFO("  verbose: %s", verbose_ ? "true" : "false");
   ROS_INFO("  stability_qp_max_iterations: %d", stability_qp_max_iterations_);
@@ -371,8 +378,11 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
     return;
   }
 
-  latest_published_joint_positions_ = stable_joint_positions;
-  has_latest_published_joint_positions_ = true;
+  if (!passesFullStateTargetSafetyChecks(root_target_pose, stable_joint_positions))
+  {
+    trajectory_viz_pub_.publish(getTrajectoryVisualization());
+    return;
+  }
 
   if (verbose_ && !stability_debug_timer_started_)
   {
@@ -406,6 +416,8 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   }
 
   full_state_target_pub_.publish(full_state_msg);
+  latest_published_joint_positions_ = stable_joint_positions;
+  has_latest_published_joint_positions_ = true;
   recordPublishedRootPose(root_target_pose);
   trajectory_viz_pub_.publish(getTrajectoryVisualization());
 }
@@ -481,6 +493,65 @@ bool CopilotPlanner::shouldPublishFullStateTarget(const geometry_msgs::Pose& roo
   previous_orientation.normalize();
   const double rotation_delta = previous_orientation.angleShortestPath(current_orientation);
   return rotation_delta > publish_root_rotation_threshold_;
+}
+
+bool CopilotPlanner::passesFullStateTargetSafetyChecks(const geometry_msgs::Pose& root_target_pose,
+                                                       const Eigen::VectorXd& joint_positions) const
+{
+  const Eigen::VectorXd clamped_joint_positions = clampLinkJointPositions(joint_positions);
+
+  if (max_joint_step_before_publish_ > 0.0 && has_latest_published_joint_positions_ &&
+      latest_published_joint_positions_.size() == clamped_joint_positions.size())
+  {
+    for (int i = 0; i < clamped_joint_positions.size(); ++i)
+    {
+      const double joint_step = std::abs(clamped_joint_positions(i) - latest_published_joint_positions_(i));
+      if (joint_step > max_joint_step_before_publish_)
+      {
+        const std::string joint_name =
+            i < static_cast<int>(link_joint_names_.size()) ? link_joint_names_.at(i) :
+                                                              std::string("joint_index_") + std::to_string(i);
+        ROS_WARN_THROTTLE(0.5,
+                          "[CopilotPlanner] Skipping full_state_target: %s step %.3f rad exceeds %.3f rad",
+                          joint_name.c_str(), joint_step, max_joint_step_before_publish_);
+        return false;
+      }
+    }
+  }
+
+  if (max_baselink_tilt_before_publish_ > 0.0)
+  {
+    const geometry_msgs::Quaternion& root_quat_msg = root_target_pose.orientation;
+    const double quat_norm =
+        std::sqrt(root_quat_msg.x * root_quat_msg.x + root_quat_msg.y * root_quat_msg.y +
+                  root_quat_msg.z * root_quat_msg.z + root_quat_msg.w * root_quat_msg.w);
+
+    KDL::Rotation root_rotation = KDL::Rotation::Identity();
+    if (quat_norm > 1e-12)
+    {
+      root_rotation = KDL::Rotation::Quaternion(root_quat_msg.x / quat_norm, root_quat_msg.y / quat_norm,
+                                                root_quat_msg.z / quat_norm, root_quat_msg.w / quat_norm);
+    }
+
+    const KDL::Frame root_to_baselink_frame =
+        dragon_robot_model_->forwardKinematics<KDL::Frame>(dragon_robot_model_->getBaselinkName(),
+                                                           buildUpdatedJointPositions(clamped_joint_positions));
+    const KDL::Rotation world_baselink_rotation = root_rotation * root_to_baselink_frame.M;
+
+    double roll, pitch, yaw;
+    world_baselink_rotation.GetRPY(roll, pitch, yaw);
+    const double max_tilt = std::max(std::abs(roll), std::abs(pitch));
+    if (max_tilt > max_baselink_tilt_before_publish_)
+    {
+      ROS_WARN_THROTTLE(0.5,
+                        "[CopilotPlanner] Skipping full_state_target: predicted baselink tilt %.3f rad exceeds "
+                        "%.3f rad (roll: %.3f, pitch: %.3f)",
+                        max_tilt, max_baselink_tilt_before_publish_, roll, pitch);
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void CopilotPlanner::recordPublishedRootPose(const geometry_msgs::Pose& root_target_pose)

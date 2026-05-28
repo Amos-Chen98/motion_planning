@@ -520,12 +520,25 @@ Eigen::VectorXd CopilotPlanner::computeJointAnglesFromSnakeTarget(const std::vec
 
     const double joint_yaw = std::asin(clampUnit(desired_next_direction_local.y()));
     const double xz_norm = std::hypot(desired_next_direction_local.x(), desired_next_direction_local.z());
-    const double joint_pitch =
-        xz_norm < kDirectionNormEpsilon ? 0.0 : std::atan2(-desired_next_direction_local.z(),
-                                                           desired_next_direction_local.x());
 
     const int pitch_joint_index =
         i < pitch_joint_local_indices_.size() ? pitch_joint_local_indices_.at(i) : -1;
+    double joint_pitch = 0.0;
+    if (snake_ik_singularity_xz_norm_threshold_ > 0.0 &&
+        xz_norm < snake_ik_singularity_xz_norm_threshold_)
+    {
+      joint_pitch = getReferenceJointPosition(pitch_joint_index);
+      ROS_WARN_THROTTLE(0.5,
+                        "[CopilotPlanner] Holding pitch joint near snake IK singularity "
+                        "(segment: %zu, xz_norm: %.4f, threshold: %.4f)",
+                        i, xz_norm, snake_ik_singularity_xz_norm_threshold_);
+    }
+    else
+    {
+      joint_pitch = xz_norm < kDirectionNormEpsilon ? 0.0 : std::atan2(-desired_next_direction_local.z(),
+                                                                       desired_next_direction_local.x());
+    }
+
     if (pitch_joint_index >= 0 && pitch_joint_index < link_joint_num_)
     {
       joint_positions(pitch_joint_index) = joint_pitch;
@@ -581,6 +594,26 @@ Eigen::VectorXd CopilotPlanner::computeWarmupJointPositions(const std::vector<Ei
   }
 
   return clampLinkJointPositions(desired_joint_positions);
+}
+
+double CopilotPlanner::getReferenceJointPosition(int local_joint_index) const
+{
+  if (local_joint_index < 0 || local_joint_index >= link_joint_num_)
+  {
+    return 0.0;
+  }
+
+  if (has_latest_published_joint_positions_ && latest_published_joint_positions_.size() == link_joint_num_)
+  {
+    return latest_published_joint_positions_(local_joint_index);
+  }
+
+  if (has_latest_measured_link_joint_positions_ && latest_measured_link_joint_positions_.size() == link_joint_num_)
+  {
+    return latest_measured_link_joint_positions_(local_joint_index);
+  }
+
+  return 0.0;
 }
 
 geometry_msgs::Pose CopilotPlanner::convertLink1TailPoseToRootPose(const geometry_msgs::Pose& pose) const

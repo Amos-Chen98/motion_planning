@@ -7,6 +7,11 @@ trajectory_buffer_max_length: 10.0
 
 # Snake motion
 snake_mode_enabled: true
+snake_ik_singularity_xz_norm_threshold: 0.10
+
+# Output safety gates for full_state_target.
+max_joint_step_before_publish: 0.50
+max_baselink_tilt_before_publish: 1.20
 
 # Publish gating for full_state_target.
 # When enabled, the planner only publishes after the root pose has moved enough

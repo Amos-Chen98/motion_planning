@@ -111,6 +111,9 @@ private:
   bool publish_only_on_significant_root_motion_;
   double publish_root_translation_threshold_;
   double publish_root_rotation_threshold_;
+  double snake_ik_singularity_xz_norm_threshold_;
+  double max_joint_step_before_publish_;
+  double max_baselink_tilt_before_publish_;
   bool publish_stability_metrics_;
   bool verbose_;
   int stability_qp_max_iterations_;
@@ -206,11 +209,14 @@ private:
   KDL::JntArray buildUpdatedJointPositions(const Eigen::VectorXd& joint_positions) const;
   Eigen::VectorXd clampLinkJointPositions(const Eigen::VectorXd& joint_positions) const;
   Eigen::VectorXd getCurrentLinkJointPositions() const;
+  double getReferenceJointPosition(int local_joint_index) const;
   Eigen::VectorXd buildDefaultReferenceJointPositions() const;
   geometry_msgs::Pose convertLink1TailPoseToRootPose(const geometry_msgs::Pose& pose) const;
   Eigen::Vector3d getLink1TailPositionFromPose(const geometry_msgs::Pose& pose) const;
   Eigen::Vector3d getRootPositionFromLink1TailPose(const geometry_msgs::Pose& pose) const;
   bool shouldPublishFullStateTarget(const geometry_msgs::Pose& root_target_pose) const;
+  bool passesFullStateTargetSafetyChecks(const geometry_msgs::Pose& root_target_pose,
+                                         const Eigen::VectorXd& joint_positions) const;
   void recordPublishedRootPose(const geometry_msgs::Pose& root_target_pose);
   void publishStabilityMetrics(const StabilityMetrics& metrics);
   void publishCurrentStabilityMetrics();
