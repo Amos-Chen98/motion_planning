@@ -22,23 +22,35 @@ BAG_PATH = (
     / "data"
     / "rosbag"
     / "stability_metrics"
-    / "root_straight_trajectory_2026-05-23-14-06-48.bag"
+    / "root_circular_trajectory_2026-05-23-15-22-07.bag"
 )
 OUTPUT_DIR = PACKAGE_DIR / "data" / "figures" / "stability_metrics"
 SAVE_FIGURE = True
 SHOW_PLOT = True
 OUTPUT_FORMATS = ("pdf", "svg")
 SAVE_DPI = 200
-FIGURE_WIDTH_INCH = 3.5
+# IEEE two-column text width; a quarter-page figure occupies 1/4 of it so that
+# four such figures fit across the double-column page width.
+IEEE_PAGE_WIDTH_INCH = 7.16
+FIGURE_WIDTH_INCH = IEEE_PAGE_WIDTH_INCH / 4.0
 FIGURE_HEIGHT_INCH = FIGURE_WIDTH_INCH * 3.0 / 4.0
-FONT_SIZE_PT = 9
+FONT_SIZE_PT = 7
+LEGEND_FONT_SIZE_PT = 5.5
+# The y-axis label is the terse symbol + unit, so the left margin only needs to
+# clear the tick labels and the rotated symbol; this leaves more axes width for
+# the descriptive legend below. It is kept wide enough for the four-character
+# tick labels (e.g. "0.40") of the clearance panel.
+AXES_LEFT = 0.24
+AXES_RIGHT = 0.985
+AXES_BOTTOM = 0.25
+AXES_TOP = 0.95
 METRIC_COLOR = "#0072B2"
 THRESHOLD_COLOR = "#D55E00"
-Y_AXIS_BOTTOM_DATA_MAX_FRACTION = 0.7
+Y_AXIS_BOTTOM_DATA_MAX_FRACTION = 0.8
 Y_AXIS_TOP_MARGIN_FRACTION = 0.06
 
-FC_RP_MIN_THRESHOLD = 4.0
-OVERLAP_CLEARANCE_THRESHOLD = 0.01
+FC_RP_MIN_THRESHOLD = 3.0
+OVERLAP_CLEARANCE_THRESHOLD = 0.3
 
 
 @dataclass(frozen=True)
@@ -64,10 +76,14 @@ class MetricSeries:
 METRICS = (
     MetricConfig(
         topic="/dragon/stability/fc_rp_min",
-        ylabel=r"Roll/pitch feasible-control margin [\si{\newton\meter}]",
-        legend_label="Minimum roll/pitch feasible-control margin",
+        ylabel=r"$d_{\mathrm{rp}}$ [\si{\newton\meter}]",
+        # Symbols follow Table~\ref{tab:copilot_parameters}: $d_{\mathrm{rp}}$ is
+        # the roll/pitch feasible-control margin and $\underline{d}_{\mathrm{rp}}$
+        # is its lower bound. Each legend entry pairs a plain-language name with
+        # the symbol so the figure is readable without the table.
+        legend_label=r"Feasible-control margin $d_{\mathrm{rp}}$",
         threshold_label=(
-            r"Threshold: $\underline{d}_{\mathrm{rp}} = "
+            r"Lower bound $\underline{d}_{\mathrm{rp}}="
             rf"\SI{{{FC_RP_MIN_THRESHOLD}}}{{\newton\meter}}$"
         ),
         threshold=FC_RP_MIN_THRESHOLD,
@@ -75,10 +91,12 @@ METRICS = (
     ),
     MetricConfig(
         topic="/dragon/stability/overlap_clearance",
-        ylabel=r"Rotor clearance [\si{\meter}]",
-        legend_label="Minimum rotor clearance",
+        ylabel=r"$c$ [\si{\meter}]",
+        # $c$ is the rotor clearance and $\underline{c}$ its threshold, matching
+        # Table~\ref{tab:copilot_parameters}.
+        legend_label=r"Rotor clearance $c$",
         threshold_label=(
-            r"Threshold: $\underline{c} = "
+            r"Clearance threshold $\underline{c}="
             rf"\SI{{{OVERLAP_CLEARANCE_THRESHOLD}}}{{\meter}}$"
         ),
         threshold=OVERLAP_CLEARANCE_THRESHOLD,
@@ -195,7 +213,7 @@ def configure_plot_style(plt) -> None:
             "savefig.facecolor": "white",
             "xtick.labelsize": FONT_SIZE_PT,
             "ytick.labelsize": FONT_SIZE_PT,
-            "legend.fontsize": FONT_SIZE_PT,
+            "legend.fontsize": LEGEND_FONT_SIZE_PT,
             "text.usetex": True,
             "text.latex.preamble": "\n".join(
                 (
@@ -209,7 +227,7 @@ def configure_plot_style(plt) -> None:
             ),
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
-            "svg.fonttype": "none",
+            "svg.fonttype": "path",
         }
     )
 
@@ -229,7 +247,12 @@ def plot_metric_series(series: MetricSeries, plt):
     configure_plot_style(plt)
 
     fig, ax = plt.subplots(figsize=(FIGURE_WIDTH_INCH, FIGURE_HEIGHT_INCH))
-    fig.subplots_adjust(left=0.18, right=0.98, bottom=0.18, top=0.96)
+    fig.subplots_adjust(
+        left=AXES_LEFT,
+        right=AXES_RIGHT,
+        bottom=AXES_BOTTOM,
+        top=AXES_TOP,
+    )
 
     ax.plot(
         series.times,
@@ -254,9 +277,21 @@ def plot_metric_series(series: MetricSeries, plt):
 
     ax.set_xlim(0.0, x_max)
     ax.set_ylim(*metric_y_limits(series.values, series.config.threshold))
-    ax.set_xlabel(r"Time [\si{\second}]")
+    ax.set_xlabel(r"$t$ [\si{\second}]", labelpad=1.0)
     ax.set_ylabel(series.config.ylabel)
-    ax.legend(loc="best", frameon=True, framealpha=0.85, edgecolor="0.75")
+    ax.tick_params(axis="both", which="major", pad=1.0, length=2.0, width=0.6)
+    ax.legend(
+        loc="lower center",
+        ncol=1,
+        frameon=True,
+        framealpha=0.85,
+        edgecolor="0.75",
+        borderpad=0.2,
+        handlelength=1.0,
+        handletextpad=0.35,
+        columnspacing=0.65,
+        labelspacing=0.2,
+    )
     ax.grid(True, which="major", color="0.82", linewidth=0.45, alpha=0.7)
     ax.set_axisbelow(True)
     return fig
