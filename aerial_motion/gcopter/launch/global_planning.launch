@@ -36,7 +36,7 @@
     <node name="rviz" pkg="rviz" type="rviz" output="screen" args="-d $(find gcopter)/rviz/global_planning.rviz">
     </node>
 
-    <!-- <node name="pos_vel_plot" pkg="rqt_plot" type="rqt_plot" args="/visualizer/speed /visualizer/total_thrust /visualizer/tilt_angle /visualizer/body_rate">
+    <!-- <node name="pos_vel_plot" pkg="rqt_plot" type="rqt_plot" args="/visualizer/speed /visualizer/tilt_angle /visualizer/body_rate">
     </node> -->
 
     <include file="$(find gcopter)/launch/global_planning_core.launch">

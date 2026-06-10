@@ -7,7 +7,7 @@ This is a ROS catkin package. The main configuration files are:
 - `CMakeLists.txt`: builds the `global_planning` node and links Eigen3, OMPL, and ROS components.
 - `package.xml`: declares ROS package dependencies.
 - `config/global_planning.yaml`: stores global planning parameters.
-- `launch/global_planning.launch`: starts the mock map generator, planner node, RViz, and `rqt_plot`.
+- `launch/global_planning.launch`: starts the mock map generator, planner node, and RViz.
 - `launch/global_planning_core.launch`: reusable headless launch that starts only the planner node.
 
 ### System Dependencies
@@ -31,7 +31,6 @@ The demo launch file starts:
 - `gcopter/global_planning`
 - `mockamap/mockamap_node`
 - `rviz`
-- `rqt_plot`
 
 Make sure the `mockamap` package is available in the same catkin workspace. In this repository, it is located at:
 
@@ -51,8 +50,8 @@ Topics (set via `<remap>`, see `launch/global_planning_core.launch`):
 
 - `map`: input point cloud map topic. Default: `/voxel_map`.
 - `target`: RViz goal topic. Default: `/move_base_simple/goal`.
-- `odom`: odometry used as the planning start position. Planning always starts from the latest odometry; a target is ignored until a valid odometry message is received.
-- `command`: `geometry_msgs/PoseStamped` position commands are always published (streamed at `CommandHz` along the planned trajectory).
+- `odom`: odometry used as the planning start position. Planning always starts from the latest odometry; a target is ignored until a valid odometry message is received. Default: `quadrotor/uav/cog/odom`.
+- `command`: `geometry_msgs/PoseStamped` position commands are always published (streamed at `CommandHz` along the planned trajectory). Default: `quadrotor/target_pose`.
 
 Common parameters:
 
@@ -65,15 +64,14 @@ Common parameters:
 - `UseTargetZ`: use the target message's `position.z` as the goal height (for a 3D goal source such as an interactive marker). When neither `UseFixedTargetHeight` nor `UseTargetZ` is set, the height is derived from the RViz goal orientation.
 - `TimeoutRRT`: RRT search timeout.
 - `MaxVelMag`, `MaxBdrMag`, `MaxTiltAngle`: velocity, body-rate, and tilt constraints.
-- `MinThrust`, `MaxThrust`, `VehicleMass`, `GravAcc`: vehicle dynamics parameters.
-- `HorizDrag`, `VertDrag`, `ParasDrag`: drag parameters.
+- `GravAcc`: gravitational acceleration.
 - `WeightT`, `ChiVec`, `SmoothingEps`, `IntegralIntervs`, `RelCostTol`: optimizer parameters.
 
 ### Reusable Headless Launch
 
 Use `global_planning_core.launch` when another package provides the map,
 visualization, and robot stack. This launch starts only `gcopter/global_planning`;
-it does not start the mock map generator, RViz, or `rqt_plot`.
+it does not start the mock map generator or RViz.
 
 The planner always starts planning from the latest robot odometry and always
 publishes `geometry_msgs/PoseStamped` position commands. A target is ignored
@@ -101,12 +99,43 @@ roslaunch gcopter global_planning.launch
 ```
 
 This launch starts the mock map generator and `global_planning_core.launch`, and
-adds RViz plus `rqt_plot` for the visual demo.
+adds RViz for the visual demo.
 
-RViz and `rqt_plot` will open after launch. In RViz, use `2D Nav Goal`:
+The planner ignores targets until a valid odometry message is received. The demo
+does not include a robot, so after launching, publish a fake robot pose on the
+odometry topic from another terminal:
+
+```bash
+rostopic pub -r 10 /quadrotor/uav/cog/odom nav_msgs/Odometry "header:
+  seq: 0
+  stamp:
+    secs: 0
+    nsecs: 0
+  frame_id: ''
+child_frame_id: ''
+pose:
+  pose:
+    position: {x: 0.0, y: 0.0, z: 1.0}
+    orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
+  covariance: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+twist:
+  twist:
+    linear: {x: 0.0, y: 0.0, z: 0.0}
+    angular: {x: 0.0, y: 0.0, z: 0.0}
+  covariance: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0]"
+```
+
+Then, in RViz, use `2D Nav Goal`:
 
 1. Click to set the goal point and trigger planning. The start point is taken
    from the latest robot odometry.
 2. Continue clicking to set new goals.
 
-The `2D Nav Goal` arrow direction determines the relative target height. The planned trajectory is displayed in RViz. Speed, total thrust, tilt angle, and body rate are published for display in `rqt_plot`.
+The `2D Nav Goal` arrow direction determines the relative target height. The
+planned trajectory is displayed in RViz. Speed, tilt angle, and body rate are
+published on `/visualizer/speed`, `/visualizer/tilt_angle`, and
+`/visualizer/body_rate`, and can be plotted with `rqt_plot`.

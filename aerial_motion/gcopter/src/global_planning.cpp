@@ -32,14 +32,7 @@ struct Config
     double maxVelMag;
     double maxBdrMag;
     double maxTiltAngle;
-    double minThrust;
-    double maxThrust;
-    double vehicleMass;
     double gravAcc;
-    double horizDrag;
-    double vertDrag;
-    double parasDrag;
-    double speedEps;
     double weightT;
     std::vector<double> chiVec;
     double smoothingEps;
@@ -61,14 +54,7 @@ struct Config
         nh_priv.getParam("MaxVelMag", maxVelMag);
         nh_priv.getParam("MaxBdrMag", maxBdrMag);
         nh_priv.getParam("MaxTiltAngle", maxTiltAngle);
-        nh_priv.getParam("MinThrust", minThrust);
-        nh_priv.getParam("MaxThrust", maxThrust);
-        nh_priv.getParam("VehicleMass", vehicleMass);
         nh_priv.getParam("GravAcc", gravAcc);
-        nh_priv.getParam("HorizDrag", horizDrag);
-        nh_priv.getParam("VertDrag", vertDrag);
-        nh_priv.getParam("ParasDrag", parasDrag);
-        nh_priv.getParam("SpeedEps", speedEps);
         nh_priv.getParam("WeightT", weightT);
         nh_priv.getParam("ChiVec", chiVec);
         nh_priv.getParam("SmoothingEps", smoothingEps);
@@ -139,8 +125,7 @@ public:
 
         commandPub = nh.advertise<geometry_msgs::PoseStamped>("command", 10);
 
-        flatmap.reset(config.vehicleMass, config.gravAcc, config.horizDrag,
-                      config.vertDrag, config.parasDrag, config.speedEps);
+        flatmap.reset(config.gravAcc);
 
         const double hz = config.commandHz > 0.0 ? config.commandHz : 40.0;
         commandTimer = nh.createTimer(ros::Duration(1.0 / hz),
@@ -236,30 +221,18 @@ public:
 
                 gcopter::GCOPTER_PolytopeSFC gcopter;
 
-                // magnitudeBounds = [v_max, omg_max, theta_max, thrust_min, thrust_max]^T
-                // penaltyWeights = [pos_weight, vel_weight, omg_weight, theta_weight, thrust_weight]^T
-                // physicalParams = [vehicle_mass, gravitational_acceleration, horitonral_drag_coeff,
-                //                   vertical_drag_coeff, parasitic_drag_coeff, speed_smooth_factor]^T
+                // magnitudeBounds = [v_max, omg_max, theta_max]^T
+                // penaltyWeights = [pos_weight, vel_weight, omg_weight, theta_weight]^T
                 // initialize some constraint parameters
-                Eigen::VectorXd magnitudeBounds(5);
-                Eigen::VectorXd penaltyWeights(5);
-                Eigen::VectorXd physicalParams(6);
+                Eigen::VectorXd magnitudeBounds(3);
+                Eigen::VectorXd penaltyWeights(4);
                 magnitudeBounds(0) = config.maxVelMag;
                 magnitudeBounds(1) = config.maxBdrMag;
                 magnitudeBounds(2) = config.maxTiltAngle;
-                magnitudeBounds(3) = config.minThrust;
-                magnitudeBounds(4) = config.maxThrust;
                 penaltyWeights(0) = (config.chiVec)[0];
                 penaltyWeights(1) = (config.chiVec)[1];
                 penaltyWeights(2) = (config.chiVec)[2];
                 penaltyWeights(3) = (config.chiVec)[3];
-                penaltyWeights(4) = (config.chiVec)[4];
-                physicalParams(0) = config.vehicleMass;
-                physicalParams(1) = config.gravAcc;
-                physicalParams(2) = config.horizDrag;
-                physicalParams(3) = config.vertDrag;
-                physicalParams(4) = config.parasDrag;
-                physicalParams(5) = config.speedEps;
                 const int quadratureRes = config.integralIntervs;
 
                 if (!gcopter.setup(config.weightT,
@@ -269,7 +242,7 @@ public:
                                    quadratureRes,
                                    magnitudeBounds,
                                    penaltyWeights,
-                                   physicalParams))
+                                   config.gravAcc))
                 {
                     return;
                 }
@@ -373,23 +346,19 @@ public:
     inline void publishDiagnostics(const double t,
                                    const Eigen::Vector3d &vel)
     {
-        double thr;
         Eigen::Vector4d quat;
         Eigen::Vector3d omg;
 
-        flatmap.forward(vel,
-                        traj.getAcc(t),
+        flatmap.forward(traj.getAcc(t),
                         traj.getJer(t),
                         0.0, 0.0,
-                        thr, quat, omg);
+                        quat, omg);
 
-        std_msgs::Float64 speedMsg, thrMsg, tiltMsg, bdrMsg;
+        std_msgs::Float64 speedMsg, tiltMsg, bdrMsg;
         speedMsg.data = vel.norm();
-        thrMsg.data = thr;
         tiltMsg.data = std::acos(1.0 - 2.0 * (quat(1) * quat(1) + quat(2) * quat(2)));
         bdrMsg.data = omg.norm();
         visualizer.speedPub.publish(speedMsg);
-        visualizer.thrPub.publish(thrMsg);
         visualizer.tiltPub.publish(tiltMsg);
         visualizer.bdrPub.publish(bdrMsg);
     }

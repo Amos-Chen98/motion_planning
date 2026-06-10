@@ -73,7 +73,6 @@ namespace gcopter
         int integralRes;
         Eigen::VectorXd magnitudeBd;
         Eigen::VectorXd penaltyWt;
-        Eigen::VectorXd physicalPm;
         double allocSpeed;
 
         lbfgs::lbfgs_parameter_t lbfgs_params;
@@ -319,10 +318,8 @@ namespace gcopter
             }
         }
 
-        // magnitudeBounds = [v_max, omg_max, theta_max, thrust_min, thrust_max]^T
-        // penaltyWeights = [pos_weight, vel_weight, omg_weight, theta_weight, thrust_weight]^T
-        // physicalParams = [vehicle_mass, gravitational_acceleration, horitonral_drag_coeff,
-        //                   vertical_drag_coeff, parasitic_drag_coeff, speed_smooth_factor]^T
+        // magnitudeBounds = [v_max, omg_max, theta_max]^T
+        // penaltyWeights = [pos_weight, vel_weight, omg_weight, theta_weight]^T
         static inline void attachPenaltyFunctional(const Eigen::VectorXd &T,
                                                    const Eigen::MatrixX3d &coeffs,
                                                    const Eigen::VectorXi &hIdx,
@@ -339,23 +336,18 @@ namespace gcopter
             const double velSqrMax = magnitudeBounds(0) * magnitudeBounds(0);
             const double omgSqrMax = magnitudeBounds(1) * magnitudeBounds(1);
             const double thetaMax = magnitudeBounds(2);
-            const double thrustMean = 0.5 * (magnitudeBounds(3) + magnitudeBounds(4));
-            const double thrustRadi = 0.5 * fabs(magnitudeBounds(4) - magnitudeBounds(3));
-            const double thrustSqrRadi = thrustRadi * thrustRadi;
 
             const double weightPos = penaltyWeights(0);
             const double weightVel = penaltyWeights(1);
             const double weightOmg = penaltyWeights(2);
             const double weightTheta = penaltyWeights(3);
-            const double weightThrust = penaltyWeights(4);
 
             Eigen::Vector3d pos, vel, acc, jer, sna;
-            Eigen::Vector3d totalGradPos, totalGradVel, totalGradAcc, totalGradJer;
+            Eigen::Vector3d totalGradAcc, totalGradJer;
             double totalGradPsi, totalGradPsiD;
-            double thr, cos_theta;
+            double cos_theta;
             Eigen::Vector4d quat;
             Eigen::Vector3d omg;
-            double gradThr;
             Eigen::Vector4d gradQuat;
             Eigen::Vector3d gradPos, gradVel, gradOmg;
 
@@ -364,9 +356,9 @@ namespace gcopter
             Eigen::Matrix<double, 6, 1> beta0, beta1, beta2, beta3, beta4;
             Eigen::Vector3d outerNormal;
             int K, L;
-            double violaPos, violaVel, violaOmg, violaTheta, violaThrust;
-            double violaPosPenaD, violaVelPenaD, violaOmgPenaD, violaThetaPenaD, violaThrustPenaD;
-            double violaPosPena, violaVelPena, violaOmgPena, violaThetaPena, violaThrustPena;
+            double violaPos, violaVel, violaOmg, violaTheta;
+            double violaPosPenaD, violaVelPenaD, violaOmgPenaD, violaThetaPenaD;
+            double violaPosPena, violaVelPena, violaOmgPena, violaThetaPena;
             double node, pena;
 
             const int pieceNum = T.size();
@@ -393,15 +385,13 @@ namespace gcopter
                     jer = c.transpose() * beta3;
                     sna = c.transpose() * beta4;
 
-                    flatMap.forward(vel, acc, jer, 0.0, 0.0, thr, quat, omg);
+                    flatMap.forward(acc, jer, 0.0, 0.0, quat, omg);
 
                     violaVel = vel.squaredNorm() - velSqrMax;
                     violaOmg = omg.squaredNorm() - omgSqrMax;
                     cos_theta = 1.0 - 2.0 * (quat(1) * quat(1) + quat(2) * quat(2));
                     violaTheta = acos(cos_theta) - thetaMax;
-                    violaThrust = (thr - thrustMean) * (thr - thrustMean) - thrustSqrRadi;
 
-                    gradThr = 0.0;
                     gradQuat.setZero();
                     gradPos.setZero(), gradVel.setZero(), gradOmg.setZero();
                     pena = 0.0;
@@ -439,25 +429,19 @@ namespace gcopter
                         pena += weightTheta * violaThetaPena;
                     }
 
-                    if (smoothedL1(violaThrust, smoothFactor, violaThrustPena, violaThrustPenaD))
-                    {
-                        gradThr += weightThrust * violaThrustPenaD * 2.0 * (thr - thrustMean);
-                        pena += weightThrust * violaThrustPena;
-                    }
-
-                    flatMap.backward(gradPos, gradVel, gradThr, gradQuat, gradOmg,
-                                     totalGradPos, totalGradVel, totalGradAcc, totalGradJer,
+                    flatMap.backward(gradQuat, gradOmg,
+                                     totalGradAcc, totalGradJer,
                                      totalGradPsi, totalGradPsiD);
 
                     node = (j == 0 || j == integralResolution) ? 0.5 : 1.0;
                     alpha = j * integralFrac;
-                    gradC.block<6, 3>(i * 6, 0) += (beta0 * totalGradPos.transpose() +
-                                                    beta1 * totalGradVel.transpose() +
+                    gradC.block<6, 3>(i * 6, 0) += (beta0 * gradPos.transpose() +
+                                                    beta1 * gradVel.transpose() +
                                                     beta2 * totalGradAcc.transpose() +
                                                     beta3 * totalGradJer.transpose()) *
                                                    node * step;
-                    gradT(i) += (totalGradPos.dot(vel) +
-                                 totalGradVel.dot(acc) +
+                    gradT(i) += (gradPos.dot(vel) +
+                                 gradVel.dot(acc) +
                                  totalGradAcc.dot(jer) +
                                  totalGradJer.dot(sna)) *
                                     alpha * node * step +
@@ -721,10 +705,8 @@ namespace gcopter
         }
 
     public:
-        // magnitudeBounds = [v_max, omg_max, theta_max, thrust_min, thrust_max]^T
-        // penaltyWeights = [pos_weight, vel_weight, omg_weight, theta_weight, thrust_weight]^T
-        // physicalParams = [vehicle_mass, gravitational_acceleration, horitonral_drag_coeff,
-        //                   vertical_drag_coeff, parasitic_drag_coeff, speed_smooth_factor]^T
+        // magnitudeBounds = [v_max, omg_max, theta_max]^T
+        // penaltyWeights = [pos_weight, vel_weight, omg_weight, theta_weight]^T
         inline bool setup(const double &timeWeight,
                           const Eigen::Matrix3d &initialPVA,
                           const Eigen::Matrix3d &terminalPVA,
@@ -734,7 +716,7 @@ namespace gcopter
                           const int &integralResolution,
                           const Eigen::VectorXd &magnitudeBounds,
                           const Eigen::VectorXd &penaltyWeights,
-                          const Eigen::VectorXd &physicalParams)
+                          const double &gravAcc)
         {
             rho = timeWeight;
             headPVA = initialPVA;
@@ -757,7 +739,6 @@ namespace gcopter
             integralRes = integralResolution;
             magnitudeBd = magnitudeBounds;
             penaltyWt = penaltyWeights;
-            physicalPm = physicalParams;
             allocSpeed = magnitudeBd(0) * 3.0;
 
             getShortestPath(headPVA.col(0), tailPVA.col(0),
@@ -792,8 +773,7 @@ namespace gcopter
 
             // Setup for MINCO_S3NU, FlatnessMap, and L-BFGS solver
             minco.setConditions(headPVA, tailPVA, pieceN);
-            flatmap.reset(physicalPm(0), physicalPm(1), physicalPm(2),
-                          physicalPm(3), physicalPm(4), physicalPm(5));
+            flatmap.reset(gravAcc);
 
             // Allocate temp variables
             points.resize(3, pieceN - 1);
