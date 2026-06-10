@@ -8,7 +8,7 @@ This is a ROS catkin package. The main configuration files are:
 - `package.xml`: declares ROS package dependencies.
 - `config/global_planning.yaml`: stores global planning parameters.
 - `launch/global_planning.launch`: starts the mock map generator, planner node, and RViz.
-- `launch/global_planning_core.launch`: reusable headless launch that starts only the planner node.
+- `launch/gcopter_planner.launch`: reusable headless launch that starts only the planner node.
 
 ### System Dependencies
 
@@ -46,7 +46,7 @@ Parameter file:
 config/global_planning.yaml
 ```
 
-Topics (set via `<remap>`, see `launch/global_planning_core.launch`):
+Topics (set via `<remap>`, see `launch/gcopter_planner.launch`):
 
 - `map`: input point cloud map topic. Default: `/voxel_map`.
 - `target`: RViz goal topic. Default: `/move_base_simple/goal`.
@@ -69,7 +69,7 @@ Common parameters:
 
 ### Reusable Headless Launch
 
-Use `global_planning_core.launch` when another package provides the map,
+Use `gcopter_planner.launch` when another package provides the map,
 visualization, and robot stack. This launch starts only `gcopter/global_planning`;
 it does not start the mock map generator or RViz.
 
@@ -80,7 +80,7 @@ until a valid odometry message has been received.
 Example closed-loop integration:
 
 ```bash
-roslaunch gcopter global_planning_core.launch \
+roslaunch gcopter gcopter_planner.launch \
   frame_id:=world \
   map_topic:=/pointcloud/output \
   target_topic:=/move_base_simple/goal \
@@ -98,7 +98,7 @@ source devel/setup.bash
 roslaunch gcopter global_planning.launch
 ```
 
-This launch starts the mock map generator and `global_planning_core.launch`, and
+This launch starts the mock map generator and `gcopter_planner.launch`, and
 adds RViz for the visual demo.
 
 The planner ignores targets until a valid odometry message is received. The demo
