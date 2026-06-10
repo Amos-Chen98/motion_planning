@@ -35,6 +35,8 @@
 #include <ompl/base/objectives/PathLengthOptimizationObjective.h>
 #include <ompl/base/DiscreteMotionValidator.h>
 
+#include <ros/console.h>
+
 #include <deque>
 #include <memory>
 #include <Eigen/Eigen>
@@ -94,6 +96,12 @@ namespace sfc_gen
 
         ompl::base::PlannerStatus solved;
         solved = planner->ompl::base::Planner::solve(timeout);
+
+        if (!solved || solved == ompl::base::PlannerStatus::APPROXIMATE_SOLUTION)
+        {
+            ROS_WARN("RRT failed to find an exact path within %.3fs (status: %s).",
+                     timeout, solved.asString().c_str());
+        }
 
         double cost = INFINITY;
         if (solved)

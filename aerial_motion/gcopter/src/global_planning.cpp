@@ -192,7 +192,7 @@ public:
                                                    startGoal[1],
                                                    voxelMap.getOrigin(),
                                                    voxelMap.getCorner(),
-                                                   &voxelMap, 0.01,
+                                                   &voxelMap, config.timeoutRRT,
                                                    route);
             std::vector<Eigen::MatrixX4d> hPolys;
             std::vector<Eigen::Vector3d> pc;
