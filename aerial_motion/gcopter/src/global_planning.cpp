@@ -10,8 +10,10 @@
 #include <ros/console.h>
 #include <geometry_msgs/Point.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <nav_msgs/Odometry.h>
 #include <sensor_msgs/PointCloud2.h>
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <string>
@@ -22,8 +24,7 @@
 
 struct Config
 {
-    std::string mapTopic;
-    std::string targetTopic;
+    std::string frameId;
     double dilateRadius;
     double voxelWidth;
     std::vector<double> mapBound;
@@ -44,11 +45,15 @@ struct Config
     double smoothingEps;
     int integralIntervs;
     double relCostTol;
+    double commandHz;
+    bool useFixedTargetHeight;
+    double targetHeight;
+    bool useTargetZ;
+    bool showPolytopeCorridor;
 
     Config(const ros::NodeHandle &nh_priv)
     {
-        nh_priv.getParam("MapTopic", mapTopic);
-        nh_priv.getParam("TargetTopic", targetTopic);
+        nh_priv.param<std::string>("FrameId", frameId, "odom");
         nh_priv.getParam("DilateRadius", dilateRadius);
         nh_priv.getParam("VoxelWidth", voxelWidth);
         nh_priv.getParam("MapBound", mapBound);
@@ -69,6 +74,11 @@ struct Config
         nh_priv.getParam("SmoothingEps", smoothingEps);
         nh_priv.getParam("IntegralIntervs", integralIntervs);
         nh_priv.getParam("RelCostTol", relCostTol);
+        nh_priv.param("CommandHz", commandHz, 40.0);
+        nh_priv.param("UseFixedTargetHeight", useFixedTargetHeight, false);
+        nh_priv.param("TargetHeight", targetHeight, 1.0);
+        nh_priv.param("UseTargetZ", useTargetZ, false);
+        nh_priv.param("ShowPolytopeCorridor", showPolytopeCorridor, true);
     }
 };
 
@@ -80,14 +90,23 @@ private:
     ros::NodeHandle nh;
     ros::Subscriber mapSub;
     ros::Subscriber targetSub;
+    ros::Subscriber odomSub;
+    ros::Publisher commandPub;
 
     bool mapInitialized;
+    bool odomReceived;
+    bool commandActive;
     voxel_map::VoxelMap voxelMap;
     Visualizer visualizer;
     std::vector<Eigen::Vector3d> startGoal;
 
     Trajectory<5> traj;
     double trajStamp;
+    Eigen::Vector3d latestPosition;
+    double lastYaw;
+
+    ros::Timer commandTimer;
+    flatness::FlatnessMap flatmap;
 
 public:
     GlobalPlanner(const Config &conf,
@@ -95,7 +114,11 @@ public:
         : config(conf),
           nh(nh_),
           mapInitialized(false),
-          visualizer(nh)
+          odomReceived(false),
+          commandActive(false),
+          visualizer(nh, config.frameId),
+          latestPosition(Eigen::Vector3d::Zero()),
+          lastYaw(0.0)
     {
         const Eigen::Vector3i xyz((config.mapBound[1] - config.mapBound[0]) / config.voxelWidth,
                                   (config.mapBound[3] - config.mapBound[2]) / config.voxelWidth,
@@ -105,20 +128,53 @@ public:
 
         voxelMap = voxel_map::VoxelMap(xyz, offset, config.voxelWidth);
 
-        mapSub = nh.subscribe(config.mapTopic, 1, &GlobalPlanner::mapCallBack, this,
+        mapSub = nh.subscribe("map", 1, &GlobalPlanner::mapCallBack, this,
                               ros::TransportHints().tcpNoDelay());
 
-        targetSub = nh.subscribe(config.targetTopic, 1, &GlobalPlanner::targetCallBack, this,
+        targetSub = nh.subscribe("target", 1, &GlobalPlanner::targetCallBack, this,
                                  ros::TransportHints().tcpNoDelay());
+
+        odomSub = nh.subscribe("odom", 1, &GlobalPlanner::odomCallBack, this,
+                               ros::TransportHints().tcpNoDelay());
+
+        commandPub = nh.advertise<geometry_msgs::PoseStamped>("command", 10);
+
+        flatmap.reset(config.vehicleMass, config.gravAcc, config.horizDrag,
+                      config.vertDrag, config.parasDrag, config.speedEps);
+
+        const double hz = config.commandHz > 0.0 ? config.commandHz : 40.0;
+        commandTimer = nh.createTimer(ros::Duration(1.0 / hz),
+                                      &GlobalPlanner::commandTimerCallback, this);
+    }
+
+    inline void odomCallBack(const nav_msgs::Odometry::ConstPtr &msg)
+    {
+        const geometry_msgs::Point &p = msg->pose.pose.position;
+        latestPosition = Eigen::Vector3d(p.x, p.y, p.z);
+        odomReceived = true;
+
+        // Track heading from odometry only until a trajectory takes over.
+        if (traj.getPieceNum() <= 0)
+        {
+            const geometry_msgs::Quaternion &q = msg->pose.pose.orientation;
+            lastYaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+        }
     }
 
     inline void mapCallBack(const sensor_msgs::PointCloud2::ConstPtr &msg)
     {
         if (!mapInitialized)
         {
+            if (msg->data.empty() || msg->point_step < 3 * sizeof(float))
+            {
+                ROS_WARN("Received empty or invalid point cloud map.");
+                return;
+            }
+
             size_t cur = 0;
             const size_t total = msg->data.size() / msg->point_step;
-            float *fdata = (float *)(&msg->data[0]);
+            const float *fdata = reinterpret_cast<const float *>(&msg->data[0]);
             for (size_t i = 0; i < total; i++)
             {
                 cur = msg->point_step / sizeof(float) * i;
@@ -144,6 +200,8 @@ public:
     {
         if (startGoal.size() == 2)
         {
+            traj.clear();
+
             std::vector<Eigen::Vector3d> route;
             sfc_gen::planPath<voxel_map::VoxelMap>(startGoal[0],
                                                    startGoal[1],
@@ -166,7 +224,10 @@ public:
 
             if (route.size() > 1)
             {
-                visualizer.visualizePolytope(hPolys);
+                if (config.showPolytopeCorridor)
+                {
+                    visualizer.visualizePolytope(hPolys);
+                }
 
                 Eigen::Matrix3d iniState;
                 Eigen::Matrix3d finState;
@@ -201,8 +262,6 @@ public:
                 physicalParams(5) = config.speedEps;
                 const int quadratureRes = config.integralIntervs;
 
-                traj.clear();
-
                 if (!gcopter.setup(config.weightT,
                                    iniState, finState,
                                    hPolys, INFINITY,
@@ -223,83 +282,146 @@ public:
                 if (traj.getPieceNum() > 0)
                 {
                     trajStamp = ros::Time::now().toSec();
+                    commandActive = true;
                     visualizer.visualize(traj, route);
                 }
             }
         }
     }
 
-    inline void targetCallBack(const geometry_msgs::PoseStamped::ConstPtr &msg)
+    inline double getTargetHeight(const geometry_msgs::PoseStamped::ConstPtr &msg) const
     {
-        if (mapInitialized)
+        if (config.useFixedTargetHeight)
         {
-            if (startGoal.size() >= 2)
-            {
-                startGoal.clear();
-            }
-            const double zGoal = config.mapBound[4] + config.dilateRadius +
-                                 fabs(msg->pose.orientation.z) *
-                                     (config.mapBound[5] - config.mapBound[4] - 2 * config.dilateRadius);
-            const Eigen::Vector3d goal(msg->pose.position.x, msg->pose.position.y, zGoal);
-            if (voxelMap.query(goal) == 0)
-            {
-                visualizer.visualizeStartGoal(goal, 0.5, startGoal.size());
-                startGoal.emplace_back(goal);
-            }
-            else
-            {
-                ROS_WARN("Infeasible Position Selected !!!\n");
-            }
-
-            plan();
+            return config.targetHeight;
         }
-        return;
+
+        if (config.useTargetZ)
+        {
+            return msg->pose.position.z;
+        }
+
+        return config.mapBound[4] + config.dilateRadius +
+               fabs(msg->pose.orientation.z) *
+                   (config.mapBound[5] - config.mapBound[4] - 2 * config.dilateRadius);
     }
 
-    inline void process()
+    inline void targetCallBack(const geometry_msgs::PoseStamped::ConstPtr &msg)
     {
-        Eigen::VectorXd physicalParams(6);
-        physicalParams(0) = config.vehicleMass;
-        physicalParams(1) = config.gravAcc;
-        physicalParams(2) = config.horizDrag;
-        physicalParams(3) = config.vertDrag;
-        physicalParams(4) = config.parasDrag;
-        physicalParams(5) = config.speedEps;
-
-        flatness::FlatnessMap flatmap;
-        flatmap.reset(physicalParams(0), physicalParams(1), physicalParams(2),
-                      physicalParams(3), physicalParams(4), physicalParams(5));
-
-        if (traj.getPieceNum() > 0)
+        if (!mapInitialized)
         {
-            const double delta = ros::Time::now().toSec() - trajStamp;
-            if (delta > 0.0 && delta < traj.getTotalDuration())
-            {
-                double thr;
-                Eigen::Vector4d quat;
-                Eigen::Vector3d omg;
+            ROS_WARN("Map is not initialized yet. Ignore target.");
+            return;
+        }
 
-                flatmap.forward(traj.getVel(delta),
-                                traj.getAcc(delta),
-                                traj.getJer(delta),
-                                0.0, 0.0,
-                                thr, quat, omg);
-                double speed = traj.getVel(delta).norm();
-                double bodyratemag = omg.norm();
-                double tiltangle = acos(1.0 - 2.0 * (quat(1) * quat(1) + quat(2) * quat(2)));
-                std_msgs::Float64 speedMsg, thrMsg, tiltMsg, bdrMsg;
-                speedMsg.data = speed;
-                thrMsg.data = thr;
-                tiltMsg.data = tiltangle;
-                bdrMsg.data = bodyratemag;
-                visualizer.speedPub.publish(speedMsg);
-                visualizer.thrPub.publish(thrMsg);
-                visualizer.tiltPub.publish(tiltMsg);
-                visualizer.bdrPub.publish(bdrMsg);
+        if (!odomReceived)
+        {
+            ROS_WARN("No odometry received from %s. Ignore target.", nh.resolveName("odom").c_str());
+            return;
+        }
 
-                visualizer.visualizeSphere(traj.getPos(delta),
-                                           config.dilateRadius);
-            }
+        const Eigen::Vector3d start = latestPosition;
+        const Eigen::Vector3d goal(msg->pose.position.x,
+                                   msg->pose.position.y,
+                                   getTargetHeight(msg));
+
+        if (voxelMap.query(start) != 0)
+        {
+            ROS_WARN("Current odometry position is outside the map or in collision. Ignore target.");
+            return;
+        }
+
+        if (voxelMap.query(goal) != 0)
+        {
+            ROS_WARN("Infeasible target position selected.");
+            return;
+        }
+
+        startGoal.clear();
+        visualizer.visualizeStartGoal(start, 0.05, 0);
+        visualizer.visualizeStartGoal(goal, 0.05, 1);
+        startGoal.emplace_back(start);
+        startGoal.emplace_back(goal);
+        plan();
+    }
+
+    // Stream a position/yaw setpoint from an already-sampled trajectory state.
+    inline void publishPoseCommand(const Eigen::Vector3d &pos, const Eigen::Vector3d &vel)
+    {
+        if (vel(0) * vel(0) + vel(1) * vel(1) > 1.0e-6)
+        {
+            lastYaw = std::atan2(vel(1), vel(0));
+        }
+
+        geometry_msgs::PoseStamped poseMsg;
+        poseMsg.header.frame_id = config.frameId;
+        poseMsg.header.stamp = ros::Time::now();
+
+        poseMsg.pose.position.x = pos(0);
+        poseMsg.pose.position.y = pos(1);
+        poseMsg.pose.position.z = pos(2);
+
+        poseMsg.pose.orientation.x = 0.0;
+        poseMsg.pose.orientation.y = 0.0;
+        poseMsg.pose.orientation.z = std::sin(0.5 * lastYaw);
+        poseMsg.pose.orientation.w = std::cos(0.5 * lastYaw);
+
+        commandPub.publish(poseMsg);
+    }
+
+    // Publish flatness-derived diagnostics for the current trajectory state.
+    inline void publishDiagnostics(const double t,
+                                   const Eigen::Vector3d &vel)
+    {
+        double thr;
+        Eigen::Vector4d quat;
+        Eigen::Vector3d omg;
+
+        flatmap.forward(vel,
+                        traj.getAcc(t),
+                        traj.getJer(t),
+                        0.0, 0.0,
+                        thr, quat, omg);
+
+        std_msgs::Float64 speedMsg, thrMsg, tiltMsg, bdrMsg;
+        speedMsg.data = vel.norm();
+        thrMsg.data = thr;
+        tiltMsg.data = std::acos(1.0 - 2.0 * (quat(1) * quat(1) + quat(2) * quat(2)));
+        bdrMsg.data = omg.norm();
+        visualizer.speedPub.publish(speedMsg);
+        visualizer.thrPub.publish(thrMsg);
+        visualizer.tiltPub.publish(tiltMsg);
+        visualizer.bdrPub.publish(bdrMsg);
+    }
+
+    inline void commandTimerCallback(const ros::TimerEvent &)
+    {
+        if (!commandActive || traj.getPieceNum() <= 0)
+        {
+            return;
+        }
+
+        const double duration = traj.getTotalDuration();
+        const double delta = ros::Time::now().toSec() - trajStamp;
+        const bool finished = delta >= duration;
+
+        // Sample the trajectory once at the clamped time and reuse the state
+        // for both the diagnostics and the pose command.
+        const double t = std::max(0.0, std::min(delta, duration));
+        const Eigen::Vector3d pos = traj.getPos(t);
+        const Eigen::Vector3d vel = traj.getVel(t);
+
+        if (delta > 0.0 && !finished)
+        {
+            publishDiagnostics(t, vel);
+        }
+
+        publishPoseCommand(pos, vel);
+
+        if (finished)
+        {
+            // Final setpoint emitted; stop streaming until the next plan.
+            commandActive = false;
         }
     }
 };
@@ -311,13 +433,7 @@ int main(int argc, char **argv)
 
     GlobalPlanner global_planner(Config(ros::NodeHandle("~")), nh_);
 
-    ros::Rate lr(1000);
-    while (ros::ok())
-    {
-        global_planner.process();
-        ros::spinOnce();
-        lr.sleep();
-    }
+    ros::spin();
 
     return 0;
 }

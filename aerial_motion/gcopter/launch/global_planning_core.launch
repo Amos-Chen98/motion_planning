@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+    <!-- Core planner interface -->
+    <arg name="node_name" default="global_planning_node" />
+    <arg name="frame_id" default="odom" />
+    <arg name="map_topic" default="/voxel_map" />
+    <arg name="target_topic" default="/move_base_simple/goal" />
+    <arg name="odom_topic" default="quadrotor/uav/cog/odom" />
+    <arg name="command_topic" default="quadrotor/target_pose" />
+
+    <!-- Closed-loop navigation options -->
+    <arg name="command_hz" default="40.0" />
+    <arg name="use_fixed_target_height" default="false" />
+    <arg name="target_height" default="1.0" />
+    <arg name="use_target_z" default="false" />
+    <arg name="show_corridor" default="true" />
+
+    <!-- Dynamic limits -->
+    <arg name="max_vel_mag" default="2.0" />
+
+    <!-- Planning map overrides -->
+    <arg name="voxel_width" default="0.25" />
+    <arg name="dilate_radius" default="0.5" />
+    <arg name="map_bound" default="[-25.0, 25.0, -25.0, 25.0, 0.0, 5.0]" />
+
+    <node pkg="gcopter" type="global_planning" name="$(arg node_name)" output="screen">
+        <rosparam file="$(find gcopter)/config/global_planning.yaml" command="load" />
+
+        <remap from="map" to="$(arg map_topic)" />
+        <remap from="target" to="$(arg target_topic)" />
+        <remap from="odom" to="$(arg odom_topic)" />
+        <remap from="command" to="$(arg command_topic)" />
+
+        <param name="FrameId" type="str" value="$(arg frame_id)" />
+        <param name="VoxelWidth" type="double" value="$(arg voxel_width)" />
+        <param name="DilateRadius" type="double" value="$(arg dilate_radius)" />
+        <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
+
+        <param name="MaxVelMag" type="double" value="$(arg max_vel_mag)" />
+
+        <param name="UseFixedTargetHeight" type="bool" value="$(arg use_fixed_target_height)" />
+        <param name="TargetHeight" type="double" value="$(arg target_height)" />
+        <param name="UseTargetZ" type="bool" value="$(arg use_target_z)" />
+        <param name="ShowPolytopeCorridor" type="bool" value="$(arg show_corridor)" />
+
+        <param name="CommandHz" type="double" value="$(arg command_hz)" />
+    </node>
+</launch>

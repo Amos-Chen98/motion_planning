@@ -9,6 +9,7 @@
 #include <memory>
 #include <chrono>
 #include <cmath>
+#include <string>
 
 #include <ros/ros.h>
 #include <std_msgs/Float64.h>
@@ -23,6 +24,7 @@ class Visualizer
 private:
     // config contains the scale for some markers
     ros::NodeHandle nh;
+    std::string frameId;
 
     // These are publishers for path, waypoints on the trajectory,
     // the entire trajectory, the mesh of free-space polytopes,
@@ -41,8 +43,10 @@ public:
     ros::Publisher bdrPub;
 
 public:
-    Visualizer(ros::NodeHandle &nh_)
-        : nh(nh_)
+    Visualizer(ros::NodeHandle &nh_,
+               const std::string &frameId_ = "odom")
+        : nh(nh_),
+          frameId(frameId_)
     {
         routePub = nh.advertise<visualization_msgs::Marker>("/visualizer/route", 10);
         wayPointsPub = nh.advertise<visualization_msgs::Marker>("/visualizer/waypoints", 10);
@@ -66,7 +70,7 @@ public:
         routeMarker.id = 0;
         routeMarker.type = visualization_msgs::Marker::LINE_LIST;
         routeMarker.header.stamp = ros::Time::now();
-        routeMarker.header.frame_id = "odom";
+        routeMarker.header.frame_id = frameId;
         routeMarker.pose.orientation.w = 1.00;
         routeMarker.action = visualization_msgs::Marker::ADD;
         routeMarker.ns = "route";
@@ -74,7 +78,7 @@ public:
         routeMarker.color.g = 0.00;
         routeMarker.color.b = 0.00;
         routeMarker.color.a = 1.00;
-        routeMarker.scale.x = 0.1;
+        routeMarker.scale.x = 0.03;
 
         wayPointsMarker = routeMarker;
         wayPointsMarker.id = -wayPointsMarker.id - 1;
@@ -83,18 +87,18 @@ public:
         wayPointsMarker.color.r = 1.00;
         wayPointsMarker.color.g = 0.00;
         wayPointsMarker.color.b = 0.00;
-        wayPointsMarker.scale.x = 0.35;
-        wayPointsMarker.scale.y = 0.35;
-        wayPointsMarker.scale.z = 0.35;
+        wayPointsMarker.scale.x = 0.10;
+        wayPointsMarker.scale.y = 0.10;
+        wayPointsMarker.scale.z = 0.10;
 
         trajMarker = routeMarker;
-        trajMarker.header.frame_id = "odom";
+        trajMarker.header.frame_id = frameId;
         trajMarker.id = 0;
         trajMarker.ns = "trajectory";
         trajMarker.color.r = 0.00;
         trajMarker.color.g = 0.50;
         trajMarker.color.b = 1.00;
-        trajMarker.scale.x = 0.30;
+        trajMarker.scale.x = 0.03;
 
         if (route.size() > 0)
         {
@@ -195,7 +199,7 @@ public:
 
         meshMarker.id = 0;
         meshMarker.header.stamp = ros::Time::now();
-        meshMarker.header.frame_id = "odom";
+        meshMarker.header.frame_id = frameId;
         meshMarker.pose.orientation.w = 1.00;
         meshMarker.action = visualization_msgs::Marker::ADD;
         meshMarker.type = visualization_msgs::Marker::TRIANGLE_LIST;
@@ -259,7 +263,7 @@ public:
         sphereMarkers.id = 0;
         sphereMarkers.type = visualization_msgs::Marker::SPHERE_LIST;
         sphereMarkers.header.stamp = ros::Time::now();
-        sphereMarkers.header.frame_id = "odom";
+        sphereMarkers.header.frame_id = frameId;
         sphereMarkers.pose.orientation.w = 1.00;
         sphereMarkers.action = visualization_msgs::Marker::ADD;
         sphereMarkers.ns = "spheres";
@@ -293,7 +297,7 @@ public:
         sphereMarkers.id = sg;
         sphereMarkers.type = visualization_msgs::Marker::SPHERE_LIST;
         sphereMarkers.header.stamp = ros::Time::now();
-        sphereMarkers.header.frame_id = "odom";
+        sphereMarkers.header.frame_id = frameId;
         sphereMarkers.pose.orientation.w = 1.00;
         sphereMarkers.action = visualization_msgs::Marker::ADD;
         sphereMarkers.ns = "StartGoal";
