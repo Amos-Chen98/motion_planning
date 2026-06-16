@@ -11,6 +11,7 @@ find_package(ompl REQUIRED)
 
 find_package(catkin REQUIRED COMPONENTS
   roscpp
+  rospy
   std_msgs
   geometry_msgs
   nav_msgs
@@ -28,6 +29,7 @@ catkin_package(
   INCLUDE_DIRS include
   CATKIN_DEPENDS
     roscpp
+    rospy
     std_msgs
     geometry_msgs
     nav_msgs
@@ -40,4 +42,9 @@ add_executable(global_planning src/global_planning.cpp)
 target_link_libraries(global_planning
   ompl::ompl
   ${catkin_LIBRARIES}
+)
+
+catkin_install_python(PROGRAMS
+  scripts/point_robot_model.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

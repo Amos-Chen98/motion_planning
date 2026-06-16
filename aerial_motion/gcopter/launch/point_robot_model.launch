@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+    <arg name="odom_topic" default="quadrotor/uav/cog/odom" />
+    <arg name="target_pose_topic" default="quadrotor/target_pose" />
+    <arg name="frame_id" default="odom" />
+    <arg name="child_frame_id" default="base_link" />
+    <arg name="publish_rate" default="40.0" />
+    <arg name="spawn_x" default="0.0" />
+    <arg name="spawn_y" default="0.0" />
+    <arg name="spawn_z" default="1.0" />
+    <arg name="spawn_yaw" default="0.0" />
+
+    <node pkg="gcopter" type="point_robot_model.py" name="point_robot_model" output="screen">
+        <param name="frame_id" type="str" value="$(arg frame_id)" />
+        <param name="child_frame_id" type="str" value="$(arg child_frame_id)" />
+        <param name="publish_rate" type="double" value="$(arg publish_rate)" />
+        <param name="spawn_x" type="double" value="$(arg spawn_x)" />
+        <param name="spawn_y" type="double" value="$(arg spawn_y)" />
+        <param name="spawn_z" type="double" value="$(arg spawn_z)" />
+        <param name="spawn_yaw" type="double" value="$(arg spawn_yaw)" />
+
+        <remap from="odom" to="$(arg odom_topic)" />
+        <remap from="target_pose" to="$(arg target_pose_topic)" />
+    </node>
+</launch>

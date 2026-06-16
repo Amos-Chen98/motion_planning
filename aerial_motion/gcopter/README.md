@@ -7,7 +7,8 @@ This is a ROS catkin package. The main configuration files are:
 - `CMakeLists.txt`: builds the `global_planning` node and links Eigen3, OMPL, and ROS components.
 - `package.xml`: declares ROS package dependencies.
 - `config/global_planning.yaml`: stores global planning parameters.
-- `launch/global_planning.launch`: starts the mock map generator, planner node, and RViz.
+- `launch/global_planning.launch`: starts the mock map generator, point-robot model, planner node, and RViz.
+- `launch/point_robot_model.launch`: reusable point-robot `nav_msgs/Odometry` model for the standalone demo.
 - `launch/gcopter_planner.launch`: reusable headless launch that starts only the planner node.
 
 ### System Dependencies
@@ -30,6 +31,7 @@ The demo launch file starts:
 
 - `gcopter/global_planning`
 - `mockamap/mockamap_node`
+- `gcopter/point_robot_model.py`
 - `rviz`
 
 Make sure the `mockamap` package is available in the same catkin workspace. In this repository, it is located at:
@@ -98,35 +100,18 @@ source devel/setup.bash
 roslaunch gcopter global_planning.launch
 ```
 
-This launch starts the mock map generator and `gcopter_planner.launch`, and
-adds RViz for the visual demo.
+This launch starts the mock map generator, point-robot model,
+`gcopter_planner.launch`, and RViz for the visual demo. The point robot
+publishes its spawn pose at `(0.0, 0.0, 1.0)` on `quadrotor/uav/cog/odom` by
+default, subscribes to `quadrotor/target_pose`, and immediately mirrors each
+command pose back into odometry. This creates a closed-loop demo where each new
+plan starts from the latest commanded pose.
 
-The planner ignores targets until a valid odometry message is received. The demo
-does not include a robot, so after launching, publish a fake robot pose on the
-odometry topic from another terminal:
+To change the point robot spawn pose or disable the point-robot model:
 
 ```bash
-rostopic pub -r 10 /quadrotor/uav/cog/odom nav_msgs/Odometry "header:
-  seq: 0
-  stamp:
-    secs: 0
-    nsecs: 0
-  frame_id: ''
-child_frame_id: ''
-pose:
-  pose:
-    position: {x: 0.0, y: 0.0, z: 1.0}
-    orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
-  covariance: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-twist:
-  twist:
-    linear: {x: 0.0, y: 0.0, z: 0.0}
-    angular: {x: 0.0, y: 0.0, z: 0.0}
-  covariance: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0]"
+roslaunch gcopter global_planning.launch spawn_x:=1.0 spawn_y:=0.0 spawn_z:=1.0 spawn_yaw:=1.57
+roslaunch gcopter global_planning.launch use_ideal_robot_model:=false
 ```
 
 Then, in RViz, use `2D Nav Goal`:
