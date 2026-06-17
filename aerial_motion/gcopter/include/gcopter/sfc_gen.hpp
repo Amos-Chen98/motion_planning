@@ -132,6 +132,11 @@ namespace sfc_gen
     {
         hpolys.clear();
         const int n = path.size();
+        if (n < 2)
+        {
+            return;
+        }
+
         Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
         bd(0, 0) = 1.0;
         bd(1, 0) = -1.0;
@@ -174,20 +179,28 @@ namespace sfc_gen
                     valid_pc.emplace_back(p);
                 }
             }
-            Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
 
-            firi::firi(bd, pc, a, b, hp);
-
-            if (hpolys.size() != 0)
+            if (valid_pc.empty())
             {
-                const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
-                if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
-                             ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
+                hp = bd;
+            }
+            else
+            {
+                Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
+                firi::firi(bd, pc, a, b, hp);
+
+                if (hpolys.size() != 0)
                 {
-                    firi::firi(bd, pc, a, a, gap, 1);
-                    hpolys.emplace_back(gap);
+                    const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
+                    if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
+                                 ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
+                    {
+                        firi::firi(bd, pc, a, a, gap, 1);
+                        hpolys.emplace_back(gap);
+                    }
                 }
             }
+
 
             hpolys.emplace_back(hp);
         }
@@ -195,6 +208,11 @@ namespace sfc_gen
 
     inline void shortCut(std::vector<Eigen::MatrixX4d> &hpolys)
     {
+        if (hpolys.empty())
+        {
+            return;
+        }
+
         std::vector<Eigen::MatrixX4d> htemp = hpolys;
         if (htemp.size() == 1)
         {

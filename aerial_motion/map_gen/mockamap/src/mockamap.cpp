@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include <pcl/kdtree/kdtree_flann.h>
@@ -52,7 +53,7 @@ optimizeMap(mocka::Maps::BasicInfo& in)
   in.cloud->width -= temp->size();
 
   pcl::toROSMsg(*in.cloud, *in.output);
-  in.output->header.frame_id = "odom";
+  in.output->header.frame_id = in.frame_id;
   ROS_INFO("finish: number of points after optimization %d", in.cloud->width);
   delete temp;
   return;
@@ -79,6 +80,7 @@ main(int argc, char** argv)
 
   double scale;
   double update_freq;
+  std::string frame_id;
 
   int type;
 
@@ -88,6 +90,7 @@ main(int argc, char** argv)
   nh_private.param("x_length", sizeX, 100);
   nh_private.param("y_length", sizeY, 100);
   nh_private.param("z_length", sizeZ, 10);
+  nh_private.param<std::string>("frame_id", frame_id, "odom");
 
   nh_private.param("type", type, 1);
 
@@ -103,6 +106,7 @@ main(int argc, char** argv)
   info.sizeZ      = sizeZ;
   info.seed       = seed;
   info.scale      = scale;
+  info.frame_id   = frame_id;
   info.output     = &output;
   info.cloud      = &cloud;
 

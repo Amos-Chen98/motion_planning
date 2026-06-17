@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+
+    <!-- planner_mode accepts: global, online -->
+    <arg name="planner_mode" default="online" />
+    <arg name="launch_rviz" default="true" />
+
+
+    <!-- Frame IDs -->
+    <arg name="world_frame_id" default="world" />
+    <arg name="camera_init_frame_id" default="camera_init" />
+    <arg name="body_frame_id" default="body" />
+
+    <!-- topics -->
+    <arg name="pcl_topic_raw" default="/voxel_map" />
+    <arg name="pcl_topic" default="/simulated_livox_points" />
+    <arg name="target_topic" default="/move_base_simple/goal" />
+    <arg name="odom_topic" default="quadrotor/uav/cog/odom" />
+    <arg name="command_topic" default="quadrotor/target_pose" />
+
+    <arg name="show_corridor" default="true" />
+    <arg name="max_vel_mag" default="2.0" />
+
+    <!-- Point-robot model for the standalone closed-loop GCOPTER demo -->
+    <arg name="ideal_robot_publish_rate" default="40.0" />
+    <arg name="publish_tf" default="true" />
+    <!-- Initial robot pose in world; also used for the fixed world -> camera_init TF. -->
+    <arg name="spawn_x" default="0.0" />
+    <arg name="spawn_y" default="0.0" />
+    <arg name="spawn_z" default="1.0" />
+    <arg name="spawn_yaw" default="0.0" />
+
+    <!-- Online local perception and replanning options -->
+    <arg name="replan_hz" default="2.0" />
+    <arg name="use_accumulated_map" default="true" />
+    <arg name="goal_tolerance" default="0.2" />
+    <arg name="planning_horizon" default="6.0" />
+    <arg name="brake_distance" default="2.0" />
+    <arg name="no_replan_radius" default="1.0" />
+
+    <!-- Closed-loop navigation options -->
+    <arg name="command_hz" default="40.0" />
+    <arg name="use_fixed_target_height" default="false" />
+    <arg name="target_height" default="1.0" />
+    <arg name="use_target_z" default="false" />
+
+    <!-- Planning map overrides -->
+    <arg name="voxel_width" default="0.25" />
+    <arg name="dilate_radius" default="0.5" />
+    <arg name="map_bound" default="[-25.0, 25.0, -25.0, 25.0, 0.0, 5.0]" />
+
+    <!-- Mock map generator for the GCOPTER demo -->
+    <arg name="mock_seed" default="1024" />
+    <arg name="mock_update_freq" default="1.0" />
+    <arg name="mock_resolution" default="0.25" />
+    <arg name="mock_x_length" default="50" />
+    <arg name="mock_y_length" default="50" />
+    <arg name="mock_z_length" default="5" />
+    <arg name="mock_type" default="1" />
+    <arg name="mock_complexity" default="0.025" />
+    <arg name="mock_fill" default="0.3" />
+    <arg name="mock_fractal" default="1" />
+    <arg name="mock_attenuation" default="0.1" />
+
+    <node pkg="mockamap" type="mockamap_node" name="mockamap_node" output="screen">
+        <param name="seed" type="int" value="$(arg mock_seed)" />
+        <param name="update_freq" type="double" value="$(arg mock_update_freq)" />
+        <param name="resolution" type="double" value="$(arg mock_resolution)" />
+        <param name="x_length" type="int" value="$(arg mock_x_length)" />
+        <param name="y_length" type="int" value="$(arg mock_y_length)" />
+        <param name="z_length" type="int" value="$(arg mock_z_length)" />
+        <param name="type" type="int" value="$(arg mock_type)" />
+        <param name="complexity" type="double" value="$(arg mock_complexity)" />
+        <param name="fill" type="double" value="$(arg mock_fill)" />
+        <param name="fractal" type="int" value="$(arg mock_fractal)" />
+        <param name="attenuation" type="double" value="$(arg mock_attenuation)" />
+        <param name="frame_id" type="str" value="$(arg world_frame_id)" />
+        <remap from="/mock_map" to="$(arg pcl_topic_raw)" />
+    </node>
+
+    <node name="rviz" pkg="rviz" type="rviz" output="screen" args="-d $(find gcopter)/rviz/global_planning.rviz" if="$(arg launch_rviz)">
+    </node>
+
+    <include file="$(find gcopter)/launch/point_robot_model.launch">
+        <arg name="odom_topic" value="$(arg odom_topic)" />
+        <arg name="target_pose_topic" value="$(arg command_topic)" />
+        <arg name="world_frame_id" value="$(arg world_frame_id)" />
+        <arg name="camera_init_frame_id" value="$(arg camera_init_frame_id)" />
+        <arg name="child_frame_id" value="$(arg body_frame_id)" />
+        <arg name="publish_tf" value="$(arg publish_tf)" />
+        <arg name="publish_rate" value="$(arg ideal_robot_publish_rate)" />
+        <arg name="spawn_x" value="$(arg spawn_x)" />
+        <arg name="spawn_y" value="$(arg spawn_y)" />
+        <arg name="spawn_z" value="$(arg spawn_z)" />
+        <arg name="spawn_yaw" value="$(arg spawn_yaw)" />
+    </include>
+
+    <group if="$(eval arg('planner_mode') == 'online')">
+        <include file="$(find gcopter)/launch/livox_mid360_simulator.launch">
+            <arg name="global_pcl_topic" value="$(arg pcl_topic_raw)" />
+            <arg name="local_pcl_topic" value="$(arg pcl_topic)" />
+            <arg name="odom_topic" value="$(arg odom_topic)" />
+            <arg name="body_frame_id" value="$(arg body_frame_id)" />
+        </include>
+    </group>
+
+    <include file="$(find gcopter)/launch/gcopter_planner.launch">
+        <arg name="planner_mode" value="$(arg planner_mode)" />
+        <arg name="pcl_topic" value="$(eval arg('pcl_topic_raw') if arg('planner_mode') == 'global' else arg('pcl_topic'))" />
+        <arg name="target_topic" value="$(arg target_topic)" />
+        <arg name="odom_topic" value="$(arg odom_topic)" />
+        <arg name="command_topic" value="$(arg command_topic)" />
+        <arg name="world_frame_id" value="$(arg world_frame_id)" />
+        <arg name="command_hz" value="$(arg command_hz)" />
+        <arg name="replan_hz" value="$(arg replan_hz)" />
+        <arg name="use_accumulated_map" value="$(arg use_accumulated_map)" />
+        <arg name="goal_tolerance" value="$(arg goal_tolerance)" />
+        <arg name="planning_horizon" value="$(arg planning_horizon)" />
+        <arg name="brake_distance" value="$(arg brake_distance)" />
+        <arg name="no_replan_radius" value="$(arg no_replan_radius)" />
+        <arg name="use_fixed_target_height" value="$(arg use_fixed_target_height)" />
+        <arg name="target_height" value="$(arg target_height)" />
+        <arg name="use_target_z" value="$(arg use_target_z)" />
+        <arg name="show_corridor" value="$(arg show_corridor)" />
+        <arg name="max_vel_mag" value="$(arg max_vel_mag)" />
+        <arg name="voxel_width" value="$(arg voxel_width)" />
+        <arg name="dilate_radius" value="$(arg dilate_radius)" />
+        <arg name="map_bound" value="$(arg map_bound)" />
+    </include>
+
+</launch>

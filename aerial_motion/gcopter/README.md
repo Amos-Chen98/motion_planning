@@ -4,12 +4,14 @@
 
 This is a ROS catkin package. The main configuration files are:
 
-- `CMakeLists.txt`: builds the `global_planning` node and links Eigen3, OMPL, and ROS components.
+- `CMakeLists.txt`: builds the planning and simulation nodes and links Eigen3, OMPL, and ROS components.
 - `package.xml`: declares ROS package dependencies.
-- `config/global_planning.yaml`: stores global planning parameters.
-- `launch/global_planning.launch`: starts the mock map generator, point-robot model, planner node, and RViz.
+- `config/gcopter_planner_config.yaml`: stores GCOPTER planner parameters.
+- `config/livox_mid360_simulator_config.yaml`: stores Livox Mid-360 simulator range/FOV parameters.
+- `launch/demo.launch`: starts the mock map generator, point-robot model, planner mode, and RViz.
 - `launch/point_robot_model.launch`: reusable point-robot `nav_msgs/Odometry` model for the standalone demo.
-- `launch/gcopter_planner.launch`: reusable headless launch that starts only the planner node.
+- `launch/gcopter_planner.launch`: reusable headless launch that starts either the global planner or the online local-perception planner.
+- `launch/livox_mid360_simulator.launch`: geometric Livox Mid-360 point-cloud range/FOV simulator.
 
 ### System Dependencies
 
@@ -29,7 +31,8 @@ sudo cpufreq-set -g performance
 
 The demo launch file starts:
 
-- `gcopter/global_planning`
+- `gcopter/online_replanning` by default, or `gcopter/global_planning` with `planner_mode:=global`
+- `gcopter/livox_mid360_simulator` in online mode
 - `mockamap/mockamap_node`
 - `gcopter/point_robot_model.py`
 - `rviz`
@@ -42,22 +45,34 @@ src/motion_planning/aerial_motion/map_gen/mockamap
 
 ### Main Parameters
 
-Parameter file:
+Parameter files:
 
 ```text
-config/global_planning.yaml
+config/gcopter_planner_config.yaml
+config/livox_mid360_simulator_config.yaml
 ```
 
 Topics (set via `<remap>`, see `launch/gcopter_planner.launch`):
 
-- `map`: input point cloud map topic. Default: `/voxel_map`.
+- `pcl_topic`: input point cloud for the active planner. In `global` mode it is the world-frame obstacle map consumed by `global_planning` (e.g. `/voxel_map`); in `online` mode it is the body-frame local point cloud consumed by `online_replanning` (e.g. `/simulated_livox_points`).
 - `target`: RViz goal topic. Default: `/move_base_simple/goal`.
 - `odom`: odometry used as the planning start position. Planning always starts from the latest odometry; a target is ignored until a valid odometry message is received. Default: `quadrotor/uav/cog/odom`.
 - `command`: `geometry_msgs/PoseStamped` position commands are always published (streamed at `CommandHz` along the planned trajectory). Default: `quadrotor/target_pose`.
 
+Livox Mid-360 simulator topics (online mode, see `launch/livox_mid360_simulator.launch`):
+
+- `global_pcl_topic`: world-frame obstacle cloud consumed by `livox_mid360_simulator`. Default: `/voxel_map`.
+- `local_pcl_topic`: body-frame local point cloud produced by `livox_mid360_simulator` and fed to `online_replanning` through `pcl_topic`. Default: `/simulated_livox_points`.
+
+Frame convention in online mode:
+
+- `world`: global map, target, odometry parent, visualization, and command frame.
+- `camera_init`: fixed reference frame published by the standalone point-robot demo from `spawn_x/y/z/yaw`.
+- `body`: odometry child frame and local point-cloud frame.
+
 Common parameters:
 
-- `FrameId`: frame used for visualization and command headers. Default: `odom`.
+- `FrameId`: frame used for visualization and command headers in global mode. Default: `world`.
 - `VoxelWidth`: voxel resolution.
 - `DilateRadius`: obstacle inflation radius.
 - `MapBound`: planning map bounds, formatted as `[xmin, xmax, ymin, ymax, zmin, zmax]`.
@@ -69,22 +84,32 @@ Common parameters:
 - `GravAcc`: gravitational acceleration.
 - `WeightT`, `ChiVec`, `SmoothingEps`, `IntegralIntervs`, `RelCostTol`: optimizer parameters.
 
+Online parameters:
+
+- `WorldFrameId`: frame used for online visualization and command headers. Default: `world`.
+- `BodyFrameId`: local point-cloud frame published by the Livox Mid-360 simulator. Default: `body`.
+- `camera_init_frame_id`: fixed reference frame published by the standalone point-robot model. Default: `camera_init`.
+- `ReplanHz`: online replanning rate. Default: `2.0`.
+- `UseAccumulatedMap`: keep previously observed local obstacles. Default: `true`.
+- `PublishRate`, `LivoxMinRange`, `LivoxMaxRange`, `LivoxHorizontalFovDeg`, `LivoxVerticalMinDeg`, `LivoxVerticalMaxDeg`: Livox Mid-360 simulator rate and geometric limits. Defaults: `10.0`, `0.1`, `2.0`, `360.0`, `-7.0`, `52.0`.
+
 ### Reusable Headless Launch
 
 Use `gcopter_planner.launch` when another package provides the map,
-visualization, and robot stack. This launch starts only `gcopter/global_planning`;
-it does not start the mock map generator or RViz.
+visualization, and robot stack. This launch starts only one planner node; it
+does not start the mock map generator, Livox simulator, point robot, or RViz.
 
-The planner always starts planning from the latest robot odometry and always
-publishes `geometry_msgs/PoseStamped` position commands. A target is ignored
-until a valid odometry message has been received.
+Set `planner_mode:=global` or `planner_mode:=online`. Both planners publish
+`geometry_msgs/PoseStamped` position commands, and both ignore targets until a
+valid world-frame odometry message has been received.
 
 Example closed-loop integration:
 
 ```bash
 roslaunch gcopter gcopter_planner.launch \
+  planner_mode:=online \
   frame_id:=world \
-  map_topic:=/pointcloud/output \
+  pcl_topic:=/simulated_livox_points \
   target_topic:=/move_base_simple/goal \
   odom_topic:=quadrotor/uav/cog/odom \
   command_topic:=quadrotor/target_pose
@@ -97,21 +122,21 @@ Run the following commands from the catkin workspace root:
 ```bash
 catkin build gcopter
 source devel/setup.bash
-roslaunch gcopter global_planning.launch
+roslaunch gcopter demo.launch
 ```
 
-This launch starts the mock map generator, point-robot model,
-`gcopter_planner.launch`, and RViz for the visual demo. The point robot
-publishes its spawn pose at `(0.0, 0.0, 1.0)` on `quadrotor/uav/cog/odom` by
-default, subscribes to `quadrotor/target_pose`, and immediately mirrors each
-command pose back into odometry. This creates a closed-loop demo where each new
-plan starts from the latest commanded pose.
+This launch starts the mock map generator, point-robot model, selected planner,
+and RViz for the visual demo. Online mode also starts the Livox Mid-360
+simulator. The point robot is identical in global and online modes: it publishes
+`world -> body` odometry on `quadrotor/uav/cog/odom`. The same
+`spawn_x/y/z/yaw` values define the robot's initial world pose and the fixed
+`world -> camera_init` transform used for TF visualization.
 
-To change the point robot spawn pose or disable the point-robot model:
+To change the demo initial pose or run the global planner:
 
 ```bash
-roslaunch gcopter global_planning.launch spawn_x:=1.0 spawn_y:=0.0 spawn_z:=1.0 spawn_yaw:=1.57
-roslaunch gcopter global_planning.launch use_ideal_robot_model:=false
+roslaunch gcopter demo.launch spawn_x:=1.0 spawn_y:=0.0 spawn_z:=1.0 spawn_yaw:=1.57
+roslaunch gcopter demo.launch planner_mode:=global
 ```
 
 Then, in RViz, use `2D Nav Goal`:

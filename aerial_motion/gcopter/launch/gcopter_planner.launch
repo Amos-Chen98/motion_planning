@@ -1,15 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <launch>
-    <!-- Core planner interface -->
-    <arg name="node_name" default="global_planning_node" />
-    <arg name="frame_id" default="odom" />
-    <arg name="map_topic" default="/voxel_map" />
+    <!-- planner_mode accepts: global, online -->
+    <arg name="planner_mode" default="global" />
+    <arg name="node_name" default="gcopter_planner" />
+
+    <!-- Frame convention shared by global and online modes -->
+    <arg name="world_frame_id" default="world" />
+
+    <arg name="pcl_topic" default="pcl_topic" />
     <arg name="target_topic" default="/move_base_simple/goal" />
     <arg name="odom_topic" default="quadrotor/uav/cog/odom" />
     <arg name="command_topic" default="quadrotor/target_pose" />
 
     <!-- Closed-loop navigation options -->
     <arg name="command_hz" default="40.0" />
+    <arg name="replan_hz" default="2.0" />
+    <arg name="use_accumulated_map" default="true" />
+    <arg name="goal_tolerance" default="0.2" />
+    <arg name="planning_horizon" default="6.0" />
+    <arg name="brake_distance" default="2.0" />
+    <arg name="no_replan_radius" default="1.0" />
     <arg name="use_fixed_target_height" default="false" />
     <arg name="target_height" default="1.0" />
     <arg name="use_target_z" default="false" />
@@ -23,26 +33,53 @@
     <arg name="dilate_radius" default="0.5" />
     <arg name="map_bound" default="[-25.0, 25.0, -25.0, 25.0, 0.0, 5.0]" />
 
-    <node pkg="gcopter" type="global_planning" name="$(arg node_name)" output="screen">
-        <rosparam file="$(find gcopter)/config/global_planning.yaml" command="load" />
+    <group if="$(eval arg('planner_mode') == 'global')">
+        <node pkg="gcopter" type="global_planning" name="$(arg node_name)" output="screen">
+            <rosparam file="$(find gcopter)/config/gcopter_planner_config.yaml" command="load" />
 
-        <remap from="map" to="$(arg map_topic)" />
-        <remap from="target" to="$(arg target_topic)" />
-        <remap from="odom" to="$(arg odom_topic)" />
-        <remap from="command" to="$(arg command_topic)" />
+            <remap from="pcl_topic" to="$(arg pcl_topic)" />
+            <remap from="target" to="$(arg target_topic)" />
+            <remap from="odom" to="$(arg odom_topic)" />
+            <remap from="command" to="$(arg command_topic)" />
 
-        <param name="FrameId" type="str" value="$(arg frame_id)" />
-        <param name="VoxelWidth" type="double" value="$(arg voxel_width)" />
-        <param name="DilateRadius" type="double" value="$(arg dilate_radius)" />
-        <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
+            <param name="WorldFrameId" type="str" value="$(arg world_frame_id)" />
+            <param name="VoxelWidth" type="double" value="$(arg voxel_width)" />
+            <param name="DilateRadius" type="double" value="$(arg dilate_radius)" />
+            <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
+            <param name="MaxVelMag" type="double" value="$(arg max_vel_mag)" />
+            <param name="UseFixedTargetHeight" type="bool" value="$(arg use_fixed_target_height)" />
+            <param name="TargetHeight" type="double" value="$(arg target_height)" />
+            <param name="UseTargetZ" type="bool" value="$(arg use_target_z)" />
+            <param name="ShowPolytopeCorridor" type="bool" value="$(arg show_corridor)" />
+            <param name="CommandHz" type="double" value="$(arg command_hz)" />
+        </node>
+    </group>
 
-        <param name="MaxVelMag" type="double" value="$(arg max_vel_mag)" />
+    <group if="$(eval arg('planner_mode') == 'online')">
+        <node pkg="gcopter" type="online_replanning" name="$(arg node_name)" output="screen">
+            <rosparam file="$(find gcopter)/config/gcopter_planner_config.yaml" command="load" />
 
-        <param name="UseFixedTargetHeight" type="bool" value="$(arg use_fixed_target_height)" />
-        <param name="TargetHeight" type="double" value="$(arg target_height)" />
-        <param name="UseTargetZ" type="bool" value="$(arg use_target_z)" />
-        <param name="ShowPolytopeCorridor" type="bool" value="$(arg show_corridor)" />
+            <remap from="pcl_topic" to="$(arg pcl_topic)" />
+            <remap from="target" to="$(arg target_topic)" />
+            <remap from="odom" to="$(arg odom_topic)" />
+            <remap from="command" to="$(arg command_topic)" />
 
-        <param name="CommandHz" type="double" value="$(arg command_hz)" />
-    </node>
+            <param name="WorldFrameId" type="str" value="$(arg world_frame_id)" />
+            <param name="VoxelWidth" type="double" value="$(arg voxel_width)" />
+            <param name="DilateRadius" type="double" value="$(arg dilate_radius)" />
+            <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
+            <param name="MaxVelMag" type="double" value="$(arg max_vel_mag)" />
+            <param name="CommandHz" type="double" value="$(arg command_hz)" />
+            <param name="ReplanHz" type="double" value="$(arg replan_hz)" />
+            <param name="UseAccumulatedMap" type="bool" value="$(arg use_accumulated_map)" />
+            <param name="GoalTolerance" type="double" value="$(arg goal_tolerance)" />
+            <param name="PlanningHorizon" type="double" value="$(arg planning_horizon)" />
+            <param name="BrakeDistance" type="double" value="$(arg brake_distance)" />
+            <param name="NoReplanRadius" type="double" value="$(arg no_replan_radius)" />
+            <param name="UseFixedTargetHeight" type="bool" value="$(arg use_fixed_target_height)" />
+            <param name="TargetHeight" type="double" value="$(arg target_height)" />
+            <param name="UseTargetZ" type="bool" value="$(arg use_target_z)" />
+            <param name="ShowPolytopeCorridor" type="bool" value="$(arg show_corridor)" />
+        </node>
+    </group>
 </launch>

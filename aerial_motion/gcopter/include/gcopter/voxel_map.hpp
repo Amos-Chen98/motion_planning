@@ -26,6 +26,7 @@
 #define VOXEL_MAP_HPP
 
 #include "voxel_dilater.hpp"
+#include <algorithm>
 #include <memory>
 #include <vector>
 #include <Eigen/Eigen>
@@ -93,6 +94,24 @@ namespace voxel_map
             return voxels;
         }
 
+        inline void clear(void)
+        {
+            std::fill(voxels.begin(), voxels.end(), Unoccupied);
+            surf.clear();
+        }
+
+        inline void clearDilated(void)
+        {
+            for (uint8_t &voxel : voxels)
+            {
+                if (voxel == Dilated)
+                {
+                    voxel = Unoccupied;
+                }
+            }
+            surf.clear();
+        }
+
         inline void setOccupied(const Eigen::Vector3d &pos)
         {
             const Eigen::Vector3i id = ((pos - o) / scale).cast<int>();
@@ -114,6 +133,8 @@ namespace voxel_map
 
         inline void dilate(const int &r)
         {
+            clearDilated();
+
             if (r <= 0)
             {
                 return;

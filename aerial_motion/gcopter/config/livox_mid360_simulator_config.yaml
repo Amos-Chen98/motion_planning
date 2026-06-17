@@ -1,0 +1,7 @@
+# Livox Mid-360 simulator
+PublishRate: 10.0
+LivoxMinRange: 0.1
+LivoxMaxRange: 5.0
+LivoxHorizontalFovDeg: 360.0
+LivoxVerticalMinDeg: -7.0
+LivoxVerticalMaxDeg: 52.0

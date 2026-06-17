@@ -13,6 +13,8 @@
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/PointCloud2.h>
 
+#include <Eigen/Geometry>
+
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -24,7 +26,7 @@
 
 struct Config
 {
-    std::string frameId;
+    std::string worldFrameId;
     double dilateRadius;
     double voxelWidth;
     std::vector<double> mapBound;
@@ -46,7 +48,7 @@ struct Config
 
     Config(const ros::NodeHandle &nh_priv)
     {
-        nh_priv.param<std::string>("FrameId", frameId, "odom");
+        nh_priv.param<std::string>("WorldFrameId", worldFrameId, "world");
         nh_priv.getParam("DilateRadius", dilateRadius);
         nh_priv.getParam("VoxelWidth", voxelWidth);
         nh_priv.getParam("MapBound", mapBound);
@@ -102,7 +104,7 @@ public:
           mapInitialized(false),
           odomReceived(false),
           commandActive(false),
-          visualizer(nh, config.frameId),
+          visualizer(nh, config.worldFrameId),
           latestPosition(Eigen::Vector3d::Zero()),
           lastYaw(0.0)
     {
@@ -114,7 +116,7 @@ public:
 
         voxelMap = voxel_map::VoxelMap(xyz, offset, config.voxelWidth);
 
-        mapSub = nh.subscribe("map", 1, &GlobalPlanner::mapCallBack, this,
+        mapSub = nh.subscribe("pcl_topic", 1, &GlobalPlanner::mapCallBack, this,
                               ros::TransportHints().tcpNoDelay());
 
         targetSub = nh.subscribe("target", 1, &GlobalPlanner::targetCallBack, this,
@@ -132,18 +134,37 @@ public:
                                       &GlobalPlanner::commandTimerCallback, this);
     }
 
+    inline Eigen::Quaterniond normalizedQuaternion(const geometry_msgs::Quaternion &q) const
+    {
+        Eigen::Quaterniond quat(q.w, q.x, q.y, q.z);
+        if (quat.norm() < 1.0e-9)
+        {
+            return Eigen::Quaterniond::Identity();
+        }
+        return quat.normalized();
+    }
+
+    inline double yawFromRotation(const Eigen::Matrix3d &rot) const
+    {
+        const Eigen::Quaterniond q(rot);
+        return std::atan2(2.0 * (q.w() * q.z() + q.x() * q.y()),
+                          1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
+    }
+
     inline void odomCallBack(const nav_msgs::Odometry::ConstPtr &msg)
     {
         const geometry_msgs::Point &p = msg->pose.pose.position;
-        latestPosition = Eigen::Vector3d(p.x, p.y, p.z);
+        Eigen::Isometry3d odomPose = Eigen::Isometry3d::Identity();
+        odomPose.translate(Eigen::Vector3d(p.x, p.y, p.z));
+        odomPose.rotate(normalizedQuaternion(msg->pose.pose.orientation));
+
+        latestPosition = odomPose.translation();
         odomReceived = true;
 
         // Track heading from odometry only until a trajectory takes over.
         if (traj.getPieceNum() <= 0)
         {
-            const geometry_msgs::Quaternion &q = msg->pose.pose.orientation;
-            lastYaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y),
-                                 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+            lastYaw = yawFromRotation(odomPose.rotation());
         }
     }
 
@@ -327,7 +348,7 @@ public:
         }
 
         geometry_msgs::PoseStamped poseMsg;
-        poseMsg.header.frame_id = config.frameId;
+        poseMsg.header.frame_id = config.worldFrameId;
         poseMsg.header.stamp = ros::Time::now();
 
         poseMsg.pose.position.x = pos(0);

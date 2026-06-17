@@ -1,0 +1,24 @@
+# Map and path search
+TimeoutRRT: 0.02
+
+# Online receding-horizon replanning
+PlanningHorizon: 5.0
+BrakeDistance: 2.0
+NoReplanRadius: 3.0
+# Give up reaching the goal (e.g. set inside an obstacle) after this many consecutive
+# replans without getting any closer, then hold at the safe trajectory end.
+StallReplanLimit: 5
+
+# Dynamic limits
+MaxBdrMag: 2.1
+MaxTiltAngle: 1.05
+
+# Vehicle
+GravAcc: 9.8
+
+# Trajectory optimization
+WeightT: 20.0
+ChiVec: [1.0e+4, 1.0e+4, 1.0e+4, 1.0e+4]
+SmoothingEps: 1.0e-2
+IntegralIntervs: 16
+RelCostTol: 1.0e-5

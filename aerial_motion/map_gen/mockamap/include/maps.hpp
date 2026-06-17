@@ -6,6 +6,7 @@
 #include <pcl/point_cloud.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <string>
 
 namespace mocka {
 
@@ -18,6 +19,7 @@ public:
     int sizeZ;
     int seed;
     double scale;
+    std::string frame_id;
     sensor_msgs::PointCloud2 *output;
     pcl::PointCloud<pcl::PointXYZ> *cloud;
   } BasicInfo;
