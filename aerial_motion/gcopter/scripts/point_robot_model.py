@@ -25,11 +25,11 @@ def set_quaternion(msg_quat, q):
 class PointRobotModel:
     def __init__(self):
         self.world_frame_id = rospy.get_param('~world_frame_id', 'world')
+        self.odom_frame_id = rospy.get_param('~odom_frame_id', 'odom')
         self.camera_init_frame_id = rospy.get_param(
             '~camera_init_frame_id',
             rospy.get_param('~frame_id', 'camera_init'),
         )
-        self.child_frame_id = rospy.get_param('~child_frame_id', 'base_link')
         self.publish_tf = bool(rospy.get_param('~publish_tf', False))
         self.publish_rate = float(rospy.get_param('~publish_rate', 40.0))
 
@@ -37,22 +37,29 @@ class PointRobotModel:
         spawn_y = float(rospy.get_param('~spawn_y', 0.0))
         spawn_z = float(rospy.get_param('~spawn_z', 1.0))
         spawn_yaw = float(rospy.get_param('~spawn_yaw', 0.0))
-        self.world_camera_translation = [spawn_x, spawn_y, spawn_z]
-        self.world_camera_quaternion = yaw_quaternion(spawn_yaw)
+        # Fixed world -> camera_init anchor (the LIO origin), placed at the spawn pose.
+        self.world_camera_init_translation = [spawn_x, spawn_y, spawn_z]
+        self.world_camera_init_quaternion = yaw_quaternion(spawn_yaw)
 
         self.lock = threading.Lock()
         self.odom = Odometry()
         self.odom.header.frame_id = self.world_frame_id
-        self.odom.child_frame_id = self.child_frame_id
+        self.odom.child_frame_id = self.odom_frame_id
         self.odom.pose.pose.position.x = spawn_x
         self.odom.pose.pose.position.y = spawn_y
         self.odom.pose.pose.position.z = spawn_z
-        set_quaternion(self.odom.pose.pose.orientation, self.world_camera_quaternion)
+        set_quaternion(self.odom.pose.pose.orientation, yaw_quaternion(spawn_yaw))
 
         self.pub = rospy.Publisher('odom', Odometry, queue_size=10)
         self.sub = rospy.Subscriber('target_pose', PoseStamped, self.target_callback,
                                     tcp_nodelay=True)
-        self.tf_broadcaster = tf2_ros.TransformBroadcaster() if self.publish_tf else None
+
+        self.tf_broadcaster = None
+        self.static_tf_broadcaster = None
+        if self.publish_tf:
+            self.tf_broadcaster = tf2_ros.TransformBroadcaster()
+            self.static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster()
+            self.publish_static_transforms()
 
         period = 1.0 / self.publish_rate if self.publish_rate > 0.0 else 1.0 / 40.0
         self.timer = rospy.Timer(rospy.Duration.from_sec(period), self.timer_callback)
@@ -66,7 +73,7 @@ class PointRobotModel:
     def target_callback(self, msg):
         with self.lock:
             self.odom.header.frame_id = self.world_frame_id
-            self.odom.child_frame_id = self.child_frame_id
+            self.odom.child_frame_id = self.odom_frame_id
             self.odom.pose.pose.position = copy.deepcopy(msg.pose.position)
             self.odom.pose.pose.orientation = copy.deepcopy(msg.pose.orientation)
             odom = copy.deepcopy(self.odom)
@@ -82,36 +89,42 @@ class PointRobotModel:
     def publish(self, odom):
         odom.header.stamp = rospy.Time.now()
         self.pub.publish(odom)
-        self.publish_transforms(odom)
+        self.publish_world_to_odom(odom)
 
-    def publish_transforms(self, odom):
+    def publish_world_to_odom(self, odom):
+        """Real-time world -> odom transform carrying the current robot pose."""
         if self.tf_broadcaster is None:
             return
 
-        transforms = []
-        stamp = odom.header.stamp
+        world_odom = TransformStamped()
+        world_odom.header.stamp = odom.header.stamp
+        world_odom.header.frame_id = self.world_frame_id
+        world_odom.child_frame_id = self.odom_frame_id
+        world_odom.transform.translation.x = odom.pose.pose.position.x
+        world_odom.transform.translation.y = odom.pose.pose.position.y
+        world_odom.transform.translation.z = odom.pose.pose.position.z
+        world_odom.transform.rotation = copy.deepcopy(odom.pose.pose.orientation)
+        self.tf_broadcaster.sendTransform(world_odom)
 
-        world_camera = TransformStamped()
-        world_camera.header.stamp = stamp
-        world_camera.header.frame_id = self.world_frame_id
-        world_camera.child_frame_id = self.camera_init_frame_id
-        world_camera.transform.translation.x = self.world_camera_translation[0]
-        world_camera.transform.translation.y = self.world_camera_translation[1]
-        world_camera.transform.translation.z = self.world_camera_translation[2]
-        set_quaternion(world_camera.transform.rotation, self.world_camera_quaternion)
-        transforms.append(world_camera)
+    def publish_static_transforms(self):
+        """Publish only the fixed world -> camera_init reference frame.
 
-        world_body = TransformStamped()
-        world_body.header.stamp = stamp
-        world_body.header.frame_id = self.world_frame_id
-        world_body.child_frame_id = odom.child_frame_id
-        world_body.transform.translation.x = odom.pose.pose.position.x
-        world_body.transform.translation.y = odom.pose.pose.position.y
-        world_body.transform.translation.z = odom.pose.pose.position.z
-        world_body.transform.rotation = copy.deepcopy(odom.pose.pose.orientation)
-        transforms.append(world_body)
+        The robot and lidar frames are deliberately not attached here. Their TF chain is
+        world -> odom_frame_id (dynamic) -> lidar_imu_frame_id (fixed sensor extrinsic).
+        Giving the lidar frame another static parent would freeze or corrupt its world pose.
+        """
+        stamp = rospy.Time.now()
 
-        self.tf_broadcaster.sendTransform(transforms)
+        world_camera_init = TransformStamped()
+        world_camera_init.header.stamp = stamp
+        world_camera_init.header.frame_id = self.world_frame_id
+        world_camera_init.child_frame_id = self.camera_init_frame_id
+        world_camera_init.transform.translation.x = self.world_camera_init_translation[0]
+        world_camera_init.transform.translation.y = self.world_camera_init_translation[1]
+        world_camera_init.transform.translation.z = self.world_camera_init_translation[2]
+        set_quaternion(world_camera_init.transform.rotation, self.world_camera_init_quaternion)
+
+        self.static_tf_broadcaster.sendTransform(world_camera_init)
 
 
 if __name__ == '__main__':

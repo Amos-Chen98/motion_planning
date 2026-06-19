@@ -5,3 +5,13 @@ LivoxMaxRange: 5.0
 LivoxHorizontalFovDeg: 360.0
 LivoxVerticalMinDeg: -7.0
 LivoxVerticalMaxDeg: 52.0
+
+# Fixed robot -> lidar IMU extrinsic (T_robot_lidar_imu: the lidar IMU pose
+# expressed in the robot frame).
+# Defaults below are identity (zero offset, zero rotation).
+RobotToLidarImuTransX: 0.0
+RobotToLidarImuTransY: 0.0
+RobotToLidarImuTransZ: 0.0
+RobotToLidarImuRollDeg: 0.0
+RobotToLidarImuPitchDeg: 0.0
+RobotToLidarImuYawDeg: 0.0

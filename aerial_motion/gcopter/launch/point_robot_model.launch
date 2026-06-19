@@ -1,14 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <launch>
+    <!-- Topics. -->
     <arg name="odom_topic" default="quadrotor/uav/cog/odom" />
     <arg name="target_pose_topic" default="quadrotor/target_pose" />
+
+    <!-- TF frames. -->
     <arg name="world_frame_id" default="world" />
-    <!-- frame_id is kept as a compatibility alias for camera_init_frame_id. -->
-    <arg name="frame_id" default="camera_init" />
-    <arg name="camera_init_frame_id" default="$(arg frame_id)" />
-    <arg name="child_frame_id" default="base_link" />
-    <arg name="publish_tf" default="false" />
+    <arg name="robot_frame_id" default="quadrotor/cog" />
+    <arg name="camera_init_frame_id" default="camera_init" />
+
+    <!-- Publishing settings. -->
+    <arg name="publish_tf" default="true" />
     <arg name="publish_rate" default="40.0" />
+
+    <!-- Initial robot pose in the world frame. -->
     <arg name="spawn_x" default="0.0" />
     <arg name="spawn_y" default="0.0" />
     <arg name="spawn_z" default="1.0" />
@@ -16,8 +21,8 @@
 
     <node pkg="gcopter" type="point_robot_model.py" name="point_robot_model" output="screen">
         <param name="world_frame_id" type="str" value="$(arg world_frame_id)" />
+        <param name="odom_frame_id" type="str" value="$(arg robot_frame_id)" />
         <param name="camera_init_frame_id" type="str" value="$(arg camera_init_frame_id)" />
-        <param name="child_frame_id" type="str" value="$(arg child_frame_id)" />
         <param name="publish_tf" type="bool" value="$(arg publish_tf)" />
         <param name="publish_rate" type="double" value="$(arg publish_rate)" />
         <param name="spawn_x" type="double" value="$(arg spawn_x)" />

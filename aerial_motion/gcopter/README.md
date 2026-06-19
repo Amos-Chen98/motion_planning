@@ -68,7 +68,13 @@ Frame convention in online mode:
 
 - `world`: global map, target, odometry parent, visualization, and command frame.
 - `camera_init`: fixed reference frame published by the standalone point-robot demo from `spawn_x/y/z/yaw`.
-- `body`: odometry child frame and local point-cloud frame.
+- `quadrotor/cog`: moving robot frame and odometry child frame.
+- `body`: lidar IMU frame and local point-cloud frame, rigidly attached below `quadrotor/cog`.
+
+The demo TF chain is `world -> quadrotor/cog -> body`. The first transform is
+updated from robot odometry; the second is the fixed lidar extrinsic. The
+separate `world -> camera_init` transform is a fixed reference and is not a
+parent of the lidar frame.
 
 Common parameters:
 
@@ -87,7 +93,8 @@ Common parameters:
 Online parameters:
 
 - `WorldFrameId`: frame used for online visualization and command headers. Default: `world`.
-- `BodyFrameId`: local point-cloud frame published by the Livox Mid-360 simulator. Default: `body`.
+- `RobotFrameId`: robot frame represented by the odometry pose. Default: `quadrotor/cog`.
+- `LidarImuFrameId`: local point-cloud frame published by the Livox Mid-360 simulator. Default: `body`.
 - `camera_init_frame_id`: fixed reference frame published by the standalone point-robot model. Default: `camera_init`.
 - `ReplanHz`: online replanning rate. Default: `2.0`.
 - `UseAccumulatedMap`: keep previously observed local obstacles. Default: `true`.

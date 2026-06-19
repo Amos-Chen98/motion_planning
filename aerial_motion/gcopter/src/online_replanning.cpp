@@ -1,4 +1,5 @@
 #include "misc/visualizer.hpp"
+#include "misc/tf_utils.hpp"
 #include "gcopter/trajectory.hpp"
 #include "gcopter/gcopter.hpp"
 #include "gcopter/firi.hpp"
@@ -13,6 +14,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/point_cloud2_iterator.h>
 #include <std_msgs/Float64.h>
+#include <tf2_ros/transform_listener.h>
 
 #include <Eigen/Geometry>
 
@@ -116,6 +118,8 @@ class OnlineReplanner
 private:
     OnlinePlannerConfig config;
     ros::NodeHandle nh;
+    tf2_ros::Buffer tfBuffer;
+    tf2_ros::TransformListener tfListener;
     ros::Subscriber localMapSub;
     ros::Subscriber targetSub;
     ros::Subscriber odomSub;
@@ -153,6 +157,7 @@ public:
     OnlineReplanner(const OnlinePlannerConfig &conf, ros::NodeHandle &nh_)
         : config(conf),
           nh(nh_),
+          tfListener(tfBuffer),
           visualizer(nh, config.worldFrameId),
           latestWorldBody(Eigen::Isometry3d::Identity()),
           latestPositionWorld(Eigen::Vector3d::Zero()),
@@ -233,11 +238,22 @@ private:
 
     inline void odomCallback(const nav_msgs::Odometry::ConstPtr &msg)
     {
+        // The odom pose is expressed in msg->header.frame_id (its reference frame);
+        // register that frame to the world frame so downstream planning is always
+        // done in WorldFrameId, regardless of the odom source's convention.
         const geometry_msgs::Point &p = msg->pose.pose.position;
-        latestWorldBody = Eigen::Isometry3d::Identity();
-        latestWorldBody.translate(Eigen::Vector3d(p.x, p.y, p.z));
-        latestWorldBody.rotate(normalizedQuaternion(msg->pose.pose.orientation));
+        Eigen::Isometry3d odomRefBody = Eigen::Isometry3d::Identity();
+        odomRefBody.translate(Eigen::Vector3d(p.x, p.y, p.z));
+        odomRefBody.rotate(normalizedQuaternion(msg->pose.pose.orientation));
 
+        Eigen::Isometry3d worldOdomRef;
+        if (!tf_utils::resolveToWorld(tfBuffer, config.worldFrameId,
+                                      msg->header.frame_id, worldOdomRef))
+        {
+            return; // keep the last known pose until the transform is available
+        }
+
+        latestWorldBody = worldOdomRef * odomRefBody;
         latestPositionWorld = latestWorldBody.translation();
 
         if (traj.getPieceNum() <= 0)
@@ -250,10 +266,13 @@ private:
 
     inline void localMapCallback(const sensor_msgs::PointCloud2::ConstPtr &msg)
     {
-        if (!odomReceived)
+        // Register the cloud's own sensor frame (msg->header.frame_id) to the world
+        // frame via TF, so the sensor need not coincide with the odom body frame.
+        Eigen::Isometry3d worldSensor;
+        if (!tf_utils::resolveToWorld(tfBuffer, config.worldFrameId,
+                                      msg->header.frame_id, worldSensor))
         {
-            ROS_WARN_THROTTLE(1.0, "No odometry yet. Ignore local point cloud.");
-            return;
+            return; // skip this cloud rather than insert mis-registered points
         }
 
         if (!config.useAccumulatedMap)
@@ -261,7 +280,6 @@ private:
             occupiedVoxelKeys.clear();
         }
 
-        const Eigen::Isometry3d worldBody = latestWorldBody;
         size_t accepted = 0;
 
         try
@@ -277,7 +295,7 @@ private:
                     continue;
                 }
 
-                const Eigen::Vector3d pointWorld = worldBody * Eigen::Vector3d(*iterX, *iterY, *iterZ);
+                const Eigen::Vector3d pointWorld = worldSensor * Eigen::Vector3d(*iterX, *iterY, *iterZ);
                 const long key = voxelKeyFromPosition(pointWorld);
                 if (key >= 0)
                 {
