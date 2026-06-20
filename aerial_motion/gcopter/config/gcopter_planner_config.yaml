@@ -1,10 +1,6 @@
 # Map and path search
 TimeoutRRT: 0.02
 
-# Online receding-horizon replanning
-PlanningHorizon: 5.0
-BrakeDistance: 2.0
-NoReplanRadius: 3.0
 # Give up reaching the goal (e.g. set inside an obstacle) after this many consecutive
 # replans without getting any closer, then hold at the safe trajectory end.
 StallReplanLimit: 5

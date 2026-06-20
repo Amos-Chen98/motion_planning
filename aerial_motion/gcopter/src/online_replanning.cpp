@@ -77,7 +77,6 @@ struct OnlinePlannerConfig
     bool showPolytopeCorridor;
     double goalTolerance;
     double planningHorizon;
-    double brakeDistance;
     double noReplanRadius;
     int stallReplanLimit;
 
@@ -107,7 +106,6 @@ struct OnlinePlannerConfig
         nhPriv.param("ShowPolytopeCorridor", showPolytopeCorridor, true);
         nhPriv.param("GoalTolerance", goalTolerance, 0.2);
         nhPriv.param("PlanningHorizon", planningHorizon, 6.0);
-        nhPriv.param("BrakeDistance", brakeDistance, 2.0);
         nhPriv.param("NoReplanRadius", noReplanRadius, 1.0);
         nhPriv.param("StallReplanLimit", stallReplanLimit, 5);
     }
@@ -455,19 +453,21 @@ private:
             return false;
         }
 
-        // EGO-style local target velocity: keep cruising momentum along the route
-        // tangent, smoothly braking to zero as we approach the route's actual endpoint.
-        // Braking against routeEnd (not the raw goal) means that when the goal is
-        // unreachable, the robot still comes to a clean zero-velocity stop at the best
-        // safe approach point instead of coasting into the obstacle.
+        // Local target velocity. While the route is longer than the planning horizon the
+        // local target is only an intermediate waypoint, so keep full cruising momentum
+        // (maxVel) along the route tangent. Once the whole route fits inside the horizon
+        // the local target coincides with the route's actual endpoint -- the goal, or the
+        // best safe approach when the goal is unreachable -- and we command zero terminal
+        // velocity, letting GCOPTER brake smoothly to a stop over the remaining
+        // (<= PlanningHorizon) distance. Keying the stop on routeEnd (not the raw goal)
+        // still yields a clean zero-velocity halt at the best safe approach when the goal
+        // sits inside an obstacle.
         Eigen::Vector3d localTargetVel = Eigen::Vector3d::Zero();
         const Eigen::Vector3d tangent = route.back() - route[route.size() - 2];
-        if (tangent.norm() > 1.0e-6)
+        const bool routeTruncated = (localTarget - routeEnd).norm() > 1.0e-6;
+        if (routeTruncated && tangent.norm() > 1.0e-6)
         {
-            const double distToDest = (routeEnd - localTarget).norm();
-            const double brake = config.brakeDistance > 1.0e-3 ? config.brakeDistance : 1.0e-3;
-            const double speed = config.maxVelMag * std::min(1.0, distToDest / brake);
-            localTargetVel = speed * tangent.normalized();
+            localTargetVel = config.maxVelMag * tangent.normalized();
         }
 
         Eigen::Matrix3d iniState;

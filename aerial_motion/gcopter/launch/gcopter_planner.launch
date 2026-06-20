@@ -18,8 +18,7 @@
     <arg name="use_accumulated_map" default="true" />
     <arg name="goal_tolerance" default="0.2" />
     <arg name="planning_horizon" default="6.0" />
-    <arg name="brake_distance" default="2.0" />
-    <arg name="no_replan_radius" default="1.0" />
+    <arg name="no_replan_radius" default="3.0" />
     <arg name="use_fixed_target_height" default="false" />
     <arg name="target_height" default="1.0" />
     <arg name="use_target_z" default="false" />
@@ -74,7 +73,6 @@
             <param name="UseAccumulatedMap" type="bool" value="$(arg use_accumulated_map)" />
             <param name="GoalTolerance" type="double" value="$(arg goal_tolerance)" />
             <param name="PlanningHorizon" type="double" value="$(arg planning_horizon)" />
-            <param name="BrakeDistance" type="double" value="$(arg brake_distance)" />
             <param name="NoReplanRadius" type="double" value="$(arg no_replan_radius)" />
             <param name="UseFixedTargetHeight" type="bool" value="$(arg use_fixed_target_height)" />
             <param name="TargetHeight" type="double" value="$(arg target_height)" />
