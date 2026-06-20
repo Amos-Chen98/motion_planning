@@ -35,7 +35,6 @@
     <arg name="use_accumulated_map" default="true" />
     <arg name="goal_tolerance" default="0.2" />
     <arg name="planning_horizon" default="6.0" />
-    <arg name="no_replan_radius" default="3.0" />
 
     <!-- Closed-loop navigation options -->
     <arg name="command_hz" default="40.0" />
@@ -116,7 +115,6 @@
         <arg name="use_accumulated_map" value="$(arg use_accumulated_map)" />
         <arg name="goal_tolerance" value="$(arg goal_tolerance)" />
         <arg name="planning_horizon" value="$(arg planning_horizon)" />
-        <arg name="no_replan_radius" value="$(arg no_replan_radius)" />
         <arg name="use_fixed_target_height" value="$(arg use_fixed_target_height)" />
         <arg name="target_height" value="$(arg target_height)" />
         <arg name="use_target_z" value="$(arg use_target_z)" />

@@ -77,8 +77,6 @@ struct OnlinePlannerConfig
     bool showPolytopeCorridor;
     double goalTolerance;
     double planningHorizon;
-    double noReplanRadius;
-    int stallReplanLimit;
 
     explicit OnlinePlannerConfig(const ros::NodeHandle &nhPriv)
     {
@@ -106,8 +104,6 @@ struct OnlinePlannerConfig
         nhPriv.param("ShowPolytopeCorridor", showPolytopeCorridor, true);
         nhPriv.param("GoalTolerance", goalTolerance, 0.2);
         nhPriv.param("PlanningHorizon", planningHorizon, 6.0);
-        nhPriv.param("NoReplanRadius", noReplanRadius, 1.0);
-        nhPriv.param("StallReplanLimit", stallReplanLimit, 5);
     }
 };
 
@@ -134,7 +130,6 @@ private:
 
     Eigen::Isometry3d latestWorldBody;
     Eigen::Vector3d latestPositionWorld;
-    Eigen::Vector3d latestGoalWorld;
     bool odomReceived;
     bool mapInitialized;
     bool targetReceived;
@@ -144,12 +139,19 @@ private:
     double trajStamp;
     double lastYaw;
 
-    // Unreachable-goal handling (e.g. target set inside an obstacle): track the best
-    // approach toward the goal and freeze once we can no longer make progress, so the
-    // robot stops at the end of its last known-safe trajectory instead of looping.
-    double bestGoalApproach_;
-    int stalledReplans_;
-    bool holdAtSafeEnd_;
+    // The single global target the planner steers toward: the requested target clamped
+    // into the valid planning volume. requestedTarget_ keeps the raw click only for the
+    // clamp warning and the dual-marker visualization; it is never used for planning.
+    Eigen::Vector3d globalTarget_;
+    Eigen::Vector3d requestedTarget_;
+    bool targetWasClamped_;
+
+    // Final-approach latch: set once a braking-to-rest trajectory toward globalTarget_
+    // (ending at the goal, or the closest safe approach when the goal sits in an
+    // obstacle) has been committed. While latched the replan loop stops planning and
+    // holds holdPosition_, so it never issues a degenerate near-goal RRT/GCOPTER query.
+    bool goalLatched_;
+    Eigen::Vector3d holdPosition_;
 
 public:
     OnlineReplanner(const OnlinePlannerConfig &conf, ros::NodeHandle &nh_)
@@ -159,16 +161,17 @@ public:
           visualizer(nh, config.worldFrameId),
           latestWorldBody(Eigen::Isometry3d::Identity()),
           latestPositionWorld(Eigen::Vector3d::Zero()),
-          latestGoalWorld(Eigen::Vector3d::Zero()),
           odomReceived(false),
           mapInitialized(false),
           targetReceived(false),
           commandActive(false),
           trajStamp(0.0),
           lastYaw(0.0),
-          bestGoalApproach_(std::numeric_limits<double>::infinity()),
-          stalledReplans_(0),
-          holdAtSafeEnd_(false)
+          globalTarget_(Eigen::Vector3d::Zero()),
+          requestedTarget_(Eigen::Vector3d::Zero()),
+          targetWasClamped_(false),
+          goalLatched_(false),
+          holdPosition_(Eigen::Vector3d::Zero())
     {
         const Eigen::Vector3i xyz((config.mapBound[1] - config.mapBound[0]) / config.voxelWidth,
                                   (config.mapBound[3] - config.mapBound[2]) / config.voxelWidth,
@@ -332,20 +335,35 @@ private:
 
     inline void targetCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
     {
-        latestGoalWorld = Eigen::Vector3d(msg->pose.position.x,
-                                          msg->pose.position.y,
-                                          getTargetHeight(*msg));
+        // Clamp once, here, into the valid planning volume. The clamped point is the only
+        // target the planner ever uses; the raw click is kept solely for the warning and
+        // the dual-marker visualization below.
+        requestedTarget_ = Eigen::Vector3d(msg->pose.position.x,
+                                           msg->pose.position.y,
+                                           getTargetHeight(*msg));
+        globalTarget_ = clampInsideMap(requestedTarget_);
+        targetWasClamped_ = (globalTarget_ - requestedTarget_).norm() > 1.0e-3;
         targetReceived = true;
 
-        // A fresh target re-arms the unreachable-goal logic.
-        bestGoalApproach_ = std::numeric_limits<double>::infinity();
-        stalledReplans_ = 0;
-        holdAtSafeEnd_ = false;
+        // A fresh target re-arms the final-approach latch.
+        goalLatched_ = false;
 
-        visualizer.visualizeStartGoal(latestGoalWorld, 0.05, 1);
+        if (targetWasClamped_)
+        {
+            ROS_WARN("Requested target [%.2f, %.2f, %.2f] is outside the planning volume; "
+                     "clamped to [%.2f, %.2f, %.2f]. Planning to the clamped target.",
+                     requestedTarget_.x(), requestedTarget_.y(), requestedTarget_.z(),
+                     globalTarget_.x(), globalTarget_.y(), globalTarget_.z());
+        }
+
+        visualizer.visualizeStartGoal(globalTarget_, 0.05, 1);
+        if (targetWasClamped_)
+        {
+            visualizer.visualizeStartGoal(requestedTarget_, 0.05, 2);
+        }
         ROS_INFO("Received online replanning target in %s: [%.2f, %.2f, %.2f].",
                  config.worldFrameId.c_str(),
-                 latestGoalWorld.x(), latestGoalWorld.y(), latestGoalWorld.z());
+                 globalTarget_.x(), globalTarget_.y(), globalTarget_.z());
     }
 
     // Clamp a (possibly far/out-of-bounds) point into the valid planning volume so
@@ -393,16 +411,19 @@ private:
                                   Trajectory<5> &candidateTraj,
                                   std::vector<Eigen::Vector3d> &route,
                                   std::vector<Eigen::MatrixX4d> &hPolys,
-                                  bool &reachedGoal)
+                                  bool &terminal)
     {
-        reachedGoal = false;
-        const Eigen::Vector3d plannerGoal = clampInsideMap(goal);
+        // terminal == true means the whole route fit within the planning horizon, so the
+        // optimized trajectory brakes to a full stop at the route end (the goal, or the
+        // closest safe approach when the goal sits inside an obstacle). The caller latches
+        // on this to stop replanning. goal is already clamped into the planning volume.
+        terminal = false;
 
         std::vector<Eigen::Vector3d> fullRoute;
         try
         {
             sfc_gen::planPath<voxel_map::VoxelMap>(start,
-                                                   plannerGoal,
+                                                   goal,
                                                    voxelMap.getOrigin(),
                                                    voxelMap.getCorner(),
                                                    &voxelMap,
@@ -423,10 +444,7 @@ private:
             return false;
         }
 
-        // RRT only returns an approximate path when the goal is unreachable (e.g. set
-        // inside an obstacle): its endpoint then falls short of the goal.
         const Eigen::Vector3d routeEnd = fullRoute.back();
-        reachedGoal = (routeEnd - plannerGoal).norm() <= config.goalTolerance;
 
         // Keep only one horizon worth of the route; optimize a local trajectory.
         const Eigen::Vector3d localTarget = truncateRouteToHorizon(fullRoute, route);
@@ -469,6 +487,7 @@ private:
         {
             localTargetVel = config.maxVelMag * tangent.normalized();
         }
+        terminal = !routeTruncated;
 
         Eigen::Matrix3d iniState;
         Eigen::Matrix3d finState;
@@ -519,22 +538,14 @@ private:
             return;
         }
 
-        const Eigen::Vector3d goal = latestGoalWorld;
-
-        // Arrival is judged on the real (odometry) position.
-        if ((latestPositionWorld - goal).norm() <= config.goalTolerance)
+        // Final-approach latch: the braking-to-rest trajectory is already committed, so
+        // stop replanning. Once it has finished executing, hold the latched stop position.
+        if (goalLatched_)
         {
-            commandActive = false;
-            traj.clear();
-            publishPoseCommand(goal, Eigen::Vector3d::Zero());
-            return;
-        }
-
-        // The goal was found unreachable and we already stopped making progress: keep
-        // executing the last known-safe trajectory (it ends with zero velocity at the
-        // best safe approach) and stop replanning until a new target arrives.
-        if (holdAtSafeEnd_)
-        {
+            if (!commandActive)
+            {
+                publishPoseCommand(holdPosition_, Eigen::Vector3d::Zero());
+            }
             return;
         }
 
@@ -553,15 +564,18 @@ private:
             startAcc = traj.getAcc(tCur);
         }
 
-        // Final-approach no-replan zone (mirrors EGO-Planner's no_replan_thresh): once
-        // we are within NoReplanRadius of the goal, keep executing the committed
-        // trajectory (which already ends at the goal with zero velocity) instead of
-        // replanning. Replanning here would degenerate to an (almost) start==goal
-        // problem, making RRT's prolate-hyperspheroid throw and GCOPTER diverge to
-        // NaN/Inf as the robot lands on the target.
-        if (commandActive && traj.getPieceNum() > 0 &&
-            (start - goal).norm() <= config.noReplanRadius)
+        // Already within tolerance of the goal: latch and hold. Also guards the degenerate
+        // start==goal case (e.g. a fresh target dropped right on the robot) from ever
+        // reaching the path search. Any in-flight trajectory is left to finish by the
+        // command loop; the goalLatched_ branch above holds once it is done.
+        if ((start - globalTarget_).norm() <= config.goalTolerance)
         {
+            goalLatched_ = true;
+            holdPosition_ = start;
+            if (!commandActive)
+            {
+                publishPoseCommand(holdPosition_, Eigen::Vector3d::Zero());
+            }
             return;
         }
 
@@ -575,42 +589,37 @@ private:
         std::vector<Eigen::Vector3d> route;
         std::vector<Eigen::MatrixX4d> hPolys;
 
-        bool reachedGoal = false;
-        if (!computeTrajectory(start, startVel, startAcc, goal, candidateTraj, route, hPolys, reachedGoal))
+        bool terminal = false;
+        if (!computeTrajectory(start, startVel, startAcc, globalTarget_, candidateTraj, route, hPolys, terminal))
         {
             return;
-        }
-
-        // Unreachable-goal arbitration: if the route cannot reach the goal and the
-        // robot is no longer getting any closer to it, give up and hold at the safe
-        // trajectory end rather than oscillating near the obstacle forever.
-        if (reachedGoal)
-        {
-            bestGoalApproach_ = std::numeric_limits<double>::infinity();
-            stalledReplans_ = 0;
-        }
-        else
-        {
-            const double distToGoal = (start - goal).norm();
-            if (distToGoal < bestGoalApproach_ - 0.1)
-            {
-                bestGoalApproach_ = distToGoal; // still closing in on the goal
-                stalledReplans_ = 0;
-            }
-            else if (++stalledReplans_ >= config.stallReplanLimit)
-            {
-                holdAtSafeEnd_ = true;
-                ROS_WARN("Global target appears unreachable; holding at the safe trajectory end.");
-                return; // keep the last known-safe trajectory; do not commit a new one
-            }
         }
 
         traj = candidateTraj;
         trajStamp = tNow;
         commandActive = true;
 
+        // The whole route fit within one horizon, so this trajectory brakes to a full stop
+        // at its end (the goal, or the closest safe approach when the goal sits inside an
+        // obstacle). Nothing left to plan: latch and let the command loop send it out.
+        if (terminal)
+        {
+            goalLatched_ = true;
+            holdPosition_ = traj.getPos(traj.getTotalDuration());
+            if ((holdPosition_ - globalTarget_).norm() > config.goalTolerance)
+            {
+                ROS_WARN("Global target unreachable; stopping at the closest safe approach "
+                         "[%.2f, %.2f, %.2f].",
+                         holdPosition_.x(), holdPosition_.y(), holdPosition_.z());
+            }
+        }
+
         visualizer.visualizeStartGoal(start, 0.05, 0);
-        visualizer.visualizeStartGoal(goal, 0.05, 1);
+        visualizer.visualizeStartGoal(globalTarget_, 0.05, 1);
+        if (targetWasClamped_)
+        {
+            visualizer.visualizeStartGoal(requestedTarget_, 0.05, 2);
+        }
         if (config.showPolytopeCorridor)
         {
             visualizer.visualizePolytope(hPolys);

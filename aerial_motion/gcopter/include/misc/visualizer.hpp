@@ -299,13 +299,21 @@ public:
         sphereMarkers.pose.orientation.w = 1.00;
         sphereMarkers.action = visualization_msgs::Marker::ADD;
         sphereMarkers.ns = "StartGoal";
-        // Start (sg == 0) stays red; the global target (sg == 1) uses a distinct
-        // purple so it is not confused with the red route-waypoint spheres.
+        // Start (sg == 0) stays red; the global (clamped) target (sg == 1) uses a distinct
+        // purple so it is not confused with the red route-waypoint spheres; the originally
+        // requested target (sg == 2), shown only when it was out of bounds and had to be
+        // clamped, is orange to flag "requested but outside the planning volume".
         if (sg == 1)
         {
             sphereMarkers.color.r = 0.60;
             sphereMarkers.color.g = 0.00;
             sphereMarkers.color.b = 0.90;
+        }
+        else if (sg == 2)
+        {
+            sphereMarkers.color.r = 1.00;
+            sphereMarkers.color.g = 0.55;
+            sphereMarkers.color.b = 0.00;
         }
         else
         {
