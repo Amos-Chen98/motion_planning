@@ -226,7 +226,7 @@ public:
         }
     }
 
-    inline void plan()
+    inline bool plan()
     {
         if (startGoal.size() == 2)
         {
@@ -289,12 +289,12 @@ public:
                                    penaltyWeights,
                                    config.gravAcc))
                 {
-                    return;
+                    return false;
                 }
 
                 if (std::isinf(gcopter.optimize(traj, config.relCostTol)))
                 {
-                    return;
+                    return false;
                 }
 
                 if (traj.getPieceNum() > 0)
@@ -302,9 +302,12 @@ public:
                     trajStamp = ros::Time::now().toSec();
                     commandActive = true;
                     visualizer.visualize(traj, route);
+                    return true;
                 }
             }
         }
+
+        return false;
     }
 
     inline double getTargetHeight(const geometry_msgs::PoseStamped::ConstPtr &msg) const
@@ -360,7 +363,16 @@ public:
         visualizer.visualizeStartGoal(goal, 0.05, 1);
         startGoal.emplace_back(start);
         startGoal.emplace_back(goal);
-        plan();
+
+        const auto planningStart = std::chrono::steady_clock::now();
+        const bool planningSucceeded = plan();
+        const double planningTimeMs =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - planningStart)
+                .count();
+        ROS_INFO("GCOPTER global planning %s in %.3f ms.",
+                 planningSucceeded ? "succeeded" : "failed",
+                 planningTimeMs);
     }
 
     // Stream a position/yaw setpoint from an already-sampled trajectory state.

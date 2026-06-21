@@ -90,7 +90,7 @@ namespace sfc_gen
         auto pdef(std::make_shared<ompl::base::ProblemDefinition>(si));
         pdef->setStartAndGoalStates(start, goal);
         pdef->setOptimizationObjective(std::make_shared<ompl::base::PathLengthOptimizationObjective>(si));
-        auto planner(std::make_shared<ompl::geometric::InformedRRTstar>(si));
+        auto planner(std::make_shared<ompl::geometric::RRTstar>(si));
         planner->setProblemDefinition(pdef);
         planner->setup();
 

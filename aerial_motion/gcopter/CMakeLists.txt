@@ -9,6 +9,12 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -fPIC")
 find_package(Eigen3 REQUIRED)
 find_package(ompl REQUIRED)
 
+if(TARGET ompl::ompl)
+  set(GCOPTER_OMPL_TARGET ompl::ompl)
+else()
+  set(GCOPTER_OMPL_TARGET ${OMPL_LIBRARIES})
+endif()
+
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
@@ -47,12 +53,12 @@ add_executable(online_replanning src/online_replanning.cpp)
 add_executable(livox_mid360_simulator src/livox_mid360_simulator.cpp)
 
 target_link_libraries(global_planning
-  ${OMPL_LIBRARIES}
+  ${GCOPTER_OMPL_TARGET}
   ${catkin_LIBRARIES}
 )
 
 target_link_libraries(online_replanning
-  ${OMPL_LIBRARIES}
+  ${GCOPTER_OMPL_TARGET}
   ${catkin_LIBRARIES}
 )
 

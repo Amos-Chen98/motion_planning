@@ -19,6 +19,7 @@
 #include <Eigen/Geometry>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -590,7 +591,19 @@ private:
         std::vector<Eigen::MatrixX4d> hPolys;
 
         bool terminal = false;
-        if (!computeTrajectory(start, startVel, startAcc, globalTarget_, candidateTraj, route, hPolys, terminal))
+        const auto planningStart = std::chrono::steady_clock::now();
+        const bool planningSucceeded =
+            computeTrajectory(start, startVel, startAcc, globalTarget_,
+                              candidateTraj, route, hPolys, terminal);
+        const double planningTimeMs =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - planningStart)
+                .count();
+        ROS_INFO("GCOPTER online planning %s in %.3f ms.",
+                 planningSucceeded ? "succeeded" : "failed",
+                 planningTimeMs);
+
+        if (!planningSucceeded)
         {
             return;
         }
