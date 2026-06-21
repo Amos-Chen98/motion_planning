@@ -24,6 +24,7 @@ find_package(catkin REQUIRED COMPONENTS
 include_directories(
     ${catkin_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIRS}
+    ${OMPL_INCLUDE_DIRS}
     include
 )
 
@@ -46,12 +47,12 @@ add_executable(online_replanning src/online_replanning.cpp)
 add_executable(livox_mid360_simulator src/livox_mid360_simulator.cpp)
 
 target_link_libraries(global_planning
-  ompl::ompl
+  ${OMPL_LIBRARIES}
   ${catkin_LIBRARIES}
 )
 
 target_link_libraries(online_replanning
-  ompl::ompl
+  ${OMPL_LIBRARIES}
   ${catkin_LIBRARIES}
 )
 
