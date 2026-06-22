@@ -43,6 +43,7 @@ struct Config
     int integralIntervs;
     double relCostTol;
     double commandHz;
+    bool publishYawCommand;
     bool useFixedTargetHeight;
     double targetHeight;
     bool useTargetZ;
@@ -65,6 +66,7 @@ struct Config
         nh_priv.getParam("IntegralIntervs", integralIntervs);
         nh_priv.getParam("RelCostTol", relCostTol);
         nh_priv.param("CommandHz", commandHz, 40.0);
+        nh_priv.param("PublishYawCommand", publishYawCommand, false);
         nh_priv.param("UseFixedTargetHeight", useFixedTargetHeight, false);
         nh_priv.param("TargetHeight", targetHeight, 1.0);
         nh_priv.param("UseTargetZ", useTargetZ, false);
@@ -176,8 +178,8 @@ public:
         latestPosition = worldBody.translation();
         odomReceived = true;
 
-        // Track heading from odometry only until a trajectory takes over.
-        if (traj.getPieceNum() <= 0)
+        // Without trajectory-yaw control, continuously preserve the measured heading.
+        if (!config.publishYawCommand || traj.getPieceNum() <= 0)
         {
             lastYaw = yawFromRotation(worldBody.rotation());
         }
@@ -378,7 +380,8 @@ public:
     // Stream a position/yaw setpoint from an already-sampled trajectory state.
     inline void publishPoseCommand(const Eigen::Vector3d &pos, const Eigen::Vector3d &vel)
     {
-        if (vel(0) * vel(0) + vel(1) * vel(1) > 1.0e-6)
+        if (config.publishYawCommand &&
+            vel(0) * vel(0) + vel(1) * vel(1) > 1.0e-6)
         {
             lastYaw = std::atan2(vel(1), vel(0));
         }

@@ -14,6 +14,7 @@
 
     <!-- Closed-loop navigation options -->
     <arg name="command_hz" default="40.0" />
+    <arg name="publish_yaw_command" default="false" />
     <arg name="replan_hz" default="2.0" />
     <arg name="use_accumulated_map" default="true" />
     <arg name="goal_tolerance" default="0.2" />
@@ -50,6 +51,7 @@
             <param name="UseTargetZ" type="bool" value="$(arg use_target_z)" />
             <param name="ShowPolytopeCorridor" type="bool" value="$(arg show_corridor)" />
             <param name="CommandHz" type="double" value="$(arg command_hz)" />
+            <param name="PublishYawCommand" type="bool" value="$(arg publish_yaw_command)" />
         </node>
     </group>
 
@@ -68,6 +70,7 @@
             <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
             <param name="MaxVelMag" type="double" value="$(arg max_vel_mag)" />
             <param name="CommandHz" type="double" value="$(arg command_hz)" />
+            <param name="PublishYawCommand" type="bool" value="$(arg publish_yaw_command)" />
             <param name="ReplanHz" type="double" value="$(arg replan_hz)" />
             <param name="UseAccumulatedMap" type="bool" value="$(arg use_accumulated_map)" />
             <param name="GoalTolerance" type="double" value="$(arg goal_tolerance)" />

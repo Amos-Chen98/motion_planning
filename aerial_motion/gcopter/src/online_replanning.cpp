@@ -70,6 +70,7 @@ struct OnlinePlannerConfig
     int integralIntervs;
     double relCostTol;
     double commandHz;
+    bool publishYawCommand;
     double replanHz;
     bool useAccumulatedMap;
     bool useFixedTargetHeight;
@@ -97,6 +98,7 @@ struct OnlinePlannerConfig
         nhPriv.getParam("IntegralIntervs", integralIntervs);
         nhPriv.getParam("RelCostTol", relCostTol);
         nhPriv.param("CommandHz", commandHz, 40.0);
+        nhPriv.param("PublishYawCommand", publishYawCommand, false);
         nhPriv.param("ReplanHz", replanHz, 2.0);
         nhPriv.param("UseAccumulatedMap", useAccumulatedMap, true);
         nhPriv.param("UseFixedTargetHeight", useFixedTargetHeight, false);
@@ -258,7 +260,7 @@ private:
         latestWorldBody = worldOdomRef * odomRefBody;
         latestPositionWorld = latestWorldBody.translation();
 
-        if (traj.getPieceNum() <= 0)
+        if (!config.publishYawCommand || traj.getPieceNum() <= 0)
         {
             lastYaw = quaternionYaw(Eigen::Quaterniond(latestWorldBody.rotation()));
         }
@@ -642,7 +644,8 @@ private:
 
     inline void publishPoseCommand(const Eigen::Vector3d &pos, const Eigen::Vector3d &vel)
     {
-        if (vel(0) * vel(0) + vel(1) * vel(1) > 1.0e-6)
+        if (config.publishYawCommand &&
+            vel(0) * vel(0) + vel(1) * vel(1) > 1.0e-6)
         {
             lastYaw = std::atan2(vel(1), vel(0));
         }
