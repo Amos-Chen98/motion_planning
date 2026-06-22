@@ -3,7 +3,6 @@
 #include "gcopter/trajectory.hpp"
 #include "gcopter/gcopter.hpp"
 #include "gcopter/firi.hpp"
-#include "gcopter/flatness.hpp"
 #include "gcopter/voxel_map.hpp"
 #include "gcopter/sfc_gen.hpp"
 
@@ -13,8 +12,9 @@
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/point_cloud2_iterator.h>
-#include <std_msgs/Float64.h>
 #include <tf2_ros/transform_listener.h>
+
+#include <gcopter/PolyTraj.h>
 
 #include <Eigen/Geometry>
 
@@ -39,16 +39,30 @@ inline Eigen::Quaterniond normalizedQuaternion(const geometry_msgs::Quaternion &
     return quat.normalized();
 }
 
-inline double quaternionYaw(const Eigen::Quaterniond &q)
-{
-    const Eigen::Quaterniond quat = q.normalized();
-    return std::atan2(2.0 * (quat.w() * quat.z() + quat.x() * quat.y()),
-                      1.0 - 2.0 * (quat.y() * quat.y() + quat.z() * quat.z()));
-}
-
 inline bool isFinitePoint(const float x, const float y, const float z)
 {
     return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
+}
+
+template <int D>
+Trajectory<D> timeScaledTrajectory(const Trajectory<D> &input, const double scale)
+{
+    Trajectory<D> output;
+    output.reserve(input.getPieceNum());
+
+    for (const auto &piece : input)
+    {
+        typename Piece<D>::CoefficientMat coeff = piece.getCoeffMat();
+        double coefficientScale = 1.0;
+        for (int power = 1; power <= D; ++power)
+        {
+            coefficientScale *= scale;
+            coeff.col(D - power) /= coefficientScale;
+        }
+        output.emplace_back(piece.getDuration() * scale, coeff);
+    }
+
+    return output;
 }
 } // namespace
 
@@ -120,13 +134,11 @@ private:
     ros::Subscriber localMapSub;
     ros::Subscriber targetSub;
     ros::Subscriber odomSub;
-    ros::Publisher commandPub;
-    ros::Timer commandTimer;
+    ros::Publisher trajPub;
     ros::Timer replanTimer;
 
     voxel_map::VoxelMap voxelMap;
     Visualizer visualizer;
-    flatness::FlatnessMap flatmap;
 
     std::unordered_set<long> occupiedVoxelKeys;
     int dilateVoxelRadius;
@@ -136,25 +148,19 @@ private:
     bool odomReceived;
     bool mapInitialized;
     bool targetReceived;
-    bool commandActive;
 
+    // Retain the published trajectory and its t=0 for C2 handover sampling.
     Trajectory<5> traj;
     double trajStamp;
-    double lastYaw;
+    int trajId_;
 
-    // The single global target the planner steers toward: the requested target clamped
-    // into the valid planning volume. requestedTarget_ keeps the raw click only for the
-    // clamp warning and the dual-marker visualization; it is never used for planning.
+    // Plan to the clamped target; keep the raw request only for diagnostics.
     Eigen::Vector3d globalTarget_;
     Eigen::Vector3d requestedTarget_;
     bool targetWasClamped_;
 
-    // Final-approach latch: set once a braking-to-rest trajectory toward globalTarget_
-    // (ending at the goal, or the closest safe approach when the goal sits in an
-    // obstacle) has been committed. While latched the replan loop stops planning and
-    // holds holdPosition_, so it never issues a degenerate near-goal RRT/GCOPTER query.
+    // Stop replanning after committing the terminal braking trajectory.
     bool goalLatched_;
-    Eigen::Vector3d holdPosition_;
 
 public:
     OnlineReplanner(const OnlinePlannerConfig &conf, ros::NodeHandle &nh_)
@@ -167,14 +173,12 @@ public:
           odomReceived(false),
           mapInitialized(false),
           targetReceived(false),
-          commandActive(false),
           trajStamp(0.0),
-          lastYaw(0.0),
+          trajId_(0),
           globalTarget_(Eigen::Vector3d::Zero()),
           requestedTarget_(Eigen::Vector3d::Zero()),
           targetWasClamped_(false),
-          goalLatched_(false),
-          holdPosition_(Eigen::Vector3d::Zero())
+          goalLatched_(false)
     {
         const Eigen::Vector3i xyz((config.mapBound[1] - config.mapBound[0]) / config.voxelWidth,
                                   (config.mapBound[3] - config.mapBound[2]) / config.voxelWidth,
@@ -189,13 +193,7 @@ public:
                                  ros::TransportHints().tcpNoDelay());
         odomSub = nh.subscribe("odom", 1, &OnlineReplanner::odomCallback, this,
                                ros::TransportHints().tcpNoDelay());
-        commandPub = nh.advertise<geometry_msgs::PoseStamped>("command", 10);
-
-        flatmap.reset(config.gravAcc);
-
-        const double commandHz = config.commandHz > 0.0 ? config.commandHz : 40.0;
-        commandTimer = nh.createTimer(ros::Duration(1.0 / commandHz),
-                                      &OnlineReplanner::commandTimerCallback, this);
+        trajPub = nh.advertise<gcopter::PolyTraj>("trajectory", 10);
 
         const double replanHz = config.replanHz > 0.0 ? config.replanHz : 2.0;
         replanTimer = nh.createTimer(ros::Duration(1.0 / replanHz),
@@ -242,9 +240,7 @@ private:
 
     inline void odomCallback(const nav_msgs::Odometry::ConstPtr &msg)
     {
-        // The odom pose is expressed in msg->header.frame_id (its reference frame);
-        // register that frame to the world frame so downstream planning is always
-        // done in WorldFrameId, regardless of the odom source's convention.
+        // Transform odometry into the planning frame.
         const geometry_msgs::Point &p = msg->pose.pose.position;
         Eigen::Isometry3d odomRefBody = Eigen::Isometry3d::Identity();
         odomRefBody.translate(Eigen::Vector3d(p.x, p.y, p.z));
@@ -259,19 +255,12 @@ private:
 
         latestWorldBody = worldOdomRef * odomRefBody;
         latestPositionWorld = latestWorldBody.translation();
-
-        if (!config.publishYawCommand || traj.getPieceNum() <= 0)
-        {
-            lastYaw = quaternionYaw(Eigen::Quaterniond(latestWorldBody.rotation()));
-        }
-
         odomReceived = true;
     }
 
     inline void localMapCallback(const sensor_msgs::PointCloud2::ConstPtr &msg)
     {
-        // Register the cloud's own sensor frame (msg->header.frame_id) to the world
-        // frame via TF, so the sensor need not coincide with the odom body frame.
+        // Transform sensor points into the planning frame.
         Eigen::Isometry3d worldSensor;
         if (!tf_utils::resolveToWorld(tfBuffer, config.worldFrameId,
                                       msg->header.frame_id, worldSensor))
@@ -338,9 +327,7 @@ private:
 
     inline void targetCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
     {
-        // Clamp once, here, into the valid planning volume. The clamped point is the only
-        // target the planner ever uses; the raw click is kept solely for the warning and
-        // the dual-marker visualization below.
+        // Clamp once and use the bounded target throughout planning.
         requestedTarget_ = Eigen::Vector3d(msg->pose.position.x,
                                            msg->pose.position.y,
                                            getTargetHeight(*msg));
@@ -348,7 +335,6 @@ private:
         targetWasClamped_ = (globalTarget_ - requestedTarget_).norm() > 1.0e-3;
         targetReceived = true;
 
-        // A fresh target re-arms the final-approach latch.
         goalLatched_ = false;
 
         if (targetWasClamped_)
@@ -369,9 +355,7 @@ private:
                  globalTarget_.x(), globalTarget_.y(), globalTarget_.z());
     }
 
-    // Clamp a (possibly far/out-of-bounds) point into the valid planning volume so
-    // that RRT always receives an in-bounds goal. Unknown space inside the grid is
-    // treated as free, hence flyable.
+    // Keep RRT goals inside the valid planning volume.
     inline Eigen::Vector3d clampInsideMap(const Eigen::Vector3d &pt) const
     {
         const Eigen::Vector3d offs = Eigen::Vector3d::Constant(config.dilateRadius + voxelMap.getScale());
@@ -380,8 +364,7 @@ private:
         return pt.cwiseMax(lo).cwiseMin(hi);
     }
 
-    // Truncate a geometric route to the planning horizon (by arc length). The last
-    // kept point is interpolated to land exactly at the horizon distance.
+    // Truncate the route to the local planning horizon.
     inline Eigen::Vector3d truncateRouteToHorizon(const std::vector<Eigen::Vector3d> &full,
                                                   std::vector<Eigen::Vector3d> &local) const
     {
@@ -403,7 +386,6 @@ private:
             local.push_back(full[i]);
         }
 
-        // Whole route is within the horizon: local target is the route end (goal).
         return local.back();
     }
 
@@ -416,10 +398,7 @@ private:
                                   std::vector<Eigen::MatrixX4d> &hPolys,
                                   bool &terminal)
     {
-        // terminal == true means the whole route fit within the planning horizon, so the
-        // optimized trajectory brakes to a full stop at the route end (the goal, or the
-        // closest safe approach when the goal sits inside an obstacle). The caller latches
-        // on this to stop replanning. goal is already clamped into the planning volume.
+        // A terminal trajectory brakes at the goal or closest safe approach.
         terminal = false;
 
         std::vector<Eigen::Vector3d> fullRoute;
@@ -435,8 +414,7 @@ private:
         }
         catch (const std::exception &e)
         {
-            // OMPL can throw (e.g. degenerate prolate hyperspheroid) for ill-posed
-            // queries; never let it abort the planner node.
+            // Keep invalid OMPL queries from aborting the planner.
             ROS_WARN_THROTTLE(1.0, "Path search threw an exception: %s", e.what());
             return false;
         }
@@ -449,7 +427,7 @@ private:
 
         const Eigen::Vector3d routeEnd = fullRoute.back();
 
-        // Keep only one horizon worth of the route; optimize a local trajectory.
+        // Optimize one local horizon.
         const Eigen::Vector3d localTarget = truncateRouteToHorizon(fullRoute, route);
         if (route.size() < 2)
         {
@@ -474,15 +452,7 @@ private:
             return false;
         }
 
-        // Local target velocity. While the route is longer than the planning horizon the
-        // local target is only an intermediate waypoint, so keep full cruising momentum
-        // (maxVel) along the route tangent. Once the whole route fits inside the horizon
-        // the local target coincides with the route's actual endpoint -- the goal, or the
-        // best safe approach when the goal is unreachable -- and we command zero terminal
-        // velocity, letting GCOPTER brake smoothly to a stop over the remaining
-        // (<= PlanningHorizon) distance. Keying the stop on routeEnd (not the raw goal)
-        // still yields a clean zero-velocity halt at the best safe approach when the goal
-        // sits inside an obstacle.
+        // Cruise through intermediate horizons; brake on the terminal horizon.
         Eigen::Vector3d localTargetVel = Eigen::Vector3d::Zero();
         const Eigen::Vector3d tangent = route.back() - route[route.size() - 2];
         const bool routeTruncated = (localTarget - routeEnd).norm() > 1.0e-6;
@@ -531,7 +501,52 @@ private:
             return false;
         }
 
-        return candidateTraj.getPieceNum() > 0;
+        if (candidateTraj.getPieceNum() <= 0)
+        {
+            return false;
+        }
+
+        // Enforce the velocity limit on the continuous polynomial.
+        const double optimizedMaxVel = candidateTraj.getMaxVelRate();
+        if (!std::isfinite(optimizedMaxVel) || config.maxVelMag <= 0.0)
+        {
+            ROS_WARN_THROTTLE(1.0, "Optimized trajectory has an invalid velocity bound.");
+            return false;
+        }
+
+        if (optimizedMaxVel > config.maxVelMag)
+        {
+            constexpr double velocityMargin = 0.99;
+            const bool significantViolation =
+                optimizedMaxVel > config.maxVelMag * 1.01;
+            const double timeScale =
+                optimizedMaxVel / (velocityMargin * config.maxVelMag);
+            candidateTraj = timeScaledTrajectory(candidateTraj, timeScale);
+
+            const double scaledMaxVel = candidateTraj.getMaxVelRate();
+            if (!std::isfinite(scaledMaxVel) ||
+                scaledMaxVel > config.maxVelMag * (1.0 + 1.0e-6))
+            {
+                ROS_WARN_THROTTLE(1.0, "Failed to enforce the trajectory velocity limit.");
+                return false;
+            }
+
+            if (significantViolation)
+            {
+                ROS_WARN_THROTTLE(1.0,
+                                  "Time-scaled online trajectory by %.3f: max velocity "
+                                  "%.3f -> %.3f m/s (limit %.3f m/s).",
+                                  timeScale, optimizedMaxVel, scaledMaxVel, config.maxVelMag);
+            }
+            else
+            {
+                ROS_DEBUG("Time-scaled online trajectory by %.3f to preserve the "
+                          "%.3f m/s velocity limit.",
+                          timeScale, config.maxVelMag);
+            }
+        }
+
+        return true;
     }
 
     inline void replanTimerCallback(const ros::TimerEvent &)
@@ -541,44 +556,29 @@ private:
             return;
         }
 
-        // Final-approach latch: the braking-to-rest trajectory is already committed, so
-        // stop replanning. Once it has finished executing, hold the latched stop position.
         if (goalLatched_)
         {
-            if (!commandActive)
-            {
-                publishPoseCommand(holdPosition_, Eigen::Vector3d::Zero());
-            }
             return;
         }
 
-        // Sample the start state from the trajectory currently being executed so the
-        // new local trajectory continues its position/velocity/acceleration (C2). The
-        // sampling instant tNow becomes the new trajStamp for seamless handover.
-        const double tNow = ros::Time::now().toSec();
+        // Seed replanning from the active trajectory for C2 continuity.
+        const double handoverTime = ros::Time::now().toSec();
         Eigen::Vector3d start = latestPositionWorld;
         Eigen::Vector3d startVel = Eigen::Vector3d::Zero();
         Eigen::Vector3d startAcc = Eigen::Vector3d::Zero();
-        if (commandActive && traj.getPieceNum() > 0)
+        if (hasActiveTraj(handoverTime))
         {
-            const double tCur = std::max(0.0, std::min(tNow - trajStamp, traj.getTotalDuration()));
+            const double tCur =
+                std::max(0.0, std::min(handoverTime - trajStamp, traj.getTotalDuration()));
             start = traj.getPos(tCur);
             startVel = traj.getVel(tCur);
             startAcc = traj.getAcc(tCur);
         }
 
-        // Already within tolerance of the goal: latch and hold. Also guards the degenerate
-        // start==goal case (e.g. a fresh target dropped right on the robot) from ever
-        // reaching the path search. Any in-flight trajectory is left to finish by the
-        // command loop; the goalLatched_ branch above holds once it is done.
+        // Avoid degenerate near-goal planning.
         if ((start - globalTarget_).norm() <= config.goalTolerance)
         {
             goalLatched_ = true;
-            holdPosition_ = start;
-            if (!commandActive)
-            {
-                publishPoseCommand(holdPosition_, Eigen::Vector3d::Zero());
-            }
             return;
         }
 
@@ -605,27 +605,26 @@ private:
                  planningSucceeded ? "succeeded" : "failed",
                  planningTimeMs);
 
+        // Keep executing the previous trajectory if replanning fails.
         if (!planningSucceeded)
         {
             return;
         }
 
         traj = candidateTraj;
-        trajStamp = tNow;
-        commandActive = true;
+        trajStamp = handoverTime;
+        publishTrajectory(handoverTime);
 
-        // The whole route fit within one horizon, so this trajectory brakes to a full stop
-        // at its end (the goal, or the closest safe approach when the goal sits inside an
-        // obstacle). Nothing left to plan: latch and let the command loop send it out.
+        // Latch after publishing the terminal braking trajectory.
         if (terminal)
         {
             goalLatched_ = true;
-            holdPosition_ = traj.getPos(traj.getTotalDuration());
-            if ((holdPosition_ - globalTarget_).norm() > config.goalTolerance)
+            const Eigen::Vector3d endPos = traj.getPos(traj.getTotalDuration());
+            if ((endPos - globalTarget_).norm() > config.goalTolerance)
             {
                 ROS_WARN("Global target unreachable; stopping at the closest safe approach "
                          "[%.2f, %.2f, %.2f].",
-                         holdPosition_.x(), holdPosition_.y(), holdPosition_.z());
+                         endPos.x(), endPos.y(), endPos.z());
             }
         }
 
@@ -642,76 +641,40 @@ private:
         visualizer.visualize(traj, route);
     }
 
-    inline void publishPoseCommand(const Eigen::Vector3d &pos, const Eigen::Vector3d &vel)
+    // Prefer the active trajectory over odometry for handover state sampling.
+    inline bool hasActiveTraj(const double now) const
     {
-        if (config.publishYawCommand &&
-            vel(0) * vel(0) + vel(1) * vel(1) > 1.0e-6)
-        {
-            lastYaw = std::atan2(vel(1), vel(0));
-        }
-
-        geometry_msgs::PoseStamped poseMsg;
-        poseMsg.header.frame_id = config.worldFrameId;
-        poseMsg.header.stamp = ros::Time::now();
-
-        poseMsg.pose.position.x = pos(0);
-        poseMsg.pose.position.y = pos(1);
-        poseMsg.pose.position.z = pos(2);
-        poseMsg.pose.orientation.x = 0.0;
-        poseMsg.pose.orientation.y = 0.0;
-        poseMsg.pose.orientation.z = std::sin(0.5 * lastYaw);
-        poseMsg.pose.orientation.w = std::cos(0.5 * lastYaw);
-
-        commandPub.publish(poseMsg);
+        return traj.getPieceNum() > 0 && (now - trajStamp) < traj.getTotalDuration();
     }
 
-    inline void publishDiagnostics(const double t, const Eigen::Vector3d &vel)
+    // Publish the optimized polynomial for asynchronous execution.
+    inline void publishTrajectory(const double startTime)
     {
-        Eigen::Vector4d quat;
-        Eigen::Vector3d omg;
+        gcopter::PolyTraj msg;
+        msg.start_time = ros::Time(startTime);
+        msg.traj_id = trajId_++;
+        msg.order = 5;
 
-        flatmap.forward(traj.getAcc(t),
-                        traj.getJer(t),
-                        0.0,
-                        0.0,
-                        quat,
-                        omg);
-
-        std_msgs::Float64 speedMsg, tiltMsg, bdrMsg;
-        speedMsg.data = vel.norm();
-        tiltMsg.data = std::acos(1.0 - 2.0 * (quat(1) * quat(1) + quat(2) * quat(2)));
-        bdrMsg.data = omg.norm();
-        visualizer.speedPub.publish(speedMsg);
-        visualizer.tiltPub.publish(tiltMsg);
-        visualizer.bdrPub.publish(bdrMsg);
-    }
-
-    inline void commandTimerCallback(const ros::TimerEvent &)
-    {
-        if (!commandActive || traj.getPieceNum() <= 0)
+        const int coefPerPiece = 6; // order + 1
+        const int n = traj.getPieceNum();
+        msg.durations.reserve(n);
+        msg.coef_x.reserve(n * coefPerPiece);
+        msg.coef_y.reserve(n * coefPerPiece);
+        msg.coef_z.reserve(n * coefPerPiece);
+        for (int p = 0; p < n; ++p)
         {
-            return;
+            const Piece<5> &piece = traj[p];
+            const Piece<5>::CoefficientMat coeff = piece.getCoeffMat();
+            msg.durations.push_back(piece.getDuration());
+            for (int j = 0; j < coefPerPiece; ++j)
+            {
+                msg.coef_x.push_back(coeff(0, j));
+                msg.coef_y.push_back(coeff(1, j));
+                msg.coef_z.push_back(coeff(2, j));
+            }
         }
 
-        const double duration = traj.getTotalDuration();
-        const double delta = ros::Time::now().toSec() - trajStamp;
-        const bool finished = delta >= duration;
-        const double t = std::max(0.0, std::min(delta, duration));
-
-        const Eigen::Vector3d pos = traj.getPos(t);
-        const Eigen::Vector3d vel = traj.getVel(t);
-
-        if (delta > 0.0 && !finished)
-        {
-            publishDiagnostics(t, vel);
-        }
-
-        publishPoseCommand(pos, vel);
-
-        if (finished)
-        {
-            commandActive = false;
-        }
+        trajPub.publish(msg);
     }
 };
 

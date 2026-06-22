@@ -24,6 +24,7 @@
     <!-- Point-robot model for the standalone closed-loop GCOPTER demo -->
     <arg name="ideal_robot_publish_rate" default="40.0" />
     <arg name="publish_tf" default="true" />
+    <arg name="publish_yaw_command" default="true" />
     <!-- Initial robot pose in world (seeds the odom before the first target_pose). -->
     <arg name="spawn_x" default="0.0" />
     <arg name="spawn_y" default="0.0" />
@@ -123,6 +124,7 @@
         <arg name="voxel_width" value="$(arg voxel_width)" />
         <arg name="dilate_radius" value="$(arg dilate_radius)" />
         <arg name="map_bound" value="$(arg map_bound)" />
+        <arg name="publish_yaw_command" value="$(arg publish_yaw_command)" />
     </include>
 
 </launch>

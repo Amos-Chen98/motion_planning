@@ -11,6 +11,7 @@
     <arg name="target_topic" default="/move_base_simple/goal" />
     <arg name="odom_topic" default="quadrotor/uav/cog/odom" />
     <arg name="command_topic" default="quadrotor/target_pose" />
+    <arg name="trajectory_topic" default="planning/trajectory" />
 
     <!-- Closed-loop navigation options -->
     <arg name="command_hz" default="40.0" />
@@ -39,7 +40,7 @@
             <remap from="pcl_topic" to="$(arg pcl_topic)" />
             <remap from="target" to="$(arg target_topic)" />
             <remap from="odom" to="$(arg odom_topic)" />
-            <remap from="command" to="$(arg command_topic)" />
+            <remap from="trajectory" to="$(arg trajectory_topic)" />
 
             <param name="WorldFrameId" type="str" value="$(arg world_frame_id)" />
             <param name="VoxelWidth" type="double" value="$(arg voxel_width)" />
@@ -62,7 +63,7 @@
             <remap from="pcl_topic" to="$(arg pcl_topic)" />
             <remap from="target" to="$(arg target_topic)" />
             <remap from="odom" to="$(arg odom_topic)" />
-            <remap from="command" to="$(arg command_topic)" />
+            <remap from="trajectory" to="$(arg trajectory_topic)" />
 
             <param name="WorldFrameId" type="str" value="$(arg world_frame_id)" />
             <param name="VoxelWidth" type="double" value="$(arg voxel_width)" />
@@ -81,4 +82,17 @@
             <param name="ShowPolytopeCorridor" type="bool" value="$(arg show_corridor)" />
         </node>
     </group>
+
+    <!-- Execute trajectories independently so planning cannot block command streaming. -->
+    <node pkg="gcopter" type="traj_server" name="$(arg node_name)_traj_server" output="screen">
+        <rosparam file="$(find gcopter)/config/gcopter_planner_config.yaml" command="load" />
+
+        <remap from="trajectory" to="$(arg trajectory_topic)" />
+        <remap from="command" to="$(arg command_topic)" />
+        <remap from="odom" to="$(arg odom_topic)" />
+
+        <param name="WorldFrameId" type="str" value="$(arg world_frame_id)" />
+        <param name="CommandHz" type="double" value="$(arg command_hz)" />
+        <param name="PublishYawCommand" type="bool" value="$(arg publish_yaw_command)" />
+    </node>
 </launch>

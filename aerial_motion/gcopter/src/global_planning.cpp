@@ -3,7 +3,6 @@
 #include "gcopter/trajectory.hpp"
 #include "gcopter/gcopter.hpp"
 #include "gcopter/firi.hpp"
-#include "gcopter/flatness.hpp"
 #include "gcopter/voxel_map.hpp"
 #include "gcopter/sfc_gen.hpp"
 
@@ -14,6 +13,8 @@
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <tf2_ros/transform_listener.h>
+
+#include <gcopter/PolyTraj.h>
 
 #include <Eigen/Geometry>
 
@@ -85,22 +86,17 @@ private:
     ros::Subscriber mapSub;
     ros::Subscriber targetSub;
     ros::Subscriber odomSub;
-    ros::Publisher commandPub;
+    ros::Publisher trajPub;
 
     bool mapInitialized;
     bool odomReceived;
-    bool commandActive;
     voxel_map::VoxelMap voxelMap;
     Visualizer visualizer;
     std::vector<Eigen::Vector3d> startGoal;
 
     Trajectory<5> traj;
-    double trajStamp;
     Eigen::Vector3d latestPosition;
-    double lastYaw;
-
-    ros::Timer commandTimer;
-    flatness::FlatnessMap flatmap;
+    int trajId_;
 
 public:
     GlobalPlanner(const Config &conf,
@@ -110,10 +106,9 @@ public:
           tfListener(tfBuffer),
           mapInitialized(false),
           odomReceived(false),
-          commandActive(false),
           visualizer(nh, config.worldFrameId),
           latestPosition(Eigen::Vector3d::Zero()),
-          lastYaw(0.0)
+          trajId_(0)
     {
         const Eigen::Vector3i xyz((config.mapBound[1] - config.mapBound[0]) / config.voxelWidth,
                                   (config.mapBound[3] - config.mapBound[2]) / config.voxelWidth,
@@ -132,13 +127,7 @@ public:
         odomSub = nh.subscribe("odom", 1, &GlobalPlanner::odomCallBack, this,
                                ros::TransportHints().tcpNoDelay());
 
-        commandPub = nh.advertise<geometry_msgs::PoseStamped>("command", 10);
-
-        flatmap.reset(config.gravAcc);
-
-        const double hz = config.commandHz > 0.0 ? config.commandHz : 40.0;
-        commandTimer = nh.createTimer(ros::Duration(1.0 / hz),
-                                      &GlobalPlanner::commandTimerCallback, this);
+        trajPub = nh.advertise<gcopter::PolyTraj>("trajectory", 10);
     }
 
     inline Eigen::Quaterniond normalizedQuaternion(const geometry_msgs::Quaternion &q) const
@@ -151,17 +140,9 @@ public:
         return quat.normalized();
     }
 
-    inline double yawFromRotation(const Eigen::Matrix3d &rot) const
-    {
-        const Eigen::Quaterniond q(rot);
-        return std::atan2(2.0 * (q.w() * q.z() + q.x() * q.y()),
-                          1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
-    }
-
     inline void odomCallBack(const nav_msgs::Odometry::ConstPtr &msg)
     {
-        // The odom pose is expressed in msg->header.frame_id; register that frame
-        // to the world frame via TF so the planning start is always in WorldFrameId.
+        // Transform odometry into the planning frame.
         const geometry_msgs::Point &p = msg->pose.pose.position;
         Eigen::Isometry3d odomRefBody = Eigen::Isometry3d::Identity();
         odomRefBody.translate(Eigen::Vector3d(p.x, p.y, p.z));
@@ -177,12 +158,6 @@ public:
         const Eigen::Isometry3d worldBody = worldOdomRef * odomRefBody;
         latestPosition = worldBody.translation();
         odomReceived = true;
-
-        // Without trajectory-yaw control, continuously preserve the measured heading.
-        if (!config.publishYawCommand || traj.getPieceNum() <= 0)
-        {
-            lastYaw = yawFromRotation(worldBody.rotation());
-        }
     }
 
     inline void mapCallBack(const sensor_msgs::PointCloud2::ConstPtr &msg)
@@ -195,8 +170,7 @@ public:
                 return;
             }
 
-            // Register the cloud's own frame (msg->header.frame_id) to the world
-            // frame via TF, so a map published in any frame is placed correctly.
+            // Transform the map into the planning frame.
             Eigen::Isometry3d worldCloud;
             if (!tf_utils::resolveToWorld(tfBuffer, config.worldFrameId,
                                           msg->header.frame_id, worldCloud))
@@ -228,7 +202,7 @@ public:
         }
     }
 
-    inline bool plan()
+    inline bool plan(const double startTime)
     {
         if (startGoal.size() == 2)
         {
@@ -268,9 +242,7 @@ public:
 
                 gcopter::GCOPTER_PolytopeSFC gcopter;
 
-                // magnitudeBounds = [v_max, omg_max, theta_max]^T
-                // penaltyWeights = [pos_weight, vel_weight, omg_weight, theta_weight]^T
-                // initialize some constraint parameters
+                // Bounds: velocity, body rate, tilt; weights: position and dynamics.
                 Eigen::VectorXd magnitudeBounds(3);
                 Eigen::VectorXd penaltyWeights(4);
                 magnitudeBounds(0) = config.maxVelMag;
@@ -301,8 +273,7 @@ public:
 
                 if (traj.getPieceNum() > 0)
                 {
-                    trajStamp = ros::Time::now().toSec();
-                    commandActive = true;
+                    publishTrajectory(startTime);
                     visualizer.visualize(traj, route);
                     return true;
                 }
@@ -343,6 +314,8 @@ public:
             return;
         }
 
+        // Anchor trajectory time to the sampled start state.
+        const double t0 = ros::Time::now().toSec();
         const Eigen::Vector3d start = latestPosition;
         const Eigen::Vector3d goal(msg->pose.position.x,
                                    msg->pose.position.y,
@@ -367,7 +340,7 @@ public:
         startGoal.emplace_back(goal);
 
         const auto planningStart = std::chrono::steady_clock::now();
-        const bool planningSucceeded = plan();
+        const bool planningSucceeded = plan(t0);
         const double planningTimeMs =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - planningStart)
@@ -377,81 +350,34 @@ public:
                  planningTimeMs);
     }
 
-    // Stream a position/yaw setpoint from an already-sampled trajectory state.
-    inline void publishPoseCommand(const Eigen::Vector3d &pos, const Eigen::Vector3d &vel)
+    // Publish the optimized polynomial for asynchronous execution.
+    inline void publishTrajectory(const double startTime)
     {
-        if (config.publishYawCommand &&
-            vel(0) * vel(0) + vel(1) * vel(1) > 1.0e-6)
+        gcopter::PolyTraj msg;
+        msg.start_time = ros::Time(startTime);
+        msg.traj_id = trajId_++;
+        msg.order = 5;
+
+        const int coefPerPiece = 6; // order + 1
+        const int n = traj.getPieceNum();
+        msg.durations.reserve(n);
+        msg.coef_x.reserve(n * coefPerPiece);
+        msg.coef_y.reserve(n * coefPerPiece);
+        msg.coef_z.reserve(n * coefPerPiece);
+        for (int p = 0; p < n; ++p)
         {
-            lastYaw = std::atan2(vel(1), vel(0));
+            const Piece<5> &piece = traj[p];
+            const Piece<5>::CoefficientMat coeff = piece.getCoeffMat();
+            msg.durations.push_back(piece.getDuration());
+            for (int j = 0; j < coefPerPiece; ++j)
+            {
+                msg.coef_x.push_back(coeff(0, j));
+                msg.coef_y.push_back(coeff(1, j));
+                msg.coef_z.push_back(coeff(2, j));
+            }
         }
 
-        geometry_msgs::PoseStamped poseMsg;
-        poseMsg.header.frame_id = config.worldFrameId;
-        poseMsg.header.stamp = ros::Time::now();
-
-        poseMsg.pose.position.x = pos(0);
-        poseMsg.pose.position.y = pos(1);
-        poseMsg.pose.position.z = pos(2);
-
-        poseMsg.pose.orientation.x = 0.0;
-        poseMsg.pose.orientation.y = 0.0;
-        poseMsg.pose.orientation.z = std::sin(0.5 * lastYaw);
-        poseMsg.pose.orientation.w = std::cos(0.5 * lastYaw);
-
-        commandPub.publish(poseMsg);
-    }
-
-    // Publish flatness-derived diagnostics for the current trajectory state.
-    inline void publishDiagnostics(const double t,
-                                   const Eigen::Vector3d &vel)
-    {
-        Eigen::Vector4d quat;
-        Eigen::Vector3d omg;
-
-        flatmap.forward(traj.getAcc(t),
-                        traj.getJer(t),
-                        0.0, 0.0,
-                        quat, omg);
-
-        std_msgs::Float64 speedMsg, tiltMsg, bdrMsg;
-        speedMsg.data = vel.norm();
-        tiltMsg.data = std::acos(1.0 - 2.0 * (quat(1) * quat(1) + quat(2) * quat(2)));
-        bdrMsg.data = omg.norm();
-        visualizer.speedPub.publish(speedMsg);
-        visualizer.tiltPub.publish(tiltMsg);
-        visualizer.bdrPub.publish(bdrMsg);
-    }
-
-    inline void commandTimerCallback(const ros::TimerEvent &)
-    {
-        if (!commandActive || traj.getPieceNum() <= 0)
-        {
-            return;
-        }
-
-        const double duration = traj.getTotalDuration();
-        const double delta = ros::Time::now().toSec() - trajStamp;
-        const bool finished = delta >= duration;
-
-        // Sample the trajectory once at the clamped time and reuse the state
-        // for both the diagnostics and the pose command.
-        const double t = std::max(0.0, std::min(delta, duration));
-        const Eigen::Vector3d pos = traj.getPos(t);
-        const Eigen::Vector3d vel = traj.getVel(t);
-
-        if (delta > 0.0 && !finished)
-        {
-            publishDiagnostics(t, vel);
-        }
-
-        publishPoseCommand(pos, vel);
-
-        if (finished)
-        {
-            // Final setpoint emitted; stop streaming until the next plan.
-            commandActive = false;
-        }
+        trajPub.publish(msg);
     }
 };
 

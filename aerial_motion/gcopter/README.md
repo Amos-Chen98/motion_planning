@@ -87,6 +87,8 @@ Common parameters:
 - `UseTargetZ`: use the target message's `position.z` as the goal height (for a 3D goal source such as an interactive marker). When neither `UseFixedTargetHeight` nor `UseTargetZ` is set, the height is derived from the RViz goal orientation.
 - `TimeoutRRT`: RRT search timeout.
 - `MaxVelMag`, `MaxBdrMag`, `MaxTiltAngle`: velocity, body-rate, and tilt constraints.
+  Online mode verifies the continuous optimized trajectory against `MaxVelMag`
+  and time-scales any violating trajectory before publishing commands.
 - `GravAcc`: gravitational acceleration.
 - `WeightT`, `ChiVec`, `SmoothingEps`, `IntegralIntervs`, `RelCostTol`: optimizer parameters.
 
@@ -138,6 +140,8 @@ simulator. The point robot is identical in global and online modes: it publishes
 `world -> body` odometry on `quadrotor/uav/cog/odom`. The same
 `spawn_x/y/z/yaw` values define the robot's initial world pose and the fixed
 `world -> camera_init` transform used for TF visualization.
+`ideal_robot_publish_rate` controls only the odometry/TF publication rate; the
+translational velocity limit is `max_vel_mag`.
 
 To change the demo initial pose or run the global planner:
 

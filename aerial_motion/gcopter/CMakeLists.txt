@@ -25,6 +25,17 @@ find_package(catkin REQUIRED COMPONENTS
   tf2_ros
   tf2_eigen
   visualization_msgs
+  message_generation
+)
+
+add_message_files(
+  FILES
+  PolyTraj.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
 )
 
 include_directories(
@@ -46,11 +57,18 @@ catkin_package(
     tf2_ros
     tf2_eigen
     visualization_msgs
+    message_runtime
 )
 
 add_executable(global_planning src/global_planning.cpp)
 add_executable(online_replanning src/online_replanning.cpp)
+add_executable(traj_server src/traj_server.cpp)
 add_executable(livox_mid360_simulator src/livox_mid360_simulator.cpp)
+
+# Build generated trajectory messages before their consumers.
+add_dependencies(global_planning ${${PROJECT_NAME}_EXPORTED_TARGETS})
+add_dependencies(online_replanning ${${PROJECT_NAME}_EXPORTED_TARGETS})
+add_dependencies(traj_server ${${PROJECT_NAME}_EXPORTED_TARGETS})
 
 target_link_libraries(global_planning
   ${GCOPTER_OMPL_TARGET}
@@ -59,6 +77,10 @@ target_link_libraries(global_planning
 
 target_link_libraries(online_replanning
   ${GCOPTER_OMPL_TARGET}
+  ${catkin_LIBRARIES}
+)
+
+target_link_libraries(traj_server
   ${catkin_LIBRARIES}
 )
 
