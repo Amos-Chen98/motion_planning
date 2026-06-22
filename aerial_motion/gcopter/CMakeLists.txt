@@ -47,6 +47,7 @@ include_directories(
 
 catkin_package(
   INCLUDE_DIRS include
+  LIBRARIES gcopter_planner_common
   CATKIN_DEPENDS
     roscpp
     rospy
@@ -60,22 +61,30 @@ catkin_package(
     message_runtime
 )
 
+add_library(gcopter_planner_common src/planner_common.cpp)
+
 add_executable(global_planning src/global_planning.cpp)
 add_executable(online_replanning src/online_replanning.cpp)
 add_executable(traj_server src/traj_server.cpp)
 add_executable(livox_mid360_simulator src/livox_mid360_simulator.cpp)
 
 # Build generated trajectory messages before their consumers.
+add_dependencies(gcopter_planner_common ${${PROJECT_NAME}_EXPORTED_TARGETS})
 add_dependencies(global_planning ${${PROJECT_NAME}_EXPORTED_TARGETS})
 add_dependencies(online_replanning ${${PROJECT_NAME}_EXPORTED_TARGETS})
 add_dependencies(traj_server ${${PROJECT_NAME}_EXPORTED_TARGETS})
 
 target_link_libraries(global_planning
-  ${GCOPTER_OMPL_TARGET}
+  gcopter_planner_common
   ${catkin_LIBRARIES}
 )
 
 target_link_libraries(online_replanning
+  gcopter_planner_common
+  ${catkin_LIBRARIES}
+)
+
+target_link_libraries(gcopter_planner_common
   ${GCOPTER_OMPL_TARGET}
   ${catkin_LIBRARIES}
 )
@@ -87,6 +96,17 @@ target_link_libraries(traj_server
 target_link_libraries(livox_mid360_simulator
   ${catkin_LIBRARIES}
 )
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(planner_common_test test/planner_common_test.cpp)
+  if(TARGET planner_common_test)
+    add_dependencies(planner_common_test ${${PROJECT_NAME}_EXPORTED_TARGETS})
+    target_link_libraries(planner_common_test
+      gcopter_planner_common
+      ${catkin_LIBRARIES}
+    )
+  endif()
+endif()
 
 catkin_install_python(PROGRAMS
   scripts/point_robot_model.py

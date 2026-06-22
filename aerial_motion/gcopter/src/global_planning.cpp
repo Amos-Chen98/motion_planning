@@ -1,394 +1,184 @@
-#include "misc/visualizer.hpp"
-#include "misc/tf_utils.hpp"
-#include "gcopter/trajectory.hpp"
-#include "gcopter/gcopter.hpp"
-#include "gcopter/firi.hpp"
-#include "gcopter/voxel_map.hpp"
-#include "gcopter/sfc_gen.hpp"
+#include "gcopter/planner_common.hpp"
 
-#include <ros/ros.h>
-#include <ros/console.h>
-#include <geometry_msgs/Point.h>
 #include <geometry_msgs/PoseStamped.h>
-#include <nav_msgs/Odometry.h>
+#include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
-#include <tf2_ros/transform_listener.h>
-
-#include <gcopter/PolyTraj.h>
 
 #include <Eigen/Geometry>
 
-#include <algorithm>
-#include <cmath>
-#include <iostream>
+#include <chrono>
+#include <exception>
 #include <string>
 #include <vector>
-#include <memory>
-#include <chrono>
-#include <random>
 
-struct Config
+namespace
 {
-    std::string worldFrameId;
-    double dilateRadius;
-    double voxelWidth;
-    std::vector<double> mapBound;
-    double timeoutRRT;
-    double maxVelMag;
-    double maxBdrMag;
-    double maxTiltAngle;
-    double gravAcc;
-    double weightT;
-    std::vector<double> chiVec;
-    double smoothingEps;
-    int integralIntervs;
-    double relCostTol;
-    double commandHz;
-    bool publishYawCommand;
-    bool useFixedTargetHeight;
-    double targetHeight;
-    bool useTargetZ;
-    bool showPolytopeCorridor;
-
-    Config(const ros::NodeHandle &nh_priv)
-    {
-        nh_priv.param<std::string>("WorldFrameId", worldFrameId, "world");
-        nh_priv.getParam("DilateRadius", dilateRadius);
-        nh_priv.getParam("VoxelWidth", voxelWidth);
-        nh_priv.getParam("MapBound", mapBound);
-        nh_priv.getParam("TimeoutRRT", timeoutRRT);
-        nh_priv.getParam("MaxVelMag", maxVelMag);
-        nh_priv.getParam("MaxBdrMag", maxBdrMag);
-        nh_priv.getParam("MaxTiltAngle", maxTiltAngle);
-        nh_priv.getParam("GravAcc", gravAcc);
-        nh_priv.getParam("WeightT", weightT);
-        nh_priv.getParam("ChiVec", chiVec);
-        nh_priv.getParam("SmoothingEps", smoothingEps);
-        nh_priv.getParam("IntegralIntervs", integralIntervs);
-        nh_priv.getParam("RelCostTol", relCostTol);
-        nh_priv.param("CommandHz", commandHz, 40.0);
-        nh_priv.param("PublishYawCommand", publishYawCommand, false);
-        nh_priv.param("UseFixedTargetHeight", useFixedTargetHeight, false);
-        nh_priv.param("TargetHeight", targetHeight, 1.0);
-        nh_priv.param("UseTargetZ", useTargetZ, false);
-        nh_priv.param("ShowPolytopeCorridor", showPolytopeCorridor, true);
-    }
-};
 
 class GlobalPlanner
 {
-private:
-    Config config;
-
-    ros::NodeHandle nh;
-    tf2_ros::Buffer tfBuffer;
-    tf2_ros::TransformListener tfListener;
-    ros::Subscriber mapSub;
-    ros::Subscriber targetSub;
-    ros::Subscriber odomSub;
-    ros::Publisher trajPub;
-
-    bool mapInitialized;
-    bool odomReceived;
-    voxel_map::VoxelMap voxelMap;
-    Visualizer visualizer;
-    std::vector<Eigen::Vector3d> startGoal;
-
-    Trajectory<5> traj;
-    Eigen::Vector3d latestPosition;
-    int trajId_;
-
 public:
-    GlobalPlanner(const Config &conf,
-                  ros::NodeHandle &nh_)
-        : config(conf),
-          nh(nh_),
-          tfListener(tfBuffer),
-          mapInitialized(false),
-          odomReceived(false),
-          visualizer(nh, config.worldFrameId),
-          latestPosition(Eigen::Vector3d::Zero()),
-          trajId_(0)
+    GlobalPlanner(const gcopter_planner::CommonPlannerConfig &config,
+                  ros::NodeHandle &nh)
+        : config_(config),
+          nh_(nh),
+          backend_(config_),
+          rosInterface_(config_, nh_),
+          mapInitialized_(false)
     {
-        const Eigen::Vector3i xyz((config.mapBound[1] - config.mapBound[0]) / config.voxelWidth,
-                                  (config.mapBound[3] - config.mapBound[2]) / config.voxelWidth,
-                                  (config.mapBound[5] - config.mapBound[4]) / config.voxelWidth);
-
-        const Eigen::Vector3d offset(config.mapBound[0], config.mapBound[2], config.mapBound[4]);
-
-        voxelMap = voxel_map::VoxelMap(xyz, offset, config.voxelWidth);
-
-        mapSub = nh.subscribe("pcl_topic", 1, &GlobalPlanner::mapCallBack, this,
-                              ros::TransportHints().tcpNoDelay());
-
-        targetSub = nh.subscribe("target", 1, &GlobalPlanner::targetCallBack, this,
-                                 ros::TransportHints().tcpNoDelay());
-
-        odomSub = nh.subscribe("odom", 1, &GlobalPlanner::odomCallBack, this,
-                               ros::TransportHints().tcpNoDelay());
-
-        trajPub = nh.advertise<gcopter::PolyTraj>("trajectory", 10);
+        mapSub_ = nh_.subscribe(
+            "pcl_topic", 1, &GlobalPlanner::mapCallback, this,
+            ros::TransportHints().tcpNoDelay());
+        targetSub_ = nh_.subscribe(
+            "target", 1, &GlobalPlanner::targetCallback, this,
+            ros::TransportHints().tcpNoDelay());
     }
 
-    inline Eigen::Quaterniond normalizedQuaternion(const geometry_msgs::Quaternion &q) const
+private:
+    void mapCallback(const sensor_msgs::PointCloud2::ConstPtr &msg)
     {
-        Eigen::Quaterniond quat(q.w, q.x, q.y, q.z);
-        if (quat.norm() < 1.0e-9)
+        if (mapInitialized_)
         {
-            return Eigen::Quaterniond::Identity();
-        }
-        return quat.normalized();
-    }
-
-    inline void odomCallBack(const nav_msgs::Odometry::ConstPtr &msg)
-    {
-        // Transform odometry into the planning frame.
-        const geometry_msgs::Point &p = msg->pose.pose.position;
-        Eigen::Isometry3d odomRefBody = Eigen::Isometry3d::Identity();
-        odomRefBody.translate(Eigen::Vector3d(p.x, p.y, p.z));
-        odomRefBody.rotate(normalizedQuaternion(msg->pose.pose.orientation));
-
-        Eigen::Isometry3d worldOdomRef;
-        if (!tf_utils::resolveToWorld(tfBuffer, config.worldFrameId,
-                                      msg->header.frame_id, worldOdomRef))
-        {
-            return; // keep the last known pose until the transform is available
+            return;
         }
 
-        const Eigen::Isometry3d worldBody = worldOdomRef * odomRefBody;
-        latestPosition = worldBody.translation();
-        odomReceived = true;
-    }
-
-    inline void mapCallBack(const sensor_msgs::PointCloud2::ConstPtr &msg)
-    {
-        if (!mapInitialized)
+        std::vector<Eigen::Vector3d> pointsWorld;
+        std::string error;
+        if (!rosInterface_.pointCloudToWorld(*msg, pointsWorld, &error))
         {
-            if (msg->data.empty() || msg->point_step < 3 * sizeof(float))
+            if (error != "point-cloud transform is unavailable")
             {
-                ROS_WARN("Received empty or invalid point cloud map.");
-                return;
+                ROS_WARN("Invalid global point cloud: %s", error.c_str());
             }
-
-            // Transform the map into the planning frame.
-            Eigen::Isometry3d worldCloud;
-            if (!tf_utils::resolveToWorld(tfBuffer, config.worldFrameId,
-                                          msg->header.frame_id, worldCloud))
-            {
-                return; // leave uninitialized; retry on the next cloud
-            }
-
-            size_t cur = 0;
-            const size_t total = msg->data.size() / msg->point_step;
-            const float *fdata = reinterpret_cast<const float *>(&msg->data[0]);
-            for (size_t i = 0; i < total; i++)
-            {
-                cur = msg->point_step / sizeof(float) * i;
-
-                if (std::isnan(fdata[cur + 0]) || std::isinf(fdata[cur + 0]) ||
-                    std::isnan(fdata[cur + 1]) || std::isinf(fdata[cur + 1]) ||
-                    std::isnan(fdata[cur + 2]) || std::isinf(fdata[cur + 2]))
-                {
-                    continue;
-                }
-                voxelMap.setOccupied(worldCloud * Eigen::Vector3d(fdata[cur + 0],
-                                                                  fdata[cur + 1],
-                                                                  fdata[cur + 2]));
-            }
-
-            voxelMap.dilate(std::ceil(config.dilateRadius / voxelMap.getScale()));
-
-            mapInitialized = true;
+            return;
         }
+        if (pointsWorld.empty())
+        {
+            ROS_WARN("Received a global point cloud with no finite XYZ points.");
+            return;
+        }
+
+        backend_.setMapPoints(pointsWorld);
+        mapInitialized_ = true;
+        ROS_INFO("Initialized global voxel map from %zu finite points.",
+                 pointsWorld.size());
     }
 
-    inline bool plan(const double startTime)
+    bool plan(const Eigen::Vector3d &start,
+              const Eigen::Vector3d &goal,
+              const double startTime)
     {
-        if (startGoal.size() == 2)
+        std::vector<Eigen::Vector3d> route;
+        if (!backend_.searchPath(start, goal, route))
         {
-            traj.clear();
-
-            std::vector<Eigen::Vector3d> route;
-            sfc_gen::planPath<voxel_map::VoxelMap>(startGoal[0],
-                                                   startGoal[1],
-                                                   voxelMap.getOrigin(),
-                                                   voxelMap.getCorner(),
-                                                   &voxelMap, config.timeoutRRT,
-                                                   route);
-            std::vector<Eigen::MatrixX4d> hPolys;
-            std::vector<Eigen::Vector3d> pc;
-            voxelMap.getSurf(pc);
-
-            sfc_gen::convexCover(route,
-                                 pc,
-                                 voxelMap.getOrigin(),
-                                 voxelMap.getCorner(),
-                                 7.0,
-                                 3.0,
-                                 hPolys);
-            sfc_gen::shortCut(hPolys);
-
-            if (route.size() > 1)
-            {
-                if (config.showPolytopeCorridor)
-                {
-                    visualizer.visualizePolytope(hPolys);
-                }
-
-                Eigen::Matrix3d iniState;
-                Eigen::Matrix3d finState;
-                iniState << route.front(), Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero();
-                finState << route.back(), Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero();
-
-                gcopter::GCOPTER_PolytopeSFC gcopter;
-
-                // Bounds: velocity, body rate, tilt; weights: position and dynamics.
-                Eigen::VectorXd magnitudeBounds(3);
-                Eigen::VectorXd penaltyWeights(4);
-                magnitudeBounds(0) = config.maxVelMag;
-                magnitudeBounds(1) = config.maxBdrMag;
-                magnitudeBounds(2) = config.maxTiltAngle;
-                penaltyWeights(0) = (config.chiVec)[0];
-                penaltyWeights(1) = (config.chiVec)[1];
-                penaltyWeights(2) = (config.chiVec)[2];
-                penaltyWeights(3) = (config.chiVec)[3];
-                const int quadratureRes = config.integralIntervs;
-
-                if (!gcopter.setup(config.weightT,
-                                   iniState, finState,
-                                   hPolys, INFINITY,
-                                   config.smoothingEps,
-                                   quadratureRes,
-                                   magnitudeBounds,
-                                   penaltyWeights,
-                                   config.gravAcc))
-                {
-                    return false;
-                }
-
-                if (std::isinf(gcopter.optimize(traj, config.relCostTol)))
-                {
-                    return false;
-                }
-
-                if (traj.getPieceNum() > 0)
-                {
-                    publishTrajectory(startTime);
-                    visualizer.visualize(traj, route);
-                    return true;
-                }
-            }
+            return false;
         }
 
-        return false;
+        std::vector<Eigen::MatrixX4d> hPolys;
+        if (!backend_.buildCorridor(route, hPolys))
+        {
+            return false;
+        }
+
+        Eigen::Matrix3d initialState;
+        Eigen::Matrix3d finalState;
+        initialState << route.front(),
+            Eigen::Vector3d::Zero(),
+            Eigen::Vector3d::Zero();
+        finalState << route.back(),
+            Eigen::Vector3d::Zero(),
+            Eigen::Vector3d::Zero();
+
+        if (!backend_.optimizeTrajectory(initialState, finalState,
+                                         hPolys, trajectory_, "global"))
+        {
+            return false;
+        }
+
+        rosInterface_.publishTrajectory(trajectory_, startTime);
+        if (config_.showPolytopeCorridor)
+        {
+            rosInterface_.visualizer().visualizePolytope(hPolys);
+        }
+        rosInterface_.visualizer().visualize(trajectory_, route);
+        return true;
     }
 
-    inline double getTargetHeight(const geometry_msgs::PoseStamped::ConstPtr &msg) const
+    void targetCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
     {
-        if (config.useFixedTargetHeight)
-        {
-            return config.targetHeight;
-        }
-
-        if (config.useTargetZ)
-        {
-            return msg->pose.position.z;
-        }
-
-        return config.mapBound[4] + config.dilateRadius +
-               fabs(msg->pose.orientation.z) *
-                   (config.mapBound[5] - config.mapBound[4] - 2 * config.dilateRadius);
-    }
-
-    inline void targetCallBack(const geometry_msgs::PoseStamped::ConstPtr &msg)
-    {
-        if (!mapInitialized)
+        if (!mapInitialized_)
         {
             ROS_WARN("Map is not initialized yet. Ignore target.");
             return;
         }
-
-        if (!odomReceived)
+        if (!rosInterface_.odomReceived())
         {
-            ROS_WARN("No odometry received from %s. Ignore target.", nh.resolveName("odom").c_str());
+            ROS_WARN("No odometry received from %s. Ignore target.",
+                     rosInterface_.resolvedOdomTopic().c_str());
             return;
         }
 
-        // Anchor trajectory time to the sampled start state.
-        const double t0 = ros::Time::now().toSec();
-        const Eigen::Vector3d start = latestPosition;
-        const Eigen::Vector3d goal(msg->pose.position.x,
-                                   msg->pose.position.y,
-                                   getTargetHeight(msg));
+        const double startTime = ros::Time::now().toSec();
+        const Eigen::Vector3d start = rosInterface_.latestPosition();
+        const Eigen::Vector3d goal(
+            msg->pose.position.x,
+            msg->pose.position.y,
+            config_.resolveTargetHeight(*msg));
 
-        if (voxelMap.query(start) != 0)
+        if (backend_.query(start))
         {
-            ROS_WARN("Current odometry position is outside the map or in collision. Ignore target.");
+            ROS_WARN("Current odometry position is outside the map or in collision. "
+                     "Ignore target.");
             return;
         }
-
-        if (voxelMap.query(goal) != 0)
+        if (backend_.query(goal))
         {
             ROS_WARN("Infeasible target position selected.");
             return;
         }
 
-        startGoal.clear();
-        visualizer.visualizeStartGoal(start, 0.05, 0);
-        visualizer.visualizeStartGoal(goal, 0.05, 1);
-        startGoal.emplace_back(start);
-        startGoal.emplace_back(goal);
+        rosInterface_.visualizer().visualizeStartGoal(start, 0.05, 0);
+        rosInterface_.visualizer().visualizeStartGoal(goal, 0.05, 1);
 
         const auto planningStart = std::chrono::steady_clock::now();
-        const bool planningSucceeded = plan(t0);
+        const bool succeeded = plan(start, goal, startTime);
         const double planningTimeMs =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - planningStart)
                 .count();
         ROS_INFO("GCOPTER global planning %s in %.3f ms.",
-                 planningSucceeded ? "succeeded" : "failed",
-                 planningTimeMs);
+                 succeeded ? "succeeded" : "failed", planningTimeMs);
     }
 
-    // Publish the optimized polynomial for asynchronous execution.
-    inline void publishTrajectory(const double startTime)
-    {
-        gcopter::PolyTraj msg;
-        msg.start_time = ros::Time(startTime);
-        msg.traj_id = trajId_++;
-        msg.order = 5;
-
-        const int coefPerPiece = 6; // order + 1
-        const int n = traj.getPieceNum();
-        msg.durations.reserve(n);
-        msg.coef_x.reserve(n * coefPerPiece);
-        msg.coef_y.reserve(n * coefPerPiece);
-        msg.coef_z.reserve(n * coefPerPiece);
-        for (int p = 0; p < n; ++p)
-        {
-            const Piece<5> &piece = traj[p];
-            const Piece<5>::CoefficientMat coeff = piece.getCoeffMat();
-            msg.durations.push_back(piece.getDuration());
-            for (int j = 0; j < coefPerPiece; ++j)
-            {
-                msg.coef_x.push_back(coeff(0, j));
-                msg.coef_y.push_back(coeff(1, j));
-                msg.coef_z.push_back(coeff(2, j));
-            }
-        }
-
-        trajPub.publish(msg);
-    }
+    gcopter_planner::CommonPlannerConfig config_;
+    ros::NodeHandle nh_;
+    gcopter_planner::PlannerBackend backend_;
+    gcopter_planner::PlannerRosInterface rosInterface_;
+    ros::Subscriber mapSub_;
+    ros::Subscriber targetSub_;
+    bool mapInitialized_;
+    Trajectory<5> trajectory_;
 };
+
+} // namespace
 
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "global_planning_node");
-    ros::NodeHandle nh_;
+    ros::NodeHandle nh;
 
-    GlobalPlanner global_planner(Config(ros::NodeHandle("~")), nh_);
-
-    ros::spin();
+    try
+    {
+        gcopter_planner::CommonPlannerConfig config(ros::NodeHandle("~"));
+        config.validateOrThrow();
+        GlobalPlanner planner(config, nh);
+        ros::spin();
+    }
+    catch (const std::exception &exception)
+    {
+        ROS_FATAL("Invalid GCOPTER global planner configuration: %s",
+                  exception.what());
+        return 1;
+    }
 
     return 0;
 }

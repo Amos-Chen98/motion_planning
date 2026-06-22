@@ -1,27 +1,15 @@
-#include "misc/visualizer.hpp"
-#include "misc/tf_utils.hpp"
-#include "gcopter/trajectory.hpp"
-#include "gcopter/gcopter.hpp"
-#include "gcopter/firi.hpp"
-#include "gcopter/voxel_map.hpp"
-#include "gcopter/sfc_gen.hpp"
+#include "gcopter/planner_common.hpp"
 
-#include <ros/ros.h>
-#include <ros/console.h>
 #include <geometry_msgs/PoseStamped.h>
-#include <nav_msgs/Odometry.h>
+#include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
-#include <sensor_msgs/point_cloud2_iterator.h>
-#include <tf2_ros/transform_listener.h>
-
-#include <gcopter/PolyTraj.h>
 
 #include <Eigen/Geometry>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <limits>
+#include <exception>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -29,660 +17,379 @@
 
 namespace
 {
-inline Eigen::Quaterniond normalizedQuaternion(const geometry_msgs::Quaternion &q)
-{
-    Eigen::Quaterniond quat(q.w, q.x, q.y, q.z);
-    if (quat.norm() < 1.0e-9)
-    {
-        return Eigen::Quaterniond::Identity();
-    }
-    return quat.normalized();
-}
-
-inline bool isFinitePoint(const float x, const float y, const float z)
-{
-    return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
-}
-
-template <int D>
-Trajectory<D> timeScaledTrajectory(const Trajectory<D> &input, const double scale)
-{
-    Trajectory<D> output;
-    output.reserve(input.getPieceNum());
-
-    for (const auto &piece : input)
-    {
-        typename Piece<D>::CoefficientMat coeff = piece.getCoeffMat();
-        double coefficientScale = 1.0;
-        for (int power = 1; power <= D; ++power)
-        {
-            coefficientScale *= scale;
-            coeff.col(D - power) /= coefficientScale;
-        }
-        output.emplace_back(piece.getDuration() * scale, coeff);
-    }
-
-    return output;
-}
-} // namespace
 
 struct OnlinePlannerConfig
 {
-    std::string worldFrameId;
-
-    double dilateRadius;
-    double voxelWidth;
-    std::vector<double> mapBound;
-    double timeoutRRT;
-    double maxVelMag;
-    double maxBdrMag;
-    double maxTiltAngle;
-    double gravAcc;
-    double weightT;
-    std::vector<double> chiVec;
-    double smoothingEps;
-    int integralIntervs;
-    double relCostTol;
-    double commandHz;
-    bool publishYawCommand;
-    double replanHz;
-    bool useAccumulatedMap;
-    bool useFixedTargetHeight;
-    double targetHeight;
-    bool useTargetZ;
-    bool showPolytopeCorridor;
-    double goalTolerance;
-    double planningHorizon;
+    gcopter_planner::CommonPlannerConfig common;
+    double replanHz = 2.0;
+    bool useAccumulatedMap = true;
+    double goalTolerance = 0.2;
+    double planningHorizon = 6.0;
 
     explicit OnlinePlannerConfig(const ros::NodeHandle &nhPriv)
+        : common(nhPriv)
     {
-        nhPriv.param<std::string>("WorldFrameId", worldFrameId, "world");
-
-        nhPriv.getParam("DilateRadius", dilateRadius);
-        nhPriv.getParam("VoxelWidth", voxelWidth);
-        nhPriv.getParam("MapBound", mapBound);
-        nhPriv.getParam("TimeoutRRT", timeoutRRT);
-        nhPriv.getParam("MaxVelMag", maxVelMag);
-        nhPriv.getParam("MaxBdrMag", maxBdrMag);
-        nhPriv.getParam("MaxTiltAngle", maxTiltAngle);
-        nhPriv.getParam("GravAcc", gravAcc);
-        nhPriv.getParam("WeightT", weightT);
-        nhPriv.getParam("ChiVec", chiVec);
-        nhPriv.getParam("SmoothingEps", smoothingEps);
-        nhPriv.getParam("IntegralIntervs", integralIntervs);
-        nhPriv.getParam("RelCostTol", relCostTol);
-        nhPriv.param("CommandHz", commandHz, 40.0);
-        nhPriv.param("PublishYawCommand", publishYawCommand, false);
         nhPriv.param("ReplanHz", replanHz, 2.0);
         nhPriv.param("UseAccumulatedMap", useAccumulatedMap, true);
-        nhPriv.param("UseFixedTargetHeight", useFixedTargetHeight, false);
-        nhPriv.param("TargetHeight", targetHeight, 1.0);
-        nhPriv.param("UseTargetZ", useTargetZ, false);
-        nhPriv.param("ShowPolytopeCorridor", showPolytopeCorridor, true);
         nhPriv.param("GoalTolerance", goalTolerance, 0.2);
         nhPriv.param("PlanningHorizon", planningHorizon, 6.0);
+
+        common.validateOrThrow();
+        if (!std::isfinite(replanHz) || replanHz <= 0.0)
+        {
+            throw std::invalid_argument("ReplanHz must be finite and positive");
+        }
+        if (!std::isfinite(goalTolerance) || goalTolerance <= 0.0)
+        {
+            throw std::invalid_argument(
+                "GoalTolerance must be finite and positive");
+        }
+        if (!std::isfinite(planningHorizon) || planningHorizon <= 0.0)
+        {
+            throw std::invalid_argument(
+                "PlanningHorizon must be finite and positive");
+        }
     }
 };
 
 class OnlineReplanner
 {
-private:
-    OnlinePlannerConfig config;
-    ros::NodeHandle nh;
-    tf2_ros::Buffer tfBuffer;
-    tf2_ros::TransformListener tfListener;
-    ros::Subscriber localMapSub;
-    ros::Subscriber targetSub;
-    ros::Subscriber odomSub;
-    ros::Publisher trajPub;
-    ros::Timer replanTimer;
-
-    voxel_map::VoxelMap voxelMap;
-    Visualizer visualizer;
-
-    std::unordered_set<long> occupiedVoxelKeys;
-    int dilateVoxelRadius;
-
-    Eigen::Isometry3d latestWorldBody;
-    Eigen::Vector3d latestPositionWorld;
-    bool odomReceived;
-    bool mapInitialized;
-    bool targetReceived;
-
-    // Retain the published trajectory and its t=0 for C2 handover sampling.
-    Trajectory<5> traj;
-    double trajStamp;
-    int trajId_;
-
-    // Plan to the clamped target; keep the raw request only for diagnostics.
-    Eigen::Vector3d globalTarget_;
-    Eigen::Vector3d requestedTarget_;
-    bool targetWasClamped_;
-
-    // Stop replanning after committing the terminal braking trajectory.
-    bool goalLatched_;
-
 public:
-    OnlineReplanner(const OnlinePlannerConfig &conf, ros::NodeHandle &nh_)
-        : config(conf),
-          nh(nh_),
-          tfListener(tfBuffer),
-          visualizer(nh, config.worldFrameId),
-          latestWorldBody(Eigen::Isometry3d::Identity()),
-          latestPositionWorld(Eigen::Vector3d::Zero()),
-          odomReceived(false),
-          mapInitialized(false),
-          targetReceived(false),
-          trajStamp(0.0),
-          trajId_(0),
+    OnlineReplanner(const OnlinePlannerConfig &config,
+                    ros::NodeHandle &nh)
+        : config_(config),
+          nh_(nh),
+          backend_(config_.common),
+          rosInterface_(config_.common, nh_),
+          mapInitialized_(false),
+          targetReceived_(false),
+          trajectoryStamp_(0.0),
           globalTarget_(Eigen::Vector3d::Zero()),
           requestedTarget_(Eigen::Vector3d::Zero()),
           targetWasClamped_(false),
           goalLatched_(false)
     {
-        const Eigen::Vector3i xyz((config.mapBound[1] - config.mapBound[0]) / config.voxelWidth,
-                                  (config.mapBound[3] - config.mapBound[2]) / config.voxelWidth,
-                                  (config.mapBound[5] - config.mapBound[4]) / config.voxelWidth);
-        const Eigen::Vector3d offset(config.mapBound[0], config.mapBound[2], config.mapBound[4]);
-        voxelMap = voxel_map::VoxelMap(xyz, offset, config.voxelWidth);
-        dilateVoxelRadius = static_cast<int>(std::ceil(config.dilateRadius / voxelMap.getScale()));
-
-        localMapSub = nh.subscribe("pcl_topic", 1, &OnlineReplanner::localMapCallback, this,
-                                   ros::TransportHints().tcpNoDelay());
-        targetSub = nh.subscribe("target", 1, &OnlineReplanner::targetCallback, this,
-                                 ros::TransportHints().tcpNoDelay());
-        odomSub = nh.subscribe("odom", 1, &OnlineReplanner::odomCallback, this,
-                               ros::TransportHints().tcpNoDelay());
-        trajPub = nh.advertise<gcopter::PolyTraj>("trajectory", 10);
-
-        const double replanHz = config.replanHz > 0.0 ? config.replanHz : 2.0;
-        replanTimer = nh.createTimer(ros::Duration(1.0 / replanHz),
-                                     &OnlineReplanner::replanTimerCallback, this);
+        localMapSub_ = nh_.subscribe(
+            "pcl_topic", 1, &OnlineReplanner::localMapCallback, this,
+            ros::TransportHints().tcpNoDelay());
+        targetSub_ = nh_.subscribe(
+            "target", 1, &OnlineReplanner::targetCallback, this,
+            ros::TransportHints().tcpNoDelay());
+        replanTimer_ = nh_.createTimer(
+            ros::Duration(1.0 / config_.replanHz),
+            &OnlineReplanner::replanTimerCallback, this);
     }
 
 private:
-    inline long voxelKeyFromPosition(const Eigen::Vector3d &pos) const
+    void rebuildVoxelMap()
     {
-        const Eigen::Vector3i id = voxelMap.posD2I(pos);
-        const Eigen::Vector3i size = voxelMap.getSize();
-        if (id(0) < 0 || id(1) < 0 || id(2) < 0 ||
-            id(0) >= size(0) || id(1) >= size(1) || id(2) >= size(2))
+        std::vector<Eigen::Vector3i> occupiedVoxelIds;
+        occupiedVoxelIds.reserve(occupiedVoxelKeys_.size());
+        for (const long key : occupiedVoxelKeys_)
         {
-            return -1;
+            occupiedVoxelIds.push_back(backend_.voxelIdFromKey(key));
         }
-
-        return static_cast<long>(id(0)) +
-               static_cast<long>(size(0)) *
-                   (static_cast<long>(id(1)) + static_cast<long>(size(1)) * static_cast<long>(id(2)));
+        backend_.setMapVoxels(occupiedVoxelIds);
+        mapInitialized_ = true;
     }
 
-    inline Eigen::Vector3i voxelIdFromKey(const long key) const
+    void localMapCallback(const sensor_msgs::PointCloud2::ConstPtr &msg)
     {
-        const Eigen::Vector3i size = voxelMap.getSize();
-        const long xy = static_cast<long>(size(0)) * static_cast<long>(size(1));
-        const int z = static_cast<int>(key / xy);
-        const long rem = key - static_cast<long>(z) * xy;
-        const int y = static_cast<int>(rem / size(0));
-        const int x = static_cast<int>(rem - static_cast<long>(y) * size(0));
-        return Eigen::Vector3i(x, y, z);
-    }
-
-    inline void rebuildVoxelMap()
-    {
-        voxelMap.clear();
-        for (const long key : occupiedVoxelKeys)
+        std::vector<Eigen::Vector3d> pointsWorld;
+        std::string error;
+        if (!rosInterface_.pointCloudToWorld(*msg, pointsWorld, &error))
         {
-            voxelMap.setOccupied(voxelIdFromKey(key));
-        }
-        voxelMap.dilate(dilateVoxelRadius);
-        mapInitialized = true;
-    }
-
-    inline void odomCallback(const nav_msgs::Odometry::ConstPtr &msg)
-    {
-        // Transform odometry into the planning frame.
-        const geometry_msgs::Point &p = msg->pose.pose.position;
-        Eigen::Isometry3d odomRefBody = Eigen::Isometry3d::Identity();
-        odomRefBody.translate(Eigen::Vector3d(p.x, p.y, p.z));
-        odomRefBody.rotate(normalizedQuaternion(msg->pose.pose.orientation));
-
-        Eigen::Isometry3d worldOdomRef;
-        if (!tf_utils::resolveToWorld(tfBuffer, config.worldFrameId,
-                                      msg->header.frame_id, worldOdomRef))
-        {
-            return; // keep the last known pose until the transform is available
+            if (error != "point-cloud transform is unavailable")
+            {
+                ROS_WARN("Invalid local point cloud: %s", error.c_str());
+            }
+            return;
         }
 
-        latestWorldBody = worldOdomRef * odomRefBody;
-        latestPositionWorld = latestWorldBody.translation();
-        odomReceived = true;
-    }
-
-    inline void localMapCallback(const sensor_msgs::PointCloud2::ConstPtr &msg)
-    {
-        // Transform sensor points into the planning frame.
-        Eigen::Isometry3d worldSensor;
-        if (!tf_utils::resolveToWorld(tfBuffer, config.worldFrameId,
-                                      msg->header.frame_id, worldSensor))
+        if (!config_.useAccumulatedMap)
         {
-            return; // skip this cloud rather than insert mis-registered points
-        }
-
-        if (!config.useAccumulatedMap)
-        {
-            occupiedVoxelKeys.clear();
+            occupiedVoxelKeys_.clear();
         }
 
         size_t accepted = 0;
-
-        try
+        for (const Eigen::Vector3d &pointWorld : pointsWorld)
         {
-            sensor_msgs::PointCloud2ConstIterator<float> iterX(*msg, "x");
-            sensor_msgs::PointCloud2ConstIterator<float> iterY(*msg, "y");
-            sensor_msgs::PointCloud2ConstIterator<float> iterZ(*msg, "z");
-
-            for (; iterX != iterX.end(); ++iterX, ++iterY, ++iterZ)
+            const long key = backend_.voxelKey(pointWorld);
+            if (key >= 0)
             {
-                if (!isFinitePoint(*iterX, *iterY, *iterZ))
-                {
-                    continue;
-                }
-
-                const Eigen::Vector3d pointWorld = worldSensor * Eigen::Vector3d(*iterX, *iterY, *iterZ);
-                const long key = voxelKeyFromPosition(pointWorld);
-                if (key >= 0)
-                {
-                    occupiedVoxelKeys.insert(key);
-                    accepted++;
-                }
+                occupiedVoxelKeys_.insert(key);
+                ++accepted;
             }
-        }
-        catch (const std::runtime_error &e)
-        {
-            ROS_WARN("Invalid local point cloud: %s", e.what());
-            return;
         }
 
         rebuildVoxelMap();
         ROS_DEBUG("Integrated %zu local points into %zu occupied voxels.",
-                  accepted, occupiedVoxelKeys.size());
+                  accepted, occupiedVoxelKeys_.size());
     }
 
-    inline double getTargetHeight(const geometry_msgs::PoseStamped &msg) const
+    void targetCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
     {
-        if (config.useFixedTargetHeight)
-        {
-            return config.targetHeight;
-        }
-
-        if (config.useTargetZ)
-        {
-            return msg.pose.position.z;
-        }
-
-        return config.mapBound[4] + config.dilateRadius +
-               std::fabs(msg.pose.orientation.z) *
-                   (config.mapBound[5] - config.mapBound[4] - 2.0 * config.dilateRadius);
-    }
-
-    inline void targetCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
-    {
-        // Clamp once and use the bounded target throughout planning.
-        requestedTarget_ = Eigen::Vector3d(msg->pose.position.x,
-                                           msg->pose.position.y,
-                                           getTargetHeight(*msg));
-        globalTarget_ = clampInsideMap(requestedTarget_);
-        targetWasClamped_ = (globalTarget_ - requestedTarget_).norm() > 1.0e-3;
-        targetReceived = true;
-
+        requestedTarget_ = Eigen::Vector3d(
+            msg->pose.position.x,
+            msg->pose.position.y,
+            config_.common.resolveTargetHeight(*msg));
+        globalTarget_ = backend_.clampInsideMap(
+            requestedTarget_,
+            config_.common.dilateRadius + backend_.voxelScale());
+        targetWasClamped_ =
+            (globalTarget_ - requestedTarget_).norm() > 1.0e-3;
+        targetReceived_ = true;
         goalLatched_ = false;
 
         if (targetWasClamped_)
         {
-            ROS_WARN("Requested target [%.2f, %.2f, %.2f] is outside the planning volume; "
-                     "clamped to [%.2f, %.2f, %.2f]. Planning to the clamped target.",
-                     requestedTarget_.x(), requestedTarget_.y(), requestedTarget_.z(),
+            ROS_WARN("Requested target [%.2f, %.2f, %.2f] is outside the planning "
+                     "volume; clamped to [%.2f, %.2f, %.2f]. Planning to the "
+                     "clamped target.",
+                     requestedTarget_.x(), requestedTarget_.y(),
+                     requestedTarget_.z(),
                      globalTarget_.x(), globalTarget_.y(), globalTarget_.z());
         }
 
-        visualizer.visualizeStartGoal(globalTarget_, 0.05, 1);
+        rosInterface_.visualizer().visualizeStartGoal(
+            globalTarget_, 0.05, 1);
         if (targetWasClamped_)
         {
-            visualizer.visualizeStartGoal(requestedTarget_, 0.05, 2);
+            rosInterface_.visualizer().visualizeStartGoal(
+                requestedTarget_, 0.05, 2);
         }
         ROS_INFO("Received online replanning target in %s: [%.2f, %.2f, %.2f].",
-                 config.worldFrameId.c_str(),
+                 config_.common.worldFrameId.c_str(),
                  globalTarget_.x(), globalTarget_.y(), globalTarget_.z());
     }
 
-    // Keep RRT goals inside the valid planning volume.
-    inline Eigen::Vector3d clampInsideMap(const Eigen::Vector3d &pt) const
+    Eigen::Vector3d truncateRouteToHorizon(
+        const std::vector<Eigen::Vector3d> &fullRoute,
+        std::vector<Eigen::Vector3d> &localRoute) const
     {
-        const Eigen::Vector3d offs = Eigen::Vector3d::Constant(config.dilateRadius + voxelMap.getScale());
-        const Eigen::Vector3d lo = voxelMap.getOrigin() + offs;
-        const Eigen::Vector3d hi = voxelMap.getCorner() - offs;
-        return pt.cwiseMax(lo).cwiseMin(hi);
-    }
-
-    // Truncate the route to the local planning horizon.
-    inline Eigen::Vector3d truncateRouteToHorizon(const std::vector<Eigen::Vector3d> &full,
-                                                  std::vector<Eigen::Vector3d> &local) const
-    {
-        local.clear();
-        local.push_back(full.front());
+        localRoute.clear();
+        localRoute.push_back(fullRoute.front());
 
         double accumulated = 0.0;
-        for (size_t i = 1; i < full.size(); ++i)
+        for (size_t index = 1; index < fullRoute.size(); ++index)
         {
-            const double seg = (full[i] - full[i - 1]).norm();
-            if (accumulated + seg >= config.planningHorizon)
+            const double segmentLength =
+                (fullRoute[index] - fullRoute[index - 1]).norm();
+            if (accumulated + segmentLength >= config_.planningHorizon)
             {
-                const double remain = config.planningHorizon - accumulated;
-                const double ratio = seg > 1.0e-6 ? remain / seg : 0.0;
-                local.push_back(full[i - 1] + ratio * (full[i] - full[i - 1]));
-                return local.back();
+                const double remaining =
+                    config_.planningHorizon - accumulated;
+                const double ratio =
+                    segmentLength > 1.0e-6
+                        ? remaining / segmentLength
+                        : 0.0;
+                localRoute.push_back(
+                    fullRoute[index - 1] +
+                    ratio * (fullRoute[index] - fullRoute[index - 1]));
+                return localRoute.back();
             }
-            accumulated += seg;
-            local.push_back(full[i]);
+
+            accumulated += segmentLength;
+            localRoute.push_back(fullRoute[index]);
         }
 
-        return local.back();
+        return localRoute.back();
     }
 
-    inline bool computeTrajectory(const Eigen::Vector3d &start,
-                                  const Eigen::Vector3d &startVel,
-                                  const Eigen::Vector3d &startAcc,
-                                  const Eigen::Vector3d &goal,
-                                  Trajectory<5> &candidateTraj,
-                                  std::vector<Eigen::Vector3d> &route,
-                                  std::vector<Eigen::MatrixX4d> &hPolys,
-                                  bool &terminal)
+    bool computeTrajectory(
+        const Eigen::Vector3d &start,
+        const Eigen::Vector3d &startVelocity,
+        const Eigen::Vector3d &startAcceleration,
+        const Eigen::Vector3d &goal,
+        Trajectory<5> &candidateTrajectory,
+        std::vector<Eigen::Vector3d> &route,
+        std::vector<Eigen::MatrixX4d> &hPolys,
+        bool &terminal)
     {
-        // A terminal trajectory brakes at the goal or closest safe approach.
         terminal = false;
 
         std::vector<Eigen::Vector3d> fullRoute;
-        try
+        if (!backend_.searchPath(start, goal, fullRoute))
         {
-            sfc_gen::planPath<voxel_map::VoxelMap>(start,
-                                                   goal,
-                                                   voxelMap.getOrigin(),
-                                                   voxelMap.getCorner(),
-                                                   &voxelMap,
-                                                   config.timeoutRRT,
-                                                   fullRoute);
-        }
-        catch (const std::exception &e)
-        {
-            // Keep invalid OMPL queries from aborting the planner.
-            ROS_WARN_THROTTLE(1.0, "Path search threw an exception: %s", e.what());
-            return false;
-        }
-
-        if (fullRoute.size() <= 1)
-        {
-            ROS_WARN_THROTTLE(1.0, "RRT did not produce a usable route.");
             return false;
         }
 
         const Eigen::Vector3d routeEnd = fullRoute.back();
-
-        // Optimize one local horizon.
-        const Eigen::Vector3d localTarget = truncateRouteToHorizon(fullRoute, route);
+        const Eigen::Vector3d localTarget =
+            truncateRouteToHorizon(fullRoute, route);
         if (route.size() < 2)
         {
             ROS_WARN_THROTTLE(1.0, "Local route is too short to plan.");
             return false;
         }
-
-        std::vector<Eigen::Vector3d> pc;
-        voxelMap.getSurf(pc);
-        sfc_gen::convexCover(route,
-                             pc,
-                             voxelMap.getOrigin(),
-                             voxelMap.getCorner(),
-                             7.0,
-                             3.0,
-                             hPolys);
-        sfc_gen::shortCut(hPolys);
-
-        if (hPolys.empty())
+        if (!backend_.buildCorridor(route, hPolys))
         {
-            ROS_WARN_THROTTLE(1.0, "Failed to generate a safe flight corridor.");
             return false;
         }
 
-        // Cruise through intermediate horizons; brake on the terminal horizon.
-        Eigen::Vector3d localTargetVel = Eigen::Vector3d::Zero();
-        const Eigen::Vector3d tangent = route.back() - route[route.size() - 2];
-        const bool routeTruncated = (localTarget - routeEnd).norm() > 1.0e-6;
+        Eigen::Vector3d localTargetVelocity = Eigen::Vector3d::Zero();
+        const Eigen::Vector3d tangent =
+            route.back() - route[route.size() - 2];
+        const bool routeTruncated =
+            (localTarget - routeEnd).norm() > 1.0e-6;
         if (routeTruncated && tangent.norm() > 1.0e-6)
         {
-            localTargetVel = config.maxVelMag * tangent.normalized();
+            localTargetVelocity =
+                config_.common.maxVelMag * tangent.normalized();
         }
         terminal = !routeTruncated;
 
-        Eigen::Matrix3d iniState;
-        Eigen::Matrix3d finState;
-        iniState << start, startVel, startAcc;
-        finState << localTarget, localTargetVel, Eigen::Vector3d::Zero();
+        Eigen::Matrix3d initialState;
+        Eigen::Matrix3d finalState;
+        initialState << start, startVelocity, startAcceleration;
+        finalState << localTarget,
+            localTargetVelocity,
+            Eigen::Vector3d::Zero();
 
-        gcopter::GCOPTER_PolytopeSFC gcopter;
-
-        Eigen::VectorXd magnitudeBounds(3);
-        Eigen::VectorXd penaltyWeights(4);
-        magnitudeBounds(0) = config.maxVelMag;
-        magnitudeBounds(1) = config.maxBdrMag;
-        magnitudeBounds(2) = config.maxTiltAngle;
-        penaltyWeights(0) = config.chiVec[0];
-        penaltyWeights(1) = config.chiVec[1];
-        penaltyWeights(2) = config.chiVec[2];
-        penaltyWeights(3) = config.chiVec[3];
-
-        if (!gcopter.setup(config.weightT,
-                           iniState,
-                           finState,
-                           hPolys,
-                           INFINITY,
-                           config.smoothingEps,
-                           config.integralIntervs,
-                           magnitudeBounds,
-                           penaltyWeights,
-                           config.gravAcc))
-        {
-            ROS_WARN_THROTTLE(1.0, "GCOPTER setup failed.");
-            return false;
-        }
-
-        candidateTraj.clear();
-        if (std::isinf(gcopter.optimize(candidateTraj, config.relCostTol)))
-        {
-            ROS_WARN_THROTTLE(1.0, "GCOPTER optimization failed.");
-            return false;
-        }
-
-        if (candidateTraj.getPieceNum() <= 0)
-        {
-            return false;
-        }
-
-        // Enforce the velocity limit on the continuous polynomial.
-        const double optimizedMaxVel = candidateTraj.getMaxVelRate();
-        if (!std::isfinite(optimizedMaxVel) || config.maxVelMag <= 0.0)
-        {
-            ROS_WARN_THROTTLE(1.0, "Optimized trajectory has an invalid velocity bound.");
-            return false;
-        }
-
-        if (optimizedMaxVel > config.maxVelMag)
-        {
-            constexpr double velocityMargin = 0.99;
-            const bool significantViolation =
-                optimizedMaxVel > config.maxVelMag * 1.01;
-            const double timeScale =
-                optimizedMaxVel / (velocityMargin * config.maxVelMag);
-            candidateTraj = timeScaledTrajectory(candidateTraj, timeScale);
-
-            const double scaledMaxVel = candidateTraj.getMaxVelRate();
-            if (!std::isfinite(scaledMaxVel) ||
-                scaledMaxVel > config.maxVelMag * (1.0 + 1.0e-6))
-            {
-                ROS_WARN_THROTTLE(1.0, "Failed to enforce the trajectory velocity limit.");
-                return false;
-            }
-
-            if (significantViolation)
-            {
-                ROS_WARN_THROTTLE(1.0,
-                                  "Time-scaled online trajectory by %.3f: max velocity "
-                                  "%.3f -> %.3f m/s (limit %.3f m/s).",
-                                  timeScale, optimizedMaxVel, scaledMaxVel, config.maxVelMag);
-            }
-            else
-            {
-                ROS_DEBUG("Time-scaled online trajectory by %.3f to preserve the "
-                          "%.3f m/s velocity limit.",
-                          timeScale, config.maxVelMag);
-            }
-        }
-
-        return true;
+        return backend_.optimizeTrajectory(
+            initialState, finalState, hPolys,
+            candidateTrajectory, "online");
     }
 
-    inline void replanTimerCallback(const ros::TimerEvent &)
+    bool hasActiveTrajectory(const double now) const
     {
-        if (!targetReceived || !odomReceived || !mapInitialized)
+        return trajectory_.getPieceNum() > 0 &&
+               (now - trajectoryStamp_) < trajectory_.getTotalDuration();
+    }
+
+    void replanTimerCallback(const ros::TimerEvent &)
+    {
+        if (!targetReceived_ ||
+            !rosInterface_.odomReceived() ||
+            !mapInitialized_ ||
+            goalLatched_)
         {
             return;
         }
 
-        if (goalLatched_)
-        {
-            return;
-        }
-
-        // Seed replanning from the active trajectory for C2 continuity.
         const double handoverTime = ros::Time::now().toSec();
-        Eigen::Vector3d start = latestPositionWorld;
-        Eigen::Vector3d startVel = Eigen::Vector3d::Zero();
-        Eigen::Vector3d startAcc = Eigen::Vector3d::Zero();
-        if (hasActiveTraj(handoverTime))
+        Eigen::Vector3d start = rosInterface_.latestPosition();
+        Eigen::Vector3d startVelocity = Eigen::Vector3d::Zero();
+        Eigen::Vector3d startAcceleration = Eigen::Vector3d::Zero();
+        if (hasActiveTrajectory(handoverTime))
         {
-            const double tCur =
-                std::max(0.0, std::min(handoverTime - trajStamp, traj.getTotalDuration()));
-            start = traj.getPos(tCur);
-            startVel = traj.getVel(tCur);
-            startAcc = traj.getAcc(tCur);
+            const double currentTime = std::max(
+                0.0,
+                std::min(handoverTime - trajectoryStamp_,
+                         trajectory_.getTotalDuration()));
+            start = trajectory_.getPos(currentTime);
+            startVelocity = trajectory_.getVel(currentTime);
+            startAcceleration = trajectory_.getAcc(currentTime);
         }
 
-        // Avoid degenerate near-goal planning.
-        if ((start - globalTarget_).norm() <= config.goalTolerance)
+        if ((start - globalTarget_).norm() <= config_.goalTolerance)
         {
             goalLatched_ = true;
             return;
         }
-
-        if (voxelMap.query(start) != 0)
+        if (backend_.query(start))
         {
-            ROS_WARN_THROTTLE(1.0, "Current planning start is outside the map or in collision.");
+            ROS_WARN_THROTTLE(
+                1.0,
+                "Current planning start is outside the map or in collision.");
             return;
         }
 
-        Trajectory<5> candidateTraj;
+        Trajectory<5> candidateTrajectory;
         std::vector<Eigen::Vector3d> route;
         std::vector<Eigen::MatrixX4d> hPolys;
-
         bool terminal = false;
+
         const auto planningStart = std::chrono::steady_clock::now();
-        const bool planningSucceeded =
-            computeTrajectory(start, startVel, startAcc, globalTarget_,
-                              candidateTraj, route, hPolys, terminal);
+        const bool succeeded = computeTrajectory(
+            start, startVelocity, startAcceleration, globalTarget_,
+            candidateTrajectory, route, hPolys, terminal);
         const double planningTimeMs =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - planningStart)
                 .count();
         ROS_INFO("GCOPTER online planning %s in %.3f ms.",
-                 planningSucceeded ? "succeeded" : "failed",
-                 planningTimeMs);
+                 succeeded ? "succeeded" : "failed", planningTimeMs);
 
-        // Keep executing the previous trajectory if replanning fails.
-        if (!planningSucceeded)
+        // Keep executing the previous trajectory when replanning fails.
+        if (!succeeded)
         {
             return;
         }
 
-        traj = candidateTraj;
-        trajStamp = handoverTime;
-        publishTrajectory(handoverTime);
+        trajectory_ = candidateTrajectory;
+        trajectoryStamp_ = handoverTime;
+        rosInterface_.publishTrajectory(trajectory_, handoverTime);
 
-        // Latch after publishing the terminal braking trajectory.
         if (terminal)
         {
             goalLatched_ = true;
-            const Eigen::Vector3d endPos = traj.getPos(traj.getTotalDuration());
-            if ((endPos - globalTarget_).norm() > config.goalTolerance)
+            const Eigen::Vector3d endPosition =
+                trajectory_.getPos(trajectory_.getTotalDuration());
+            if ((endPosition - globalTarget_).norm() >
+                config_.goalTolerance)
             {
-                ROS_WARN("Global target unreachable; stopping at the closest safe approach "
-                         "[%.2f, %.2f, %.2f].",
-                         endPos.x(), endPos.y(), endPos.z());
+                ROS_WARN("Global target unreachable; stopping at the closest "
+                         "safe approach [%.2f, %.2f, %.2f].",
+                         endPosition.x(), endPosition.y(), endPosition.z());
             }
         }
 
-        visualizer.visualizeStartGoal(start, 0.05, 0);
-        visualizer.visualizeStartGoal(globalTarget_, 0.05, 1);
+        rosInterface_.visualizer().visualizeStartGoal(start, 0.05, 0);
+        rosInterface_.visualizer().visualizeStartGoal(
+            globalTarget_, 0.05, 1);
         if (targetWasClamped_)
         {
-            visualizer.visualizeStartGoal(requestedTarget_, 0.05, 2);
+            rosInterface_.visualizer().visualizeStartGoal(
+                requestedTarget_, 0.05, 2);
         }
-        if (config.showPolytopeCorridor)
+        if (config_.common.showPolytopeCorridor)
         {
-            visualizer.visualizePolytope(hPolys);
+            rosInterface_.visualizer().visualizePolytope(hPolys);
         }
-        visualizer.visualize(traj, route);
+        rosInterface_.visualizer().visualize(trajectory_, route);
     }
 
-    // Prefer the active trajectory over odometry for handover state sampling.
-    inline bool hasActiveTraj(const double now) const
-    {
-        return traj.getPieceNum() > 0 && (now - trajStamp) < traj.getTotalDuration();
-    }
+    OnlinePlannerConfig config_;
+    ros::NodeHandle nh_;
+    gcopter_planner::PlannerBackend backend_;
+    gcopter_planner::PlannerRosInterface rosInterface_;
+    ros::Subscriber localMapSub_;
+    ros::Subscriber targetSub_;
+    ros::Timer replanTimer_;
 
-    // Publish the optimized polynomial for asynchronous execution.
-    inline void publishTrajectory(const double startTime)
-    {
-        gcopter::PolyTraj msg;
-        msg.start_time = ros::Time(startTime);
-        msg.traj_id = trajId_++;
-        msg.order = 5;
+    std::unordered_set<long> occupiedVoxelKeys_;
+    bool mapInitialized_;
+    bool targetReceived_;
 
-        const int coefPerPiece = 6; // order + 1
-        const int n = traj.getPieceNum();
-        msg.durations.reserve(n);
-        msg.coef_x.reserve(n * coefPerPiece);
-        msg.coef_y.reserve(n * coefPerPiece);
-        msg.coef_z.reserve(n * coefPerPiece);
-        for (int p = 0; p < n; ++p)
-        {
-            const Piece<5> &piece = traj[p];
-            const Piece<5>::CoefficientMat coeff = piece.getCoeffMat();
-            msg.durations.push_back(piece.getDuration());
-            for (int j = 0; j < coefPerPiece; ++j)
-            {
-                msg.coef_x.push_back(coeff(0, j));
-                msg.coef_y.push_back(coeff(1, j));
-                msg.coef_z.push_back(coeff(2, j));
-            }
-        }
+    Trajectory<5> trajectory_;
+    double trajectoryStamp_;
 
-        trajPub.publish(msg);
-    }
+    Eigen::Vector3d globalTarget_;
+    Eigen::Vector3d requestedTarget_;
+    bool targetWasClamped_;
+    bool goalLatched_;
 };
+
+} // namespace
 
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "online_replanning_node");
     ros::NodeHandle nh;
-    OnlineReplanner replanner(OnlinePlannerConfig(ros::NodeHandle("~")), nh);
-    ros::spin();
+
+    try
+    {
+        OnlinePlannerConfig config(ros::NodeHandle("~"));
+        OnlineReplanner replanner(config, nh);
+        ros::spin();
+    }
+    catch (const std::exception &exception)
+    {
+        ROS_FATAL("Invalid GCOPTER online planner configuration: %s",
+                  exception.what());
+        return 1;
+    }
+
     return 0;
 }

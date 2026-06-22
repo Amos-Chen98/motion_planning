@@ -8,6 +8,10 @@ This is a ROS catkin package. The main configuration files are:
 - `package.xml`: declares ROS package dependencies.
 - `config/gcopter_planner_config.yaml`: stores GCOPTER planner parameters.
 - `config/livox_mid360_simulator_config.yaml`: stores Livox Mid-360 simulator range/FOV parameters.
+- `include/gcopter/planner_common.hpp` and `src/planner_common.cpp`: shared
+  configuration, voxel-map/path/corridor/optimization backend, TF and odometry
+  handling, point-cloud decoding, visualization access, and trajectory
+  publishing for both planner modes.
 - `launch/demo.launch`: starts the mock map generator, point-robot model, planner mode, and RViz.
 - `launch/point_robot_model.launch`: reusable point-robot `nav_msgs/Odometry` model for the standalone demo.
 - `launch/gcopter_planner.launch`: reusable headless launch that starts either the global planner or the online local-perception planner.
@@ -78,23 +82,33 @@ parent of the lidar frame.
 
 Common parameters:
 
-- `FrameId`: frame used for visualization and command headers in global mode. Default: `world`.
+- `WorldFrameId`: frame used for planning and visualization in both modes, and
+  for command headers in `traj_server`. Default: `world`.
 - `VoxelWidth`: voxel resolution.
 - `DilateRadius`: obstacle inflation radius.
 - `MapBound`: planning map bounds, formatted as `[xmin, xmax, ymin, ymax, zmin, zmax]`.
-- `CommandHz`: streaming rate of the position commands along the planned trajectory.
 - `UseFixedTargetHeight`, `TargetHeight`: fix goal height to `TargetHeight`.
 - `UseTargetZ`: use the target message's `position.z` as the goal height (for a 3D goal source such as an interactive marker). When neither `UseFixedTargetHeight` nor `UseTargetZ` is set, the height is derived from the RViz goal orientation.
 - `TimeoutRRT`: RRT search timeout.
 - `MaxVelMag`, `MaxBdrMag`, `MaxTiltAngle`: velocity, body-rate, and tilt constraints.
-  Online mode verifies the continuous optimized trajectory against `MaxVelMag`
-  and time-scales any violating trajectory before publishing commands.
+  Both modes verify the continuous optimized trajectory against `MaxVelMag`
+  and time-scale any violating trajectory before publishing it.
 - `GravAcc`: gravitational acceleration.
 - `WeightT`, `ChiVec`, `SmoothingEps`, `IntegralIntervs`, `RelCostTol`: optimizer parameters.
 
+Trajectory execution parameters are consumed only by `traj_server`:
+
+- `CommandHz`: streaming rate of position commands.
+- `PublishYawCommand`: align command yaw with horizontal trajectory velocity;
+  otherwise preserve measured yaw.
+
+Both planners validate map bounds, voxel resolution, dynamic limits, and
+optimizer vectors during startup. Invalid configurations terminate with a
+descriptive fatal error. Point clouds are decoded by XYZ field name, so field
+reordering and padding are supported while non-finite points are ignored.
+
 Online parameters:
 
-- `WorldFrameId`: frame used for online visualization and command headers. Default: `world`.
 - `RobotFrameId`: robot frame represented by the odometry pose. Default: `quadrotor/cog`.
 - `LidarImuFrameId`: local point-cloud frame published by the Livox Mid-360 simulator. Default: `body`.
 - `camera_init_frame_id`: fixed reference frame published by the standalone point-robot model. Default: `camera_init`.
@@ -109,8 +123,9 @@ visualization, and robot stack. This launch starts only one planner node; it
 does not start the mock map generator, Livox simulator, point robot, or RViz.
 
 Set `planner_mode:=global` or `planner_mode:=online`. Both planners publish
-`geometry_msgs/PoseStamped` position commands, and both ignore targets until a
-valid world-frame odometry message has been received.
+`gcopter/PolyTraj` trajectories for `traj_server`, which streams
+`geometry_msgs/PoseStamped` position commands. Both planners ignore targets
+until valid world-frame odometry has been received.
 
 Example closed-loop integration:
 

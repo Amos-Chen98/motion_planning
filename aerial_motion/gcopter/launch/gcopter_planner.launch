@@ -51,8 +51,6 @@
             <param name="TargetHeight" type="double" value="$(arg target_height)" />
             <param name="UseTargetZ" type="bool" value="$(arg use_target_z)" />
             <param name="ShowPolytopeCorridor" type="bool" value="$(arg show_corridor)" />
-            <param name="CommandHz" type="double" value="$(arg command_hz)" />
-            <param name="PublishYawCommand" type="bool" value="$(arg publish_yaw_command)" />
         </node>
     </group>
 
@@ -70,8 +68,6 @@
             <param name="DilateRadius" type="double" value="$(arg dilate_radius)" />
             <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
             <param name="MaxVelMag" type="double" value="$(arg max_vel_mag)" />
-            <param name="CommandHz" type="double" value="$(arg command_hz)" />
-            <param name="PublishYawCommand" type="bool" value="$(arg publish_yaw_command)" />
             <param name="ReplanHz" type="double" value="$(arg replan_hz)" />
             <param name="UseAccumulatedMap" type="bool" value="$(arg use_accumulated_map)" />
             <param name="GoalTolerance" type="double" value="$(arg goal_tolerance)" />
