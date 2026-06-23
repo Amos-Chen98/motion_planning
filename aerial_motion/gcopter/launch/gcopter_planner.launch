@@ -16,6 +16,8 @@
     <!-- Closed-loop navigation options -->
     <arg name="command_hz" default="40.0" />
     <arg name="publish_yaw_command" default="false" />
+    <!-- Upper bound on commanded yaw rate [rad/s]; <= 0 disables limiting -->
+    <arg name="max_yaw_rate" default="1.5" />
     <arg name="replan_hz" default="2.0" />
     <arg name="use_accumulated_map" default="true" />
     <arg name="goal_tolerance" default="0.2" />
@@ -90,5 +92,6 @@
         <param name="WorldFrameId" type="str" value="$(arg world_frame_id)" />
         <param name="CommandHz" type="double" value="$(arg command_hz)" />
         <param name="PublishYawCommand" type="bool" value="$(arg publish_yaw_command)" />
+        <param name="MaxYawRate" type="double" value="$(arg max_yaw_rate)" />
     </node>
 </launch>

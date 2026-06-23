@@ -29,6 +29,8 @@ private:
 
     std::string worldFrameId;
     bool publishYawCommand;
+    double maxYawRate;
+    double commandDt;
 
     Trajectory<5> traj;
     ros::Time trajStamp;
@@ -49,6 +51,8 @@ public:
         nhPriv.param("GravAcc", gravAcc, 9.8);
         nhPriv.param("CommandHz", commandHz, 40.0);
         nhPriv.param("PublishYawCommand", publishYawCommand, false);
+        // Upper bound on commanded yaw rate [rad/s]; <= 0 disables limiting.
+        nhPriv.param("MaxYawRate", maxYawRate, 0.0);
         nhPriv.param<std::string>("WorldFrameId", worldFrameId, "world");
 
         flatmap.reset(gravAcc);
@@ -64,7 +68,8 @@ public:
         bdrPub = nh.advertise<std_msgs::Float64>("/visualizer/body_rate", 1000);
 
         commandHz = commandHz > 0.0 ? commandHz : 40.0;
-        commandTimer = nh.createTimer(ros::Duration(1.0 / commandHz),
+        commandDt = 1.0 / commandHz;
+        commandTimer = nh.createTimer(ros::Duration(commandDt),
                                       &TrajServer::commandTimerCallback, this);
     }
 
@@ -152,7 +157,7 @@ private:
 
         if (publishYawCommand && vel(0) * vel(0) + vel(1) * vel(1) > 1.0e-6)
         {
-            lastYaw = std::atan2(vel(1), vel(0));
+            lastYaw = rateLimitedYaw(lastYaw, std::atan2(vel(1), vel(0)));
         }
 
         publishPoseCommand(pos);
@@ -160,6 +165,19 @@ private:
         {
             publishDiagnostics(tEval, vel);
         }
+    }
+
+    // Slew the commanded yaw toward the target heading, capping the per-cycle
+    // change at maxYawRate * commandDt. Angles are kept in (-pi, pi].
+    inline double rateLimitedYaw(const double current, const double target) const
+    {
+        double diff = std::remainder(target - current, 2.0 * M_PI);
+        if (maxYawRate > 0.0)
+        {
+            const double maxStep = maxYawRate * commandDt;
+            diff = std::max(-maxStep, std::min(maxStep, diff));
+        }
+        return std::remainder(current + diff, 2.0 * M_PI);
     }
 
     inline void publishPoseCommand(const Eigen::Vector3d &pos)

@@ -25,6 +25,8 @@
     <arg name="ideal_robot_publish_rate" default="40.0" />
     <arg name="publish_tf" default="true" />
     <arg name="publish_yaw_command" default="true" />
+    <!-- Upper bound on commanded yaw rate [rad/s]; <= 0 disables limiting -->
+    <arg name="max_yaw_rate" default="1.0" />
     <!-- Initial robot pose in world (seeds the odom before the first target_pose). -->
     <arg name="spawn_x" default="0.0" />
     <arg name="spawn_y" default="0.0" />
@@ -125,6 +127,7 @@
         <arg name="dilate_radius" value="$(arg dilate_radius)" />
         <arg name="map_bound" value="$(arg map_bound)" />
         <arg name="publish_yaw_command" value="$(arg publish_yaw_command)" />
+        <arg name="max_yaw_rate" value="$(arg max_yaw_rate)" />
     </include>
 
 </launch>
