@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Plot six-dimensional joints_ctrl commands from one rosbag."""
+"""Plot six-dimensional joints_ctrl commands from three rosbags."""
 
 from __future__ import annotations
 
@@ -15,9 +15,22 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PACKAGE_DIR = SCRIPT_DIR.parent
 
 # Manually edit these parameters before running the script.
-BAG_PATH = PACKAGE_DIR / "data" / "rosbag" / "2026-05-06-18-14-00_four_ring_success.bag"
+BAG_PATHS = (
+    PACKAGE_DIR / "data" / "rosbag" / "2026-05-25-17-44-14_close_ring_success.bag",
+    PACKAGE_DIR / "data" / "rosbag" / "2026-05-26-15-37-10_large_pitch_success.bag",
+    PACKAGE_DIR / "data" / "rosbag" / "2026-05-06-18-14-00_four_ring_success.bag",
+)
 TOPIC = "/dragon/joints_ctrl"
-DURATION_SECONDS = 50.0
+DURATION_SECONDS = (
+    50.0,
+    50.0,
+    60.0,
+)
+MARKER_TIMESTAMPS_SECONDS = (
+    (3.0, 15.0, 28.0, 43.0),
+    (5.0, 21.0, 35.0, 50.0),
+    (12.0, 32.0, 46.0, 55.0),
+)
 OUTPUT_DIR = PACKAGE_DIR / "data" / "figures" / "joint_cmd"
 OUTPUT_SUFFIX = "joint_cmd"
 OUTPUT_LEGEND_SUFFIX = "joint_cmd_legend"
@@ -60,6 +73,13 @@ JOINT_LABELS = (
 
 
 @dataclass(frozen=True)
+class JointControlPlotConfig:
+    bag_path: Path
+    duration_seconds: float
+    marker_timestamps_seconds: tuple[float, ...]
+
+
+@dataclass(frozen=True)
 class JointControlSeries:
     topic_names: tuple[str, ...]
     start_time: float
@@ -68,6 +88,32 @@ class JointControlSeries:
     times: list[float]
     positions: list[list[float]]
     exhausted_before_requested_end: bool
+
+
+def build_plot_configs() -> tuple[JointControlPlotConfig, ...]:
+    if not (
+        len(BAG_PATHS)
+        == len(DURATION_SECONDS)
+        == len(MARKER_TIMESTAMPS_SECONDS)
+        == 3
+    ):
+        raise RuntimeError(
+            "BAG_PATHS, DURATION_SECONDS, and MARKER_TIMESTAMPS_SECONDS must each "
+            "contain exactly three entries"
+        )
+
+    return tuple(
+        JointControlPlotConfig(
+            bag_path=bag_path,
+            duration_seconds=duration,
+            marker_timestamps_seconds=tuple(marker_timestamps),
+        )
+        for bag_path, duration, marker_timestamps in zip(
+            BAG_PATHS,
+            DURATION_SECONDS,
+            MARKER_TIMESTAMPS_SECONDS,
+        )
+    )
 
 
 def normalized_topic_candidates(topic: str) -> tuple[str, ...]:
@@ -198,6 +244,7 @@ def configure_plot_style(plt) -> None:
 def plot_joint_control_series(
     series: JointControlSeries,
     duration: float,
+    marker_timestamps: tuple[float, ...],
     plt,
 ):
     configure_plot_style(plt)
@@ -225,6 +272,15 @@ def plot_joint_control_series(
             color=color,
             linestyle=linestyle,
             linewidth=1.0,
+        )
+
+    for timestamp in marker_timestamps:
+        ax.axvline(
+            timestamp,
+            color="0.35",
+            linestyle="--",
+            linewidth=0.65,
+            alpha=0.65,
         )
 
     ax.axhline(0.0, color="0.35", linewidth=0.55, alpha=0.55)
@@ -284,6 +340,11 @@ def resolve_output_svg_path(output_dir: Path, bag_path: Path, output_suffix: str
     return directory / "{}_{}.svg".format(bag_stem, output_suffix)
 
 
+def resolve_legend_output_svg_path(output_dir: Path, output_suffix: str) -> Path:
+    directory = Path(output_dir).expanduser().resolve()
+    return directory / "{}.svg".format(output_suffix)
+
+
 def print_summary(series: JointControlSeries, duration: float) -> None:
     actual_duration = series.actual_end_time - series.start_time
     print(
@@ -312,24 +373,52 @@ def print_summary(series: JointControlSeries, duration: float) -> None:
 
 def main() -> int:
     try:
-        series = load_joint_control_series(BAG_PATH, TOPIC, DURATION_SECONDS)
-        print("Bag: {}".format(Path(BAG_PATH).expanduser().resolve()))
-        print_summary(series, DURATION_SECONDS)
+        plot_configs = build_plot_configs()
+        loaded_series = []
+        for plot_index, plot_config in enumerate(plot_configs, start=1):
+            series = load_joint_control_series(
+                plot_config.bag_path,
+                TOPIC,
+                plot_config.duration_seconds,
+            )
+            print(
+                "Bag {}: {}".format(
+                    plot_index,
+                    Path(plot_config.bag_path).expanduser().resolve(),
+                )
+            )
+            print_summary(series, plot_config.duration_seconds)
+            loaded_series.append((plot_config, series))
 
         plt = import_pyplot(not SHOW_PLOT)
-        fig = plot_joint_control_series(series, DURATION_SECONDS, plt)
+        figures = [
+            (
+                plot_config,
+                plot_joint_control_series(
+                    series,
+                    plot_config.duration_seconds,
+                    plot_config.marker_timestamps_seconds,
+                    plt,
+                ),
+            )
+            for plot_config, series in loaded_series
+        ]
         legend_fig = plot_joint_control_legend(plt)
 
         if SAVE_FIGURE:
-            output_path = resolve_output_svg_path(OUTPUT_DIR, BAG_PATH, OUTPUT_SUFFIX)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            Path(OUTPUT_DIR).expanduser().resolve().mkdir(parents=True, exist_ok=True)
             plt.rcParams["svg.fonttype"] = "path"
-            fig.savefig(output_path, dpi=SAVE_DPI)
-            print("Saved plot: {}".format(output_path))
+            for plot_config, fig in figures:
+                output_path = resolve_output_svg_path(
+                    OUTPUT_DIR,
+                    plot_config.bag_path,
+                    OUTPUT_SUFFIX,
+                )
+                fig.savefig(output_path, dpi=SAVE_DPI)
+                print("Saved plot: {}".format(output_path))
 
-            legend_output_path = resolve_output_svg_path(
+            legend_output_path = resolve_legend_output_svg_path(
                 OUTPUT_DIR,
-                BAG_PATH,
                 OUTPUT_LEGEND_SUFFIX,
             )
             plt.rcParams["svg.fonttype"] = "path"
@@ -339,7 +428,8 @@ def main() -> int:
         if SHOW_PLOT:
             plt.show()
 
-        plt.close(fig)
+        for _, fig in figures:
+            plt.close(fig)
         plt.close(legend_fig)
         return 0
     except (RuntimeError, rosbag.ROSBagException) as exc:
