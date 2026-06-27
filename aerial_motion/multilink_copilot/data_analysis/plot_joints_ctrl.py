@@ -17,7 +17,7 @@ PACKAGE_DIR = SCRIPT_DIR.parent
 # Manually edit these parameters before running the script.
 BAG_PATH = PACKAGE_DIR / "data" / "rosbag" / "2026-05-06-18-14-00_four_ring_success.bag"
 TOPIC = "/dragon/joints_ctrl"
-DURATION_SECONDS = 60.0
+DURATION_SECONDS = 50.0
 OUTPUT_DIR = PACKAGE_DIR / "data" / "figures" / "joint_cmd"
 OUTPUT_SUFFIX = "joint_cmd"
 OUTPUT_LEGEND_SUFFIX = "joint_cmd_legend"
@@ -26,14 +26,20 @@ SHOW_PLOT = True
 SAVE_DPI = 200
 IEEE_DOUBLE_COLUMN_TEXT_WIDTH_INCH = 43.0 * 12.0 / 72.27
 FIGURE_WIDTH_INCH = IEEE_DOUBLE_COLUMN_TEXT_WIDTH_INCH / 3.0
-FIGURE_HEIGHT_INCH = FIGURE_WIDTH_INCH * 3.0 / 4.0
+FIGURE_HEIGHT_INCH = FIGURE_WIDTH_INCH * 2.0 / 4.0
 LEGEND_FIGURE_WIDTH_INCH = IEEE_DOUBLE_COLUMN_TEXT_WIDTH_INCH
 LEGEND_FIGURE_HEIGHT_INCH = 0.34
 FONT_SIZE_PT = 9
-AXES_LEFT = 0.24
+AXES_LEFT = 0.18
 AXES_RIGHT = 0.965
-AXES_BOTTOM = 0.22
-AXES_TOP = 0.96
+AXES_BOTTOM = 0.295
+AXES_TOP = 0.985
+X_LABEL_PAD = 0.5
+Y_LABEL_PAD = 0.2
+TICK_PAD = 1.2
+TICK_LENGTH = 2.4
+TICK_WIDTH = 0.6
+LEGEND_ANCHOR = (0.015, 0.02, 0.97, 0.96)
 JOINT_COLORS = (
     "#4477AA",
     "#EE6677",
@@ -230,8 +236,15 @@ def plot_joint_control_series(
         x_max = 1.0
 
     ax.set_xlim(0.0, x_max)
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Joint command [rad]")
+    ax.set_xlabel("Time [s]", labelpad=X_LABEL_PAD)
+    ax.set_ylabel("Joint command\n[rad]", labelpad=Y_LABEL_PAD)
+    ax.tick_params(
+        axis="both",
+        which="major",
+        pad=TICK_PAD,
+        length=TICK_LENGTH,
+        width=TICK_WIDTH,
+    )
     return fig
 
 
@@ -250,9 +263,12 @@ def plot_joint_control_legend(plt):
         handles,
         JOINT_LABELS,
         loc="center",
+        bbox_to_anchor=LEGEND_ANCHOR,
+        mode="expand",
         ncol=len(JOINT_LABELS),
         frameon=True,
         framealpha=0.95,
+        borderaxespad=0.0,
         borderpad=0.3,
         labelspacing=0.2,
         handlelength=1.2,
