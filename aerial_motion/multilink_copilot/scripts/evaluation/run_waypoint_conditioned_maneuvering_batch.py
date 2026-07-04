@@ -67,11 +67,19 @@ RESIDUAL_PROCESS_STOP_SIGTERM_TIMEOUT_SEC = 3.0
 PROCESS_SESSION_ENV_VAR = "WAYPOINT_BATCH_RUNNER_SESSION_ID"
 RUNNER_LOCK_PATH = Path(tempfile.gettempdir()) / "waypoint_conditioned_maneuvering_batch_runner.lock"
 
+def find_package_dir(package_name):
+    try:
+        output = subprocess.check_output(["rospack", "find", package_name], text=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("failed to locate {} with rospack: {}".format(package_name, exc))
+    return Path(output.strip())
+
+
 SCRIPT_PATH = Path(__file__).resolve()
 PACKAGE_DIR = SCRIPT_PATH.parents[2]
 MONO_PLANNER_DIR = PACKAGE_DIR.parent / "mono_planner"
 DEFAULT_CASE_DIR = MONO_PLANNER_DIR / "test_data"
-DEFAULT_OUTPUT_ROOT = PACKAGE_DIR / "data" / "envelope_width" / "waypoint_conditioned_batch"
+DEFAULT_OUTPUT_ROOT = find_package_dir("data_manager") / "dragon_copilot" / "data" / "envelope_width" / "waypoint_conditioned_batch"
 PLANNER_NODE_NAMES = (
     f"/{ROBOT_NS}/holo_wpt_cond_planner",
     f"/{ROBOT_NS}/nonholo_wpt_cond_planner",

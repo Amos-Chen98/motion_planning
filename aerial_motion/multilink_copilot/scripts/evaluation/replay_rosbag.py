@@ -24,7 +24,7 @@ def parse_args(argv):
         description="Select a multilink_copilot rosbag and replay it with RViz visualization.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("bag", nargs="?", help="Bag path, or a bag filename under data/rosbag.")
+    parser.add_argument("bag", nargs="?", help="Bag path, or a bag filename under data_manager/dragon_copilot/data/rosbag.")
     parser.add_argument("--latest", action="store_true", help="Replay the newest bag without prompting.")
     parser.add_argument("--rate", type=float, help="Playback rate passed to rosbag play.")
     parser.add_argument("--pause", action="store_true", help="Start rosbag play paused.")
@@ -42,11 +42,11 @@ def parse_args(argv):
     return args
 
 
-def find_package_path():
+def find_package_path(package_name):
     try:
-        output = subprocess.check_output(["rospack", "find", PACKAGE_NAME], text=True)
+        output = subprocess.check_output(["rospack", "find", package_name], text=True)
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError("failed to locate {} with rospack: {}".format(PACKAGE_NAME, exc))
+        raise RuntimeError("failed to locate {} with rospack: {}".format(package_name, exc))
     return output.strip()
 
 
@@ -162,8 +162,8 @@ def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
 
     try:
-        package_path = find_package_path()
-        rosbag_dir = os.path.join(package_path, "data", "rosbag")
+        data_manager_path = find_package_path("data_manager")
+        rosbag_dir = os.path.join(data_manager_path, "dragon_copilot", "data", "rosbag")
         bags = list_bags(rosbag_dir)
 
         if args.list:

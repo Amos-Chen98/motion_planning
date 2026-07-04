@@ -1,8 +1,0 @@
-# Exclude transient or machine-local artifacts from manual data sync.
-- **/__pycache__/**
-- __pycache__/**
-- **/*.pyc
-- **/*.tmp
-- **/*.swp
-- **/*.active
-- **/.DS_Store

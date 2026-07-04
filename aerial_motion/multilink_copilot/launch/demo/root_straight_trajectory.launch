@@ -11,7 +11,7 @@
     <arg name="marker_sample_interval_m" default="0.05" />
     <arg name="run_duration_sec" default="30.0" />
     <arg name="record_rosbag" default="true" />
-    <arg name="rosbag_output_prefix" default="$(find multilink_copilot)/data/rosbag/stability_metrics/root_straight_trajectory" />
+    <arg name="rosbag_output_prefix" default="$(find data_manager)/dragon_copilot/data/rosbag/stability_metrics/root_straight_trajectory" />
 
     <node pkg="rosbag" type="record" name="root_straight_trajectory_rosbag_record" output="screen"
           if="$(arg record_rosbag)"

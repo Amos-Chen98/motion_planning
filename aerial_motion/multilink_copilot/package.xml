@@ -47,6 +47,7 @@
     <exec_depend>python3-numpy</exec_depend>
     <exec_depend>mono_planner</exec_depend>
     <exec_depend>robot_state_publisher</exec_depend>
+    <exec_depend>data_manager</exec_depend>
     <exec_depend>rosbag</exec_depend>
     <exec_depend>rviz</exec_depend>
     <exec_depend>tf</exec_depend>

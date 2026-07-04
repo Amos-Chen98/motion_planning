@@ -4,6 +4,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 
@@ -14,6 +15,14 @@ from geometry_msgs.msg import PoseStamped
 
 GEOMETRY_EPSILON = 1e-12
 POSE_EPSILON = 1e-9
+
+
+def default_output_dir():
+    try:
+        output = subprocess.check_output(["rospack", "find", "data_manager"], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    return os.path.join(output.strip(), "dragon_copilot", "data", "envelope_width")
 
 
 def as_float64_vector(values):
@@ -131,15 +140,6 @@ class EnvelopeWidthEvaluator(object):
     DEFAULT_RING_RADIUS_M = 0.4
     DEFAULT_WAYPOINT_DISCOVERY_PERIOD_SEC = 1.0
     DEFAULT_WAYPOINT_DISCOVERY_SETTLE_SEC = 2.0
-    DEFAULT_OUTPUT_DIR = os.path.normpath(
-        os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..",
-            "..",
-            "data",
-            "envelope_width",
-        )
-    )
     LOG_THROTTLE_SEC = 2.0
     RING_LOCAL_NORMAL = (1.0, 0.0, 0.0)
 
@@ -159,7 +159,9 @@ class EnvelopeWidthEvaluator(object):
         self.discovery_settle_sec = float(
             rospy.get_param("~waypoint_discovery_settle_sec", self.DEFAULT_WAYPOINT_DISCOVERY_SETTLE_SEC)
         )
-        self.output_dir = os.path.expanduser(rospy.get_param("~output_dir", self.DEFAULT_OUTPUT_DIR))
+        self.output_dir = os.path.expanduser(rospy.get_param("~output_dir", "") or default_output_dir())
+        if not self.output_dir:
+            raise ValueError("~output_dir is not set and rospack cannot find data_manager.")
 
         if self.ring_radius_m <= 0.0:
             raise ValueError("~ring_radius_m must be greater than 0.")

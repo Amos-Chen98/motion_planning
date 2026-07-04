@@ -201,7 +201,7 @@ The evaluation tools support two common workflows:
 Recorded bags are stored under:
 
 ```bash
-multilink_copilot/data/rosbag
+data_manager/dragon_copilot/data/rosbag
 ```
 
 Use the replay helper to choose a bag interactively and visualize it in RViz:
@@ -228,7 +228,7 @@ You can also launch a specific bag directly. The launch file lives under
 `launch/evaluation/`; `roslaunch` resolves it by filename:
 
 ```bash
-roslaunch multilink_copilot replay_rosbag.launch bag:=$(rospack find multilink_copilot)/data/rosbag/2026-05-04-11-38-33.bag
+roslaunch multilink_copilot replay_rosbag.launch bag:=$(rospack find data_manager)/dragon_copilot/data/rosbag/2026-05-04-11-38-33.bag
 ```
 
 ### 5.2 Run Evaluation
@@ -251,7 +251,7 @@ This launch starts:
 By default, results are written to:
 
 ```bash
-multilink_copilot/data/envelope_width
+data_manager/dragon_copilot/data/envelope_width
 ```
 
 Common launch arguments:

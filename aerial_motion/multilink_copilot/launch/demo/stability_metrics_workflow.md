@@ -59,7 +59,7 @@ Each launch records the stability metric topics while the trajectory publisher
 runs. When the trajectory launch exits, the generated bag is saved under:
 
 ```bash
-data/rosbag/stability_metrics/
+data_manager/dragon_copilot/data/rosbag/stability_metrics/
 ```
 
 ## 5. Generate Stability Metric Plots
@@ -67,20 +67,20 @@ data/rosbag/stability_metrics/
 Open:
 
 ```bash
-data_analysis/plot_stability_metrics.py
+data_manager/dragon_copilot/data_analysis/plot_stability_metrics.py
 ```
 
 Set `BAG_PATH` to the rosbag generated in the previous step. Then run from the
-`multilink_copilot` package root:
+`data_manager` package root:
 
 ```bash
-roscd multilink_copilot
-python3 data_analysis/plot_stability_metrics.py
+roscd data_manager
+python3 dragon_copilot/data_analysis/plot_stability_metrics.py
 ```
 
 The script reads the recorded stability metric topics and writes the generated
 PDF figures to:
 
 ```bash
-data/figures/stability_metrics/
+data_manager/dragon_copilot/data/figures/stability_metrics/
 ```
