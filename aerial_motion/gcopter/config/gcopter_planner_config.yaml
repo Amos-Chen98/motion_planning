@@ -1,5 +1,5 @@
 # Map and path search
-TimeoutRRT: 0.02
+TimeoutRRT: 0.1
 
 # Dynamic limits
 MaxBdrMag: 2.1

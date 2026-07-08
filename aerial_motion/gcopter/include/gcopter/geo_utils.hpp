@@ -31,9 +31,12 @@
 #include <Eigen/Eigen>
 
 #include <cfloat>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <set>
 #include <chrono>
+#include <vector>
 
 namespace geo_utils
 {
@@ -101,8 +104,15 @@ namespace geo_utils
                          const double &epsilon,
                          Eigen::Matrix3Xd &fV)
     {
+        if (rV.cols() == 0)
+        {
+            fV.resize(3, 0);
+            return;
+        }
+
         const double mag = std::max(fabs(rV.maxCoeff()), fabs(rV.minCoeff()));
-        const double res = mag * std::max(fabs(epsilon) / mag, DBL_EPSILON);
+        const double scale = std::max(1.0, mag);
+        const double res = std::max(fabs(epsilon), scale * DBL_EPSILON);
         std::set<Eigen::Vector3d, filterLess> filter;
         fV = rV;
         int offset = 0;
@@ -121,36 +131,103 @@ namespace geo_utils
         return;
     }
 
+    inline bool enumerateVsByTriples(const Eigen::MatrixX4d &hPoly,
+                                     Eigen::Matrix3Xd &vPoly,
+                                     const double epsilon = 1.0e-6)
+    {
+        const double normalTol = std::max(1.0e-12, fabs(epsilon) * 1.0e-6);
+        const double detTol = std::max(1.0e-12, fabs(epsilon) * 1.0e-4);
+        const double violationTol = std::max(1.0e-8, fabs(epsilon) * 10.0);
+
+        Eigen::MatrixX4d normalized(hPoly.rows(), 4);
+        int rowNum = 0;
+        for (int i = 0; i < hPoly.rows(); ++i)
+        {
+            const double norm = hPoly.block<1, 3>(i, 0).norm();
+            if (!std::isfinite(norm) || norm <= normalTol)
+            {
+                if (std::isfinite(hPoly(i, 3)) && hPoly(i, 3) <= violationTol)
+                {
+                    continue;
+                }
+                vPoly.resize(3, 0);
+                return false;
+            }
+
+            normalized.row(rowNum++) = hPoly.row(i) / norm;
+        }
+        normalized = normalized.topRows(rowNum).eval();
+
+        if (rowNum < 4)
+        {
+            vPoly.resize(3, 0);
+            return false;
+        }
+
+        std::vector<Eigen::Vector3d> vertices;
+        vertices.reserve(static_cast<size_t>(rowNum) * rowNum);
+        const Eigen::MatrixX3d normals = normalized.leftCols<3>();
+        const Eigen::VectorXd offsets = normalized.rightCols<1>();
+
+        for (int i = 0; i < rowNum - 2; ++i)
+        {
+            for (int j = i + 1; j < rowNum - 1; ++j)
+            {
+                for (int k = j + 1; k < rowNum; ++k)
+                {
+                    Eigen::Matrix3d A;
+                    A.row(0) = normals.row(i);
+                    A.row(1) = normals.row(j);
+                    A.row(2) = normals.row(k);
+
+                    const double det = A.determinant();
+                    if (!std::isfinite(det) || fabs(det) <= detTol)
+                    {
+                        continue;
+                    }
+
+                    const Eigen::Vector3d b(-offsets(i), -offsets(j), -offsets(k));
+                    const Eigen::Vector3d vertex = A.fullPivLu().solve(b);
+                    if (!vertex.allFinite())
+                    {
+                        continue;
+                    }
+
+                    const double maxViolation =
+                        (normals * vertex + offsets).maxCoeff();
+                    if (maxViolation <= violationTol)
+                    {
+                        vertices.emplace_back(vertex);
+                    }
+                }
+            }
+        }
+
+        if (vertices.empty())
+        {
+            vPoly.resize(3, 0);
+            return false;
+        }
+
+        Eigen::Matrix3Xd rawVertices(3, vertices.size());
+        for (size_t i = 0; i < vertices.size(); ++i)
+        {
+            rawVertices.col(i) = vertices[i];
+        }
+
+        filterVs(rawVertices, epsilon, vPoly);
+        return vPoly.cols() >= 4;
+    }
+
     // Each row of hPoly is defined by h0, h1, h2, h3 as
     // h0*x + h1*y + h2*z + h3 <= 0
     // proposed epsilon is 1.0e-6
     inline void enumerateVs(const Eigen::MatrixX4d &hPoly,
-                            const Eigen::Vector3d &inner,
+                            const Eigen::Vector3d &,
                             Eigen::Matrix3Xd &vPoly,
                             const double epsilon = 1.0e-6)
     {
-        const Eigen::VectorXd b = -hPoly.rightCols<1>() - hPoly.leftCols<3>() * inner;
-        const Eigen::Matrix<double, 3, -1, Eigen::ColMajor> A =
-            (hPoly.leftCols<3>().array().colwise() / b.array()).transpose();
-
-        quickhull::QuickHull<double> qh;
-        const double qhullEps = std::min(epsilon, quickhull::defaultEps<double>());
-        // CCW is false because the normal in quickhull towards interior
-        const auto cvxHull = qh.getConvexHull(A.data(), A.cols(), false, true, qhullEps);
-        const auto &idBuffer = cvxHull.getIndexBuffer();
-        const int hNum = idBuffer.size() / 3;
-        Eigen::Matrix3Xd rV(3, hNum);
-        Eigen::Vector3d normal, point, edge0, edge1;
-        for (int i = 0; i < hNum; i++)
-        {
-            point = A.col(idBuffer[3 * i + 1]);
-            edge0 = point - A.col(idBuffer[3 * i]);
-            edge1 = A.col(idBuffer[3 * i + 2]) - point;
-            normal = edge0.cross(edge1); //cross in CW gives an outter normal
-            rV.col(i) = normal / normal.dot(point);
-        }
-        filterVs(rV, epsilon, vPoly);
-        vPoly = (vPoly.array().colwise() + inner.array()).eval();
+        enumerateVsByTriples(hPoly, vPoly, epsilon);
         return;
     }
 
@@ -164,8 +241,7 @@ namespace geo_utils
         Eigen::Vector3d inner;
         if (findInterior(hPoly, inner))
         {
-            enumerateVs(hPoly, inner, vPoly, epsilon);
-            return true;
+            return enumerateVsByTriples(hPoly, vPoly, epsilon);
         }
         else
         {
