@@ -9,12 +9,12 @@
     <arg name="lidar_imu_frame_id" default="body" />
     <arg name="publish_robot_to_lidar_imu_tf" default="true" />
 
-    <node pkg="gcopter" type="livox_mid360_simulator" name="$(arg node_name)" output="screen">
+    <node pkg="geo_robot_model" type="livox_mid360_simulator" name="$(arg node_name)" output="screen">
         <remap from="global_pcl_topic" to="$(arg global_pcl_topic)" />
         <remap from="local_pcl_topic" to="$(arg local_pcl_topic)" />
         <remap from="odom" to="$(arg odom_topic)" />
 
-        <rosparam file="$(find gcopter)/config/livox_mid360_simulator_config.yaml" command="load" />
+        <rosparam file="$(find geo_robot_model)/config/livox_mid360_simulator_config.yaml" command="load" />
         <param name="RobotFrameId" type="str" value="$(arg robot_frame_id)" />
         <param name="LidarImuFrameId" type="str" value="$(arg lidar_imu_frame_id)" />
         <param name="PublishRobotToLidarImuTf" type="bool" value="$(arg publish_robot_to_lidar_imu_tf)" />

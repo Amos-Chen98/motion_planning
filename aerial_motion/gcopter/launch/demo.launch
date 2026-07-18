@@ -97,7 +97,7 @@
     </include>
 
     <group if="$(eval arg('planner_mode') == 'online')">
-        <include file="$(find gcopter)/launch/livox_mid360_simulator.launch">
+        <include file="$(find geo_robot_model)/launch/livox_mid360_simulator.launch">
             <arg name="global_pcl_topic" value="$(arg pcl_topic_raw)" />
             <arg name="local_pcl_topic" value="$(arg pcl_topic)" />
             <arg name="odom_topic" value="$(arg odom_topic)" />

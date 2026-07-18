@@ -4,10 +4,10 @@
 
 This is a ROS catkin package. The main configuration files are:
 
-- `CMakeLists.txt`: builds the planning and simulation nodes and links Eigen3, OMPL, and ROS components.
+- `CMakeLists.txt`: builds the planning nodes and links Eigen3, OMPL, and ROS components.
 - `package.xml`: declares ROS package dependencies.
 - `config/gcopter_planner_config.yaml`: stores GCOPTER planner parameters.
-- `config/livox_mid360_simulator_config.yaml`: stores Livox Mid-360 simulator range/FOV parameters.
+- `../geo_robot_model/config/livox_mid360_simulator_config.yaml`: stores Livox Mid-360 simulator range/FOV parameters.
 - `include/gcopter/planner_common.hpp` and `src/planner_common.cpp`: shared
   configuration, voxel-map/path/corridor/optimization backend, TF and odometry
   handling, point-cloud decoding, visualization access, and trajectory
@@ -15,7 +15,7 @@ This is a ROS catkin package. The main configuration files are:
 - `launch/demo.launch`: starts the mock map generator, point-robot model, planner mode, and RViz.
 - `launch/point_robot_model.launch`: reusable point-robot `nav_msgs/Odometry` model for the standalone demo.
 - `launch/gcopter_planner.launch`: reusable headless launch that starts either the global planner or the online local-perception planner.
-- `launch/livox_mid360_simulator.launch`: geometric Livox Mid-360 point-cloud range/FOV simulator.
+- `../geo_robot_model/launch/livox_mid360_simulator.launch`: geometric Livox Mid-360 point-cloud range/FOV simulator.
 
 ### System Dependencies
 
@@ -36,7 +36,7 @@ sudo cpufreq-set -g performance
 The demo launch file starts:
 
 - `gcopter/online_replanning` by default, or `gcopter/global_planning` with `planner_mode:=global`
-- `gcopter/livox_mid360_simulator` in online mode
+- `geo_robot_model/livox_mid360_simulator` in online mode
 - `mockamap/mockamap_node`
 - `gcopter/point_robot_model.py`
 - `rviz`
@@ -53,7 +53,7 @@ Parameter files:
 
 ```text
 config/gcopter_planner_config.yaml
-config/livox_mid360_simulator_config.yaml
+../geo_robot_model/config/livox_mid360_simulator_config.yaml
 ```
 
 Topics (set via `<remap>`, see `launch/gcopter_planner.launch`):
@@ -63,7 +63,7 @@ Topics (set via `<remap>`, see `launch/gcopter_planner.launch`):
 - `odom`: odometry used as the planning start position. Planning always starts from the latest odometry; a target is ignored until a valid odometry message is received. Default: `quadrotor/uav/cog/odom`.
 - `command`: `geometry_msgs/PoseStamped` position commands are always published (streamed at `CommandHz` along the planned trajectory). Default: `quadrotor/target_pose`.
 
-Livox Mid-360 simulator topics (online mode, see `launch/livox_mid360_simulator.launch`):
+Livox Mid-360 simulator topics (online mode, see `../geo_robot_model/launch/livox_mid360_simulator.launch`):
 
 - `global_pcl_topic`: world-frame obstacle cloud consumed by `livox_mid360_simulator`. Default: `/voxel_map`.
 - `local_pcl_topic`: body-frame local point cloud produced by `livox_mid360_simulator` and fed to `online_replanning` through `pcl_topic`. Default: `/simulated_livox_points`.

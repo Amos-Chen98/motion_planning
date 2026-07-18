@@ -161,8 +161,9 @@ private:
         staticBroadcaster.sendTransform(tf);
     }
 
-    // Resolve T_robot_lidar_imu from TF. Result is cached because the mount is fixed;
-    // once a lookup succeeds the cached value keeps the node running through TF gaps.
+    // Resolve T_robot_lidar_imu from TF on every cycle so articulated platforms can
+    // move the lidar relative to their odometry frame. The last valid transform is
+    // retained to bridge brief TF gaps.
     inline bool updateExtrinsic()
     {
         try

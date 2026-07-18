@@ -1,0 +1,18 @@
+# DRAGON physical geometry (SI units)
+# Center-to-center spacing used by the ideal planning geometry.
+link_length: 0.5255
+link_diameter: 0.04
+joint_diameter: 0.06
+
+# Real v1_5 link/joint segmentation used to recover the link2 frame pose.
+link_body_length: 0.474
+inter_joint_length: 0.0515
+
+# Livox Mid-360 mounting from the real v1_5_202601 DRAGON URDF.
+# T_link2_livox_mid360
+link2_to_livox_mid360_xyz: [0.132, 0.0, 0.05592]
+link2_to_livox_mid360_rpy: [0.0, 0.0, 0.0]
+
+# T_livox_mid360_lidar_imu
+livox_mid360_to_lidar_imu_xyz: [0.011, 0.02329, -0.02304]
+livox_mid360_to_lidar_imu_rpy: [0.0, 0.0, 0.0]

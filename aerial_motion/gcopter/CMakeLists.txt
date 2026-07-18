@@ -66,7 +66,6 @@ add_library(gcopter_planner_common src/planner_common.cpp)
 add_executable(global_planning src/global_planning.cpp)
 add_executable(online_replanning src/online_replanning.cpp)
 add_executable(traj_server src/traj_server.cpp)
-add_executable(livox_mid360_simulator src/livox_mid360_simulator.cpp)
 
 # Build generated trajectory messages before their consumers.
 add_dependencies(gcopter_planner_common ${${PROJECT_NAME}_EXPORTED_TARGETS})
@@ -90,10 +89,6 @@ target_link_libraries(gcopter_planner_common
 )
 
 target_link_libraries(traj_server
-  ${catkin_LIBRARIES}
-)
-
-target_link_libraries(livox_mid360_simulator
   ${catkin_LIBRARIES}
 )
 

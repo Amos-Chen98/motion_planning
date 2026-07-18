@@ -6,9 +6,8 @@ LivoxHorizontalFovDeg: 360.0
 LivoxVerticalMinDeg: -7.0
 LivoxVerticalMaxDeg: 52.0
 
-# Fixed robot -> lidar IMU extrinsic (T_robot_lidar_imu: the lidar IMU pose
-# expressed in the robot frame).
-# Defaults below are identity (zero offset, zero rotation).
+# Default fixed robot -> lidar IMU extrinsic. DRAGON overrides this by
+# publishing its articulated link2 -> Livox -> lidar_imu TF chain.
 RobotToLidarImuTransX: 0.0
 RobotToLidarImuTransY: 0.0
 RobotToLidarImuTransZ: 0.0

@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="robot_ns" default="dragon" />
+  <arg name="world_frame_id" default="world" />
+  <arg name="cog_frame_id" default="$(arg robot_ns)/cog" />
+  <arg name="root_frame_id" default="$(arg robot_ns)/root" />
+  <arg name="link2_frame_id" default="$(arg robot_ns)/link2" />
+  <arg name="livox_frame_id" default="$(arg robot_ns)/livox_mid360" />
+  <arg name="lidar_frame_id" default="$(arg robot_ns)/lidar_imu" />
+
+  <arg name="robot_config" default="$(find geo_robot_model)/config/geo_dragon_model_config.yaml" />
+  <arg name="lidar_config" default="$(find geo_robot_model)/config/livox_mid360_simulator_config.yaml" />
+
+  <arg name="use_sim_time" default="false" />
+  <arg name="publish_tf" default="true" />
+  <arg name="publish_rate" default="40.0" />
+  <arg name="lidar" default="false" />
+  <arg name="spawn_x" default="0.0" />
+  <arg name="spawn_y" default="0.0" />
+  <arg name="spawn_z" default="1.0" />
+  <arg name="spawn_yaw" default="0.0" />
+
+  <arg name="global_cloud_topic" default="/pointcloud/output" />
+  <arg name="local_cloud_topic" default="$(arg robot_ns)/cloud_registered_body" />
+  <arg name="cloud_publish_rate" default="10.0" />
+
+  <param name="/use_sim_time" type="bool" value="$(arg use_sim_time)" />
+
+  <group ns="$(arg robot_ns)">
+    <node pkg="geo_robot_model" type="geo_dragon_model.py" name="geo_dragon_model" output="screen">
+      <rosparam file="$(arg robot_config)" command="load" />
+      <param name="world_frame_id" type="str" value="$(arg world_frame_id)" />
+      <param name="cog_frame_id" type="str" value="$(arg cog_frame_id)" />
+      <param name="root_frame_id" type="str" value="$(arg root_frame_id)" />
+      <param name="link2_frame_id" type="str" value="$(arg link2_frame_id)" />
+      <param name="livox_frame_id" type="str" value="$(arg livox_frame_id)" />
+      <param name="lidar_frame_id" type="str" value="$(arg lidar_frame_id)" />
+      <param name="publish_tf" type="bool" value="$(arg publish_tf)" />
+      <param name="publish_rate" type="double" value="$(arg publish_rate)" />
+      <param name="spawn_x" type="double" value="$(arg spawn_x)" />
+      <param name="spawn_y" type="double" value="$(arg spawn_y)" />
+      <param name="spawn_z" type="double" value="$(arg spawn_z)" />
+      <param name="spawn_yaw" type="double" value="$(arg spawn_yaw)" />
+      <rosparam param="initial_joints">[0.0, 1.5707963267948966, 0.0, 1.5707963267948966, 0.0, 1.5707963267948966]</rosparam>
+    </node>
+  </group>
+
+  <node if="$(arg lidar)" pkg="geo_robot_model" type="livox_mid360_simulator" name="$(arg robot_ns)_livox_mid360_simulator" output="screen">
+    <remap from="global_pcl_topic" to="$(arg global_cloud_topic)" />
+    <remap from="local_pcl_topic" to="$(arg local_cloud_topic)" />
+    <remap from="odom" to="$(arg robot_ns)/uav/cog/odom" />
+    <rosparam file="$(arg lidar_config)" command="load" />
+    <param name="RobotFrameId" type="str" value="$(arg cog_frame_id)" />
+    <param name="LidarImuFrameId" type="str" value="$(arg lidar_frame_id)" />
+    <param name="PublishRate" type="double" value="$(arg cloud_publish_rate)" />
+    <!-- The DRAGON model publishes link2 -> Livox -> lidar_imu using the real mount. -->
+    <param name="PublishRobotToLidarImuTf" type="bool" value="false" />
+  </node>
+</launch>
