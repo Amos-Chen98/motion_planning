@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(geo_robot_model)
 
+set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE
+  "-O3 -DNDEBUG -march=native -mtune=native -Wall"
+  CACHE STRING "Release C++ compiler flags" FORCE
+)
+
 add_compile_options(-std=c++17)
 
 find_package(Eigen3 REQUIRED)
