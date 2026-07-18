@@ -110,7 +110,6 @@ target_link_libraries(corridor_degeneracy_repro
 )
 
 catkin_install_python(PROGRAMS
-  scripts/point_robot_model.py
   test/analyze_bad_traj_bag.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

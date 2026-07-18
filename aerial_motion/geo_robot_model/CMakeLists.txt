@@ -47,6 +47,7 @@ target_link_libraries(livox_mid360_simulator
 
 catkin_install_python(PROGRAMS
   scripts/point_robot_model.py
+  scripts/pose_to_flight_nav.py
   scripts/geo_dragon_model.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

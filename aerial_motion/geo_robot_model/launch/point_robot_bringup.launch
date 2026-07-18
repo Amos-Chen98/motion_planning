@@ -5,6 +5,9 @@
   <arg name="cog_frame_id" default="$(arg robot_ns)/cog" />
   <arg name="lidar_frame_id" default="$(arg robot_ns)/lidar_imu" />
 
+  <arg name="odom_topic" default="/$(arg robot_ns)/uav/cog/odom" />
+  <arg name="flight_nav_topic" default="/$(arg robot_ns)/uav/nav" />
+
   <arg name="lidar_config" default="$(find geo_robot_model)/config/livox_mid360_simulator_config.yaml" />
 
   <arg name="use_sim_time" default="false" />
@@ -24,6 +27,8 @@
 
   <group ns="$(arg robot_ns)">
     <node pkg="geo_robot_model" type="point_robot_model.py" name="point_robot_model" output="screen">
+      <remap from="uav/cog/odom" to="$(arg odom_topic)" />
+      <remap from="uav/nav" to="$(arg flight_nav_topic)" />
       <param name="world_frame_id" type="str" value="$(arg world_frame_id)" />
       <param name="cog_frame_id" type="str" value="$(arg cog_frame_id)" />
       <param name="publish_tf" type="bool" value="$(arg publish_tf)" />

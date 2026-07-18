@@ -5,18 +5,21 @@
     <arg name="planner_mode" default="online" />
     <arg name="launch_rviz" default="true" />
 
+    <!-- Robot namespace -->
+    <arg name="robot_ns" default="quadrotor" />
+
     <!-- Frame IDs -->
     <arg name="world_frame_id" default="world" />
-    <arg name="robot_frame_id" default="quadrotor/cog" />
-    <arg name="camera_init_frame_id" default="camera_init" />
+    <arg name="robot_frame_id" default="$(arg robot_ns)/cog" />
     <arg name="lidar_imu_frame_id" default="body" />
 
     <!-- topics -->
     <arg name="pcl_topic_raw" default="/voxel_map" />
     <arg name="pcl_topic" default="/simulated_livox_points" />
     <arg name="target_topic" default="/move_base_simple/goal" />
-    <arg name="odom_topic" default="quadrotor/uav/cog/odom" />
-    <arg name="command_topic" default="quadrotor/target_pose" />
+    <arg name="odom_topic" default="/$(arg robot_ns)/uav/cog/odom" />
+    <arg name="command_topic" default="/$(arg robot_ns)/target_pose" />
+    <arg name="flight_nav_topic" default="/$(arg robot_ns)/uav/nav" />
 
     <arg name="show_corridor" default="true" />
     <arg name="max_vel_mag" default="2.0" />
@@ -27,7 +30,7 @@
     <arg name="publish_yaw_command" default="true" />
     <!-- Upper bound on commanded yaw rate [rad/s]; <= 0 disables limiting -->
     <arg name="max_yaw_rate" default="1.0" />
-    <!-- Initial robot pose in world (seeds the odom before the first target_pose). -->
+    <!-- Initial robot pose in world (seeds the odom before the first FlightNav command). -->
     <arg name="spawn_x" default="0.0" />
     <arg name="spawn_y" default="0.0" />
     <arg name="spawn_z" default="1.0" />
@@ -82,12 +85,12 @@
     <node name="rviz" pkg="rviz" type="rviz" output="screen" args="-d $(find gcopter)/rviz/global_planning.rviz" if="$(arg launch_rviz)">
     </node>
 
-    <include file="$(find gcopter)/launch/point_robot_model.launch">
+    <include file="$(find geo_robot_model)/launch/point_robot_bringup.launch">
+        <arg name="robot_ns" value="$(arg robot_ns)" />
         <arg name="odom_topic" value="$(arg odom_topic)" />
-        <arg name="target_pose_topic" value="$(arg command_topic)" />
+        <arg name="flight_nav_topic" value="$(arg flight_nav_topic)" />
         <arg name="world_frame_id" value="$(arg world_frame_id)" />
-        <arg name="robot_frame_id" value="$(arg robot_frame_id)" />
-        <arg name="camera_init_frame_id" value="$(arg camera_init_frame_id)" />
+        <arg name="cog_frame_id" value="$(arg robot_frame_id)" />
         <arg name="publish_tf" value="$(arg publish_tf)" />
         <arg name="publish_rate" value="$(arg ideal_robot_publish_rate)" />
         <arg name="spawn_x" value="$(arg spawn_x)" />
@@ -95,6 +98,12 @@
         <arg name="spawn_z" value="$(arg spawn_z)" />
         <arg name="spawn_yaw" value="$(arg spawn_yaw)" />
     </include>
+
+    <node pkg="geo_robot_model" type="pose_to_flight_nav.py" name="gcopter_pose_to_flight_nav" output="screen">
+        <remap from="pose_command" to="$(arg command_topic)" />
+        <remap from="flight_nav" to="$(arg flight_nav_topic)" />
+        <param name="publish_yaw_command" type="bool" value="$(arg publish_yaw_command)" />
+    </node>
 
     <group if="$(eval arg('planner_mode') == 'online')">
         <include file="$(find geo_robot_model)/launch/livox_mid360_simulator.launch">
