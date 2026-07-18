@@ -30,4 +30,10 @@ Start the geometric DRAGON model:
 roslaunch geo_robot_model geo_dragon_bringup.launch
 ```
 
+The geometric DRAGON bringup publishes `/dragon/robot_description` from the canonical `dragon/robots/quad/v1_5_202601.urdf.xacro` model. This description supplies the kinematics, inertia, thrust, gimbal, and EDF data required by `multilink_copilot`; state updates and visualization still use the lightweight Gazebo-free geometric model, and no `robot_state_publisher` is started.
+
+To debug the Copilot planner, start the geometric model and planner in separate terminals. Wait until the first launch reports that the DRAGON geometric model is ready before starting Copilot, because the planner reads `robot_description` during initialization.
+
+Override `robot_model` when a different compatible DRAGON xacro is required. When changing `robot_ns`, pass the same value to both launches so that the generated `/<robot_ns>/robot_description`, joint-state input, and full-state target output remain in the same namespace.
+
 Pass `lidar:=true` to either bringup launch when a global point-cloud map is available and local simulated LiDAR sensing is required.

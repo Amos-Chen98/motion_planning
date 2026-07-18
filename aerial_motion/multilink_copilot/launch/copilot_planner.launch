@@ -4,7 +4,7 @@
     <arg name="target_pose_frame_type" default="FLU" />
     <arg name="evaluation" default="false" />
     <arg name="verbose" default="false" />
-    <arg name="publish_stability_metrics" default="false" />
+    <arg name="publish_stability_metrics" default="true" />
 
     <group ns="$(arg robot_ns)">
         <node pkg="multilink_copilot" type="copilot_planner" name="copilot_planner" output="screen">
