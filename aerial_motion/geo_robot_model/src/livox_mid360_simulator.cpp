@@ -5,7 +5,6 @@
 #include <geometry_msgs/TransformStamped.h>
 
 #include <tf2_ros/transform_listener.h>
-#include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_eigen/tf2_eigen.h>
 
 #include <Eigen/Geometry>
@@ -52,50 +51,16 @@ struct LivoxSimConfig
     double verticalMinDeg;
     double verticalMaxDeg;
 
-    // Optionally broadcast a fixed robot -> lidar IMU transform (T_robot_lidar_imu).
-    // The lidar IMU pose is expressed in the robot frame.
-    bool publishRobotToLidarImuTf;
-    double robotToLidarImuTransX;
-    double robotToLidarImuTransY;
-    double robotToLidarImuTransZ;
-    double robotToLidarImuRollDeg;
-    double robotToLidarImuPitchDeg;
-    double robotToLidarImuYawDeg;
-
     explicit LivoxSimConfig(const ros::NodeHandle &nhPriv)
     {
         nhPriv.param<std::string>("RobotFrameId", robotFrameId, "quadrotor/cog");
-        nhPriv.param<std::string>("LidarImuFrameId", lidarImuFrameId, "body");
+        nhPriv.param<std::string>("LidarImuFrameId", lidarImuFrameId, "quadrotor/lidar_imu");
         nhPriv.param("PublishRate", publishRate, 10.0);
         nhPriv.param("LivoxMinRange", minRange, 0.1);
         nhPriv.param("LivoxMaxRange", maxRange, 40.0);
         nhPriv.param("LivoxHorizontalFovDeg", horizontalFovDeg, 360.0);
         nhPriv.param("LivoxVerticalMinDeg", verticalMinDeg, -7.0);
         nhPriv.param("LivoxVerticalMaxDeg", verticalMaxDeg, 52.0);
-
-        nhPriv.param("PublishRobotToLidarImuTf", publishRobotToLidarImuTf, true);
-        nhPriv.param("RobotToLidarImuTransX", robotToLidarImuTransX, 0.0);
-        nhPriv.param("RobotToLidarImuTransY", robotToLidarImuTransY, 0.0);
-        nhPriv.param("RobotToLidarImuTransZ", robotToLidarImuTransZ, 0.0);
-        nhPriv.param("RobotToLidarImuRollDeg", robotToLidarImuRollDeg, 0.0);
-        nhPriv.param("RobotToLidarImuPitchDeg", robotToLidarImuPitchDeg, 0.0);
-        nhPriv.param("RobotToLidarImuYawDeg", robotToLidarImuYawDeg, 0.0);
-    }
-
-    // T_robot_lidar_imu built from the configured translation and RPY extrinsics.
-    Eigen::Isometry3d robotToLidarImuTransform() const
-    {
-        const Eigen::Quaterniond q =
-            Eigen::AngleAxisd(degToRad(robotToLidarImuYawDeg), Eigen::Vector3d::UnitZ()) *
-            Eigen::AngleAxisd(degToRad(robotToLidarImuPitchDeg), Eigen::Vector3d::UnitY()) *
-            Eigen::AngleAxisd(degToRad(robotToLidarImuRollDeg), Eigen::Vector3d::UnitX());
-
-        Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-        transform.translate(Eigen::Vector3d(robotToLidarImuTransX,
-                                            robotToLidarImuTransY,
-                                            robotToLidarImuTransZ));
-        transform.rotate(q);
-        return transform;
     }
 };
 
@@ -107,7 +72,6 @@ private:
 
     tf2_ros::Buffer tfBuffer;
     tf2_ros::TransformListener tfListener;
-    tf2_ros::StaticTransformBroadcaster staticBroadcaster;
 
     ros::Subscriber mapSub;
     ros::Subscriber odomSub;
@@ -119,6 +83,7 @@ private:
 
     // Cached T_robot_lidar_imu extrinsic looked up from TF.
     Eigen::Isometry3d robotLidarImu;
+    ros::WallTime tfWarningStartTime;
     bool extrinsicReady;
     bool mapReceived;
     bool odomReceived;
@@ -130,15 +95,11 @@ public:
           tfListener(tfBuffer),
           latestWorldRobot(Eigen::Isometry3d::Identity()),
           robotLidarImu(Eigen::Isometry3d::Identity()),
+          tfWarningStartTime(ros::WallTime::now()),
           extrinsicReady(false),
           mapReceived(false),
           odomReceived(false)
     {
-        if (config.publishRobotToLidarImuTf)
-        {
-            publishRobotToLidarImuStaticTf();
-        }
-
         mapSub = nh.subscribe("global_pcl_topic", 1, &LivoxMid360Simulator::mapCallback, this,
                               ros::TransportHints().tcpNoDelay());
         odomSub = nh.subscribe("odom", 1, &LivoxMid360Simulator::odomCallback, this,
@@ -151,16 +112,6 @@ public:
     }
 
 private:
-    inline void publishRobotToLidarImuStaticTf()
-    {
-        geometry_msgs::TransformStamped tf =
-            tf2::eigenToTransform(config.robotToLidarImuTransform());
-        tf.header.stamp = ros::Time::now();
-        tf.header.frame_id = config.robotFrameId;
-        tf.child_frame_id = config.lidarImuFrameId;
-        staticBroadcaster.sendTransform(tf);
-    }
-
     // Resolve T_robot_lidar_imu from TF on every cycle so articulated platforms can
     // move the lidar relative to their odometry frame. The last valid transform is
     // retained to bridge brief TF gaps.
@@ -175,7 +126,9 @@ private:
         }
         catch (const tf2::TransformException &e)
         {
-            if (!extrinsicReady)
+            // Allow the listener to receive already-published TF before warning.
+            if (!extrinsicReady &&
+                (ros::WallTime::now() - tfWarningStartTime).toSec() >= 1.0)
             {
                 ROS_WARN_THROTTLE(2.0, "Waiting for TF %s -> %s: %s",
                                   config.robotFrameId.c_str(),
@@ -252,7 +205,9 @@ private:
 
     inline void publishTimerCallback(const ros::TimerEvent &)
     {
-        if (!mapReceived || !odomReceived || !updateExtrinsic())
+        // Query TF even while other inputs are absent so standalone launches clearly
+        // report the missing robot-owned transform and articulated mounts stay current.
+        if (!updateExtrinsic() || !mapReceived || !odomReceived)
         {
             return;
         }

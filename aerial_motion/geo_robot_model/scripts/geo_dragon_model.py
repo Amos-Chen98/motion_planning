@@ -99,7 +99,6 @@ class DragonGeoRobotModel:
         self.lidar_frame_id = rospy.get_param(
             "~lidar_frame_id", "dragon/lidar_imu"
         )
-        self.publish_tf = bool(rospy.get_param("~publish_tf", True))
         self.publish_rate = float(rospy.get_param("~publish_rate", 40.0))
         self.link_length = float(rospy.get_param("~link_length", 0.5255))
         self.link_diameter = float(rospy.get_param("~link_diameter", 0.04))
@@ -195,12 +194,9 @@ class DragonGeoRobotModel:
             tcp_nodelay=True,
         )
 
-        self.tf_broadcaster = tf2_ros.TransformBroadcaster() if self.publish_tf else None
-        self.static_tf_broadcaster = (
-            tf2_ros.StaticTransformBroadcaster() if self.publish_tf else None
-        )
-        if self.static_tf_broadcaster is not None:
-            self.publish_lidar_mount_transforms()
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster()
+        self.static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster()
+        self.publish_lidar_mount_transforms()
         publish_rate = self.publish_rate if self.publish_rate > 0.0 else 40.0
         self.timer = rospy.Timer(
             rospy.Duration.from_sec(1.0 / publish_rate), self.timer_callback
@@ -583,9 +579,6 @@ class DragonGeoRobotModel:
         link2_rotation,
         geometric_cog,
     ):
-        if self.tf_broadcaster is None:
-            return
-
         root_transform = TransformStamped()
         root_transform.header.stamp = stamp
         root_transform.header.frame_id = self.world_frame_id

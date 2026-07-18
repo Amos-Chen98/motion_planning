@@ -12,7 +12,6 @@
   <arg name="lidar_config" default="$(find geo_robot_model)/config/livox_mid360_simulator_config.yaml" />
 
   <arg name="use_sim_time" default="false" />
-  <arg name="publish_tf" default="true" />
   <arg name="publish_rate" default="40.0" />
   <arg name="lidar" default="false" />
   <arg name="spawn_x" default="0.0" />
@@ -35,7 +34,6 @@
       <param name="link2_frame_id" type="str" value="$(arg link2_frame_id)" />
       <param name="livox_frame_id" type="str" value="$(arg livox_frame_id)" />
       <param name="lidar_frame_id" type="str" value="$(arg lidar_frame_id)" />
-      <param name="publish_tf" type="bool" value="$(arg publish_tf)" />
       <param name="publish_rate" type="double" value="$(arg publish_rate)" />
       <param name="spawn_x" type="double" value="$(arg spawn_x)" />
       <param name="spawn_y" type="double" value="$(arg spawn_y)" />
@@ -53,7 +51,5 @@
     <param name="RobotFrameId" type="str" value="$(arg cog_frame_id)" />
     <param name="LidarImuFrameId" type="str" value="$(arg lidar_frame_id)" />
     <param name="PublishRate" type="double" value="$(arg cloud_publish_rate)" />
-    <!-- The DRAGON model publishes link2 -> Livox -> lidar_imu using the real mount. -->
-    <param name="PublishRobotToLidarImuTf" type="bool" value="false" />
   </node>
 </launch>

@@ -24,7 +24,6 @@ class PointRobotModel:
     def __init__(self):
         self.world_frame_id = rospy.get_param("~world_frame_id", "world")
         self.cog_frame_id = rospy.get_param("~cog_frame_id", "quadrotor/cog")
-        self.publish_tf = bool(rospy.get_param("~publish_tf", True))
         self.publish_rate = float(rospy.get_param("~publish_rate", 40.0))
 
         spawn_x = float(rospy.get_param("~spawn_x", 0.0))
@@ -46,7 +45,7 @@ class PointRobotModel:
         self.nav_sub = rospy.Subscriber(
             "uav/nav", FlightNav, self.nav_callback, queue_size=1, tcp_nodelay=True
         )
-        self.tf_broadcaster = tf2_ros.TransformBroadcaster() if self.publish_tf else None
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster()
 
         publish_rate = self.publish_rate if self.publish_rate > 0.0 else 40.0
         self.timer = rospy.Timer(
@@ -115,9 +114,6 @@ class PointRobotModel:
 
         odom.header.stamp = rospy.Time.now()
         self.odom_pub.publish(odom)
-
-        if self.tf_broadcaster is None:
-            return
 
         transform = TransformStamped()
         transform.header.stamp = odom.header.stamp

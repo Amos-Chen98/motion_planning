@@ -11,7 +11,7 @@
     <!-- Frame IDs -->
     <arg name="world_frame_id" default="world" />
     <arg name="robot_frame_id" default="$(arg robot_ns)/cog" />
-    <arg name="lidar_imu_frame_id" default="body" />
+    <arg name="lidar_imu_frame_id" default="$(arg robot_ns)/lidar_imu" />
 
     <!-- topics -->
     <arg name="pcl_topic_raw" default="/voxel_map" />
@@ -26,7 +26,6 @@
 
     <!-- Point-robot model for the standalone closed-loop GCOPTER demo -->
     <arg name="ideal_robot_publish_rate" default="40.0" />
-    <arg name="publish_tf" default="true" />
     <arg name="publish_yaw_command" default="true" />
     <!-- Upper bound on commanded yaw rate [rad/s]; <= 0 disables limiting -->
     <arg name="max_yaw_rate" default="1.0" />
@@ -91,7 +90,7 @@
         <arg name="flight_nav_topic" value="$(arg flight_nav_topic)" />
         <arg name="world_frame_id" value="$(arg world_frame_id)" />
         <arg name="cog_frame_id" value="$(arg robot_frame_id)" />
-        <arg name="publish_tf" value="$(arg publish_tf)" />
+        <arg name="lidar_frame_id" value="$(arg lidar_imu_frame_id)" />
         <arg name="publish_rate" value="$(arg ideal_robot_publish_rate)" />
         <arg name="spawn_x" value="$(arg spawn_x)" />
         <arg name="spawn_y" value="$(arg spawn_y)" />

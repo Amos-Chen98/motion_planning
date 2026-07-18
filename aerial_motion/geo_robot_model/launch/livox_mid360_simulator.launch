@@ -6,8 +6,7 @@
     <arg name="odom_topic" default="quadrotor/uav/cog/odom" />
 
     <arg name="robot_frame_id" default="quadrotor/cog" />
-    <arg name="lidar_imu_frame_id" default="body" />
-    <arg name="publish_robot_to_lidar_imu_tf" default="true" />
+    <arg name="lidar_imu_frame_id" default="quadrotor/lidar_imu" />
 
     <node pkg="geo_robot_model" type="livox_mid360_simulator" name="$(arg node_name)" output="screen">
         <remap from="global_pcl_topic" to="$(arg global_pcl_topic)" />
@@ -17,6 +16,5 @@
         <rosparam file="$(find geo_robot_model)/config/livox_mid360_simulator_config.yaml" command="load" />
         <param name="RobotFrameId" type="str" value="$(arg robot_frame_id)" />
         <param name="LidarImuFrameId" type="str" value="$(arg lidar_imu_frame_id)" />
-        <param name="PublishRobotToLidarImuTf" type="bool" value="$(arg publish_robot_to_lidar_imu_tf)" />
     </node>
 </launch>

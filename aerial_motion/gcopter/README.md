@@ -56,7 +56,7 @@ config/gcopter_planner_config.yaml
 
 Topics (set via `<remap>`, see `launch/gcopter_planner.launch`):
 
-- `pcl_topic`: input point cloud for the active planner. In `global` mode it is the world-frame obstacle map consumed by `global_planning` (e.g. `/voxel_map`); in `online` mode it is the body-frame local point cloud consumed by `online_replanning` (e.g. `/simulated_livox_points`).
+- `pcl_topic`: input point cloud for the active planner. In `global` mode it is the world-frame obstacle map consumed by `global_planning` (e.g. `/voxel_map`); in `online` mode it is the LiDAR-frame local point cloud consumed by `online_replanning` (e.g. `/simulated_livox_points`).
 - `target`: RViz goal topic. Default: `/move_base_simple/goal`.
 - `odom`: odometry used as the planning start position. Planning always starts from the latest odometry; a target is ignored until a valid odometry message is received. Default: `quadrotor/uav/cog/odom`.
 - `command`: `geometry_msgs/PoseStamped` position commands are always published (streamed at `CommandHz` along the planned trajectory). Default: `quadrotor/target_pose`.
@@ -66,15 +66,17 @@ In the standalone demo, `geo_robot_model/pose_to_flight_nav.py` converts the `Po
 Livox Mid-360 simulator topics (online mode, see `../geo_robot_model/launch/livox_mid360_simulator.launch`):
 
 - `global_pcl_topic`: world-frame obstacle cloud consumed by `livox_mid360_simulator`. Default: `/voxel_map`.
-- `local_pcl_topic`: body-frame local point cloud produced by `livox_mid360_simulator` and fed to `online_replanning` through `pcl_topic`. Default: `/simulated_livox_points`.
+- `local_pcl_topic`: LiDAR-frame local point cloud produced by `livox_mid360_simulator` and fed to `online_replanning` through `pcl_topic`. Default: `/simulated_livox_points`.
 
 Frame convention in online mode:
 
 - `world`: global map, target, odometry parent, visualization, and command frame.
 - `quadrotor/cog`: moving robot frame and odometry child frame.
-- `body`: lidar IMU frame and local point-cloud frame, rigidly attached below `quadrotor/cog`.
+- `quadrotor/lidar_imu`: lidar IMU frame and local point-cloud frame, rigidly attached below `quadrotor/cog`.
 
-The demo TF chain is `world -> quadrotor/cog -> body`. The point-robot model updates the first transform from robot odometry, and the Livox simulator publishes the fixed lidar extrinsic for the second transform.
+The demo TF chain is `world -> quadrotor/cog -> quadrotor/lidar_imu`. The point-robot model updates the first transform from robot odometry, and point-robot bringup publishes the mini-quadrotor-compatible fixed extrinsic for the second transform. The Livox simulator only consumes this TF chain and never publishes `/tf` or `/tf_static`.
+
+Starting the Livox simulator by itself requires another robot bringup to already publish odometry and `RobotFrameId -> LidarImuFrameId`. While either input is missing, the simulator waits and does not publish a local point cloud; a missing TF additionally produces throttled warnings.
 
 Common parameters:
 
@@ -99,7 +101,7 @@ Both planners validate map bounds, voxel resolution, dynamic limits, and optimiz
 Online parameters:
 
 - `RobotFrameId`: robot frame represented by the odometry pose. Default: `quadrotor/cog`.
-- `LidarImuFrameId`: local point-cloud frame published by the Livox Mid-360 simulator. Default: `body`.
+- `LidarImuFrameId`: existing robot TF frame used for the local point-cloud header and LiDAR pose lookup. Default: `quadrotor/lidar_imu`.
 - `ReplanHz`: online replanning rate. Default: `2.0`.
 - `UseAccumulatedMap`: keep previously observed local obstacles. Default: `true`.
 - `PublishRate`, `LivoxMinRange`, `LivoxMaxRange`, `LivoxHorizontalFovDeg`, `LivoxVerticalMinDeg`, `LivoxVerticalMaxDeg`: Livox Mid-360 simulator rate and geometric limits. Defaults: `10.0`, `0.1`, `2.0`, `360.0`, `-7.0`, `52.0`.

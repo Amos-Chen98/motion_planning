@@ -5,12 +5,3 @@ LivoxMaxRange: 5.0
 LivoxHorizontalFovDeg: 360.0
 LivoxVerticalMinDeg: -7.0
 LivoxVerticalMaxDeg: 52.0
-
-# Default fixed robot -> lidar IMU extrinsic. DRAGON overrides this by
-# publishing its articulated link2 -> Livox -> lidar_imu TF chain.
-RobotToLidarImuTransX: 0.0
-RobotToLidarImuTransY: 0.0
-RobotToLidarImuTransZ: 0.0
-RobotToLidarImuRollDeg: 0.0
-RobotToLidarImuPitchDeg: 0.0
-RobotToLidarImuYawDeg: 0.0

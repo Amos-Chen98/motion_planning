@@ -4,6 +4,10 @@
   <arg name="world_frame_id" default="world" />
   <arg name="cog_frame_id" default="$(arg robot_ns)/cog" />
   <arg name="lidar_frame_id" default="$(arg robot_ns)/lidar_imu" />
+  <!-- mini_quadrotor's measured cog -> lidar_imu extrinsic. -->
+  <arg name="cog_to_lidar_x" default="0.009413869420877906" />
+  <arg name="cog_to_lidar_y" default="0.02329" />
+  <arg name="cog_to_lidar_z" default="0.02995543341940244" />
 
   <arg name="odom_topic" default="/$(arg robot_ns)/uav/cog/odom" />
   <arg name="flight_nav_topic" default="/$(arg robot_ns)/uav/nav" />
@@ -11,7 +15,6 @@
   <arg name="lidar_config" default="$(find geo_robot_model)/config/livox_mid360_simulator_config.yaml" />
 
   <arg name="use_sim_time" default="false" />
-  <arg name="publish_tf" default="true" />
   <arg name="publish_rate" default="40.0" />
   <arg name="lidar" default="false" />
   <arg name="spawn_x" default="0.0" />
@@ -31,13 +34,16 @@
       <remap from="uav/nav" to="$(arg flight_nav_topic)" />
       <param name="world_frame_id" type="str" value="$(arg world_frame_id)" />
       <param name="cog_frame_id" type="str" value="$(arg cog_frame_id)" />
-      <param name="publish_tf" type="bool" value="$(arg publish_tf)" />
       <param name="publish_rate" type="double" value="$(arg publish_rate)" />
       <param name="spawn_x" type="double" value="$(arg spawn_x)" />
       <param name="spawn_y" type="double" value="$(arg spawn_y)" />
       <param name="spawn_z" type="double" value="$(arg spawn_z)" />
       <param name="spawn_yaw" type="double" value="$(arg spawn_yaw)" />
     </node>
+
+    <node pkg="tf2_ros" type="static_transform_publisher"
+          name="cog_to_lidar_imu_tf"
+          args="$(arg cog_to_lidar_x) $(arg cog_to_lidar_y) $(arg cog_to_lidar_z) 0 0 0 1 $(arg cog_frame_id) $(arg lidar_frame_id)" />
   </group>
 
   <node if="$(arg lidar)" pkg="geo_robot_model" type="livox_mid360_simulator" name="$(arg robot_ns)_livox_mid360_simulator" output="screen">
@@ -48,6 +54,5 @@
     <param name="RobotFrameId" type="str" value="$(arg cog_frame_id)" />
     <param name="LidarImuFrameId" type="str" value="$(arg lidar_frame_id)" />
     <param name="PublishRate" type="double" value="$(arg cloud_publish_rate)" />
-    <param name="PublishRobotToLidarImuTf" type="bool" value="true" />
   </node>
 </launch>
