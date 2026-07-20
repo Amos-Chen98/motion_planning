@@ -1,0 +1,29 @@
+# GCOPTER common map/path configuration (the optimizer fields are validated by the shared backend).
+TimeoutRRT: 0.1
+MaxBdrMag: 2.1
+MaxTiltAngle: 1.05
+GravAcc: 9.8
+WeightT: 20.0
+ChiVec: [1.0e+4, 1.0e+4, 1.0e+4, 1.0e+4]
+SmoothingEps: 1.0e-2
+IntegralIntervs: 16
+RelCostTol: 1.0e-5
+
+# Motion primitives and whole-body prediction.
+CandidateCount: 9
+MaxPrimitiveOffset: 0.8
+FcRpMinThreshold: 3.2
+PlanningHorizon: 3.0
+PredictionDt: 0.10
+TrajectorySampleInterval: 0.05
+TrajectoryBufferMaxLength: 10.0
+SnakeIkSingularityThreshold: 0.10
+MinimumPieceDuration: 0.20
+
+# Match multilink_copilot's hard safety checks.
+StabilityCheckFcT: false
+FcTMinThreshold: 0.01
+StaticThrustMin: 2.0
+StaticThrustMax: 30.0
+OverlapMinClearance: 0.01
+FeasibilityTolerance: 1.0e-4

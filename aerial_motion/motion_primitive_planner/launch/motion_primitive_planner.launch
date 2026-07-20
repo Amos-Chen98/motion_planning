@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+    <arg name="node_name" default="motion_primitive_planner" />
+    <arg name="world_frame_id" default="world" />
+    <arg name="pcl_topic" default="pcl_topic" />
+    <arg name="target_topic" default="/move_base_simple/goal" />
+    <arg name="odom_topic" default="dragon/root/flu_odom" />
+    <arg name="joint_states_topic" default="dragon/joint_states" />
+    <arg name="command_topic" default="dragon/root/target_pose" />
+    <arg name="trajectory_topic" default="planning/trajectory" />
+
+    <arg name="command_hz" default="40.0" />
+    <arg name="publish_yaw_command" default="true" />
+    <arg name="max_yaw_rate" default="1.5" />
+    <arg name="replan_hz" default="2.0" />
+    <arg name="use_accumulated_map" default="true" />
+    <arg name="goal_tolerance" default="0.2" />
+    <arg name="planning_horizon" default="3.0" />
+    <arg name="candidate_count" default="9" />
+    <arg name="max_primitive_offset" default="0.8" />
+    <arg name="fc_rp_min_threshold" default="3.2" />
+
+    <arg name="voxel_width" default="0.10" />
+    <arg name="dilate_radius" default="0.30" />
+    <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
+    <arg name="use_fixed_target_height" default="false" />
+    <arg name="target_height" default="1.0" />
+    <arg name="use_target_z" default="true" />
+    <arg name="max_vel_mag" default="0.2" />
+
+    <node pkg="motion_primitive_planner" type="motion_primitive_planner_node"
+          name="$(arg node_name)" output="screen">
+        <rosparam file="$(find motion_primitive_planner)/config/motion_primitive_planner.yaml" command="load" />
+        <remap from="pcl_topic" to="$(arg pcl_topic)" />
+        <remap from="target" to="$(arg target_topic)" />
+        <remap from="odom" to="$(arg odom_topic)" />
+        <remap from="joint_states" to="$(arg joint_states_topic)" />
+        <remap from="executed_command" to="$(arg command_topic)" />
+        <remap from="trajectory" to="$(arg trajectory_topic)" />
+        <param name="WorldFrameId" value="$(arg world_frame_id)" />
+        <param name="VoxelWidth" value="$(arg voxel_width)" />
+        <param name="DilateRadius" value="$(arg dilate_radius)" />
+        <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
+        <param name="MaxVelMag" value="$(arg max_vel_mag)" />
+        <param name="ReplanHz" value="$(arg replan_hz)" />
+        <param name="UseAccumulatedMap" value="$(arg use_accumulated_map)" />
+        <param name="GoalTolerance" value="$(arg goal_tolerance)" />
+        <param name="PlanningHorizon" value="$(arg planning_horizon)" />
+        <param name="CandidateCount" value="$(arg candidate_count)" />
+        <param name="MaxPrimitiveOffset" value="$(arg max_primitive_offset)" />
+        <param name="FcRpMinThreshold" value="$(arg fc_rp_min_threshold)" />
+        <param name="PublishYawCommand" value="$(arg publish_yaw_command)" />
+        <param name="MaxYawRate" value="$(arg max_yaw_rate)" />
+        <param name="CommandHz" value="$(arg command_hz)" />
+        <param name="UseFixedTargetHeight" value="$(arg use_fixed_target_height)" />
+        <param name="TargetHeight" value="$(arg target_height)" />
+        <param name="UseTargetZ" value="$(arg use_target_z)" />
+    </node>
+
+    <node pkg="gcopter" type="traj_server" name="$(arg node_name)_traj_server" output="screen">
+        <remap from="trajectory" to="$(arg trajectory_topic)" />
+        <remap from="command" to="$(arg command_topic)" />
+        <remap from="odom" to="$(arg odom_topic)" />
+        <param name="WorldFrameId" value="$(arg world_frame_id)" />
+        <param name="GravAcc" value="9.8" />
+        <param name="CommandHz" value="$(arg command_hz)" />
+        <param name="PublishYawCommand" value="$(arg publish_yaw_command)" />
+        <param name="MaxYawRate" value="$(arg max_yaw_rate)" />
+    </node>
+</launch>

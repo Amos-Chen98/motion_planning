@@ -8,6 +8,7 @@
 #include <aerial_robot_msgs/FullStateTarget.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <dragon/model/hydrus_like_robot_model.h>
+#include <multilink_copilot/follow_the_leader.h>
 #include <pluginlib/class_loader.h>
 #include <kdl/jntarray.hpp>
 #include <Eigen/Dense>
@@ -18,11 +19,6 @@
 
 namespace multilink_copilot
 {
-
-struct TrajectoryPoint
-{
-  Eigen::Vector3d position;
-};
 
 class CopilotPlanner
 {

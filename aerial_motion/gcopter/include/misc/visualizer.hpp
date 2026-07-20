@@ -58,6 +58,17 @@ public:
         bdrPub = nh.advertise<std_msgs::Float64>("/visualizer/body_rate", 1000);
     }
 
+    inline void clearTrajectory()
+    {
+        visualization_msgs::Marker marker;
+        marker.header.stamp = ros::Time::now();
+        marker.header.frame_id = frameId;
+        marker.ns = "trajectory";
+        marker.id = 0;
+        marker.action = visualization_msgs::Marker::DELETE;
+        trajectoryPub.publish(marker);
+    }
+
     // Visualize the trajectory and its front-end path
     template <int D>
     inline void visualize(const Trajectory<D> &traj,

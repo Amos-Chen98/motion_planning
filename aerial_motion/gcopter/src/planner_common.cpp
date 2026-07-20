@@ -480,6 +480,7 @@ PlannerRosInterface::PlannerRosInterface(
       tfListener_(tfBuffer_),
       visualizer_(nh_, config_.worldFrameId),
       latestPosition_(Eigen::Vector3d::Zero()),
+      latestOrientation_(Eigen::Quaterniond::Identity()),
       odomReceived_(false),
       trajectoryId_(0)
 {
@@ -497,6 +498,11 @@ bool PlannerRosInterface::odomReceived() const
 const Eigen::Vector3d &PlannerRosInterface::latestPosition() const
 {
     return latestPosition_;
+}
+
+const Eigen::Quaterniond &PlannerRosInterface::latestOrientation() const
+{
+    return latestOrientation_;
 }
 
 std::string PlannerRosInterface::resolvedOdomTopic() const
@@ -645,7 +651,9 @@ void PlannerRosInterface::odomCallback(
         return;
     }
 
-    latestPosition_ = (worldOdom * odomBody).translation();
+    const Eigen::Isometry3d worldBody = worldOdom * odomBody;
+    latestPosition_ = worldBody.translation();
+    latestOrientation_ = Eigen::Quaterniond(worldBody.rotation()).normalized();
     odomReceived_ = true;
 }
 

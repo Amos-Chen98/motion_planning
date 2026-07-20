@@ -1,0 +1,284 @@
+#include <motion_primitive_planner/planner_core.h>
+
+#include <gcopter/minco.hpp>
+#include <multilink_copilot/follow_the_leader.h>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+
+namespace motion_primitive_planner
+{
+namespace
+{
+constexpr double kEpsilon = 1e-6;
+constexpr double kShortRouteOffsetRatio = 0.4;
+
+double routeLength(const std::vector<Eigen::Vector3d>& route)
+{
+  double length = 0.0;
+  for (size_t index = 1; index < route.size(); ++index)
+  {
+    length += (route[index] - route[index - 1]).norm();
+  }
+  return length;
+}
+
+Eigen::Vector3d safeNormal(const Eigen::Vector3d& direction)
+{
+  Eigen::Vector3d normal = Eigen::Vector3d::UnitZ().cross(direction);
+  if (normal.norm() < kEpsilon)
+  {
+    normal = Eigen::Vector3d::UnitX().cross(direction);
+  }
+  return normal.normalized();
+}
+}  // namespace
+
+PrimitiveGenerator::PrimitiveGenerator(const PrimitiveConfig& config) : config_(config)
+{
+  if (config_.candidate_count <= 0 || !std::isfinite(config_.max_offset) || config_.max_offset < 0.0 ||
+      !std::isfinite(config_.max_velocity) || config_.max_velocity <= 0.0 ||
+      !std::isfinite(config_.cruise_velocity) || config_.cruise_velocity <= 0.0 ||
+      !std::isfinite(config_.minimum_piece_duration) || config_.minimum_piece_duration <= 0.0)
+  {
+    throw std::invalid_argument("Invalid motion primitive configuration");
+  }
+}
+
+std::vector<Eigen::Vector3d> PrimitiveGenerator::prepareRoute(const std::vector<Eigen::Vector3d>& route)
+{
+  std::vector<Eigen::Vector3d> prepared;
+  prepared.reserve(route.size() + 1);
+  for (const Eigen::Vector3d& point : route)
+  {
+    if (point.allFinite() && (prepared.empty() || (point - prepared.back()).norm() > 1e-3))
+    {
+      prepared.push_back(point);
+    }
+  }
+  if (prepared.size() == 2)
+  {
+    prepared.insert(prepared.begin() + 1, 0.5 * (prepared.front() + prepared.back()));
+  }
+  return prepared;
+}
+
+std::vector<Eigen::Vector3d> PrimitiveGenerator::offsetRoute(const std::vector<Eigen::Vector3d>& route,
+                                                             int candidate_index) const
+{
+  if (candidate_index == 0 || route.size() <= 2 || config_.candidate_count == 1)
+  {
+    return route;
+  }
+
+  const Eigen::Vector3d chord = route.back() - route.front();
+  if (chord.norm() < kEpsilon)
+  {
+    return route;
+  }
+  const Eigen::Vector3d forward = chord.normalized();
+  const Eigen::Vector3d normal = safeNormal(forward);
+  const Eigen::Vector3d binormal = forward.cross(normal).normalized();
+  const double angle = 2.0 * M_PI * static_cast<double>(candidate_index - 1) /
+                       static_cast<double>(config_.candidate_count - 1);
+  const double amplitude = std::min(config_.max_offset, kShortRouteOffsetRatio * routeLength(route));
+  const Eigen::Vector3d offset_direction = std::cos(angle) * normal + std::sin(angle) * binormal;
+
+  std::vector<Eigen::Vector3d> result = route;
+  const double total_length = routeLength(route);
+  double accumulated = 0.0;
+  for (size_t index = 1; index + 1 < result.size(); ++index)
+  {
+    accumulated += (route[index] - route[index - 1]).norm();
+    const double phase = total_length > kEpsilon ? accumulated / total_length : 0.0;
+    result[index] += amplitude * std::sin(M_PI * phase) * offset_direction;
+  }
+  return result;
+}
+
+bool PrimitiveGenerator::buildTrajectory(const std::vector<Eigen::Vector3d>& route,
+                                         const Eigen::Matrix3d& initial_state,
+                                         const Eigen::Matrix3d& final_state,
+                                         Candidate& candidate) const
+{
+  const int piece_count = static_cast<int>(route.size()) - 1;
+  if (piece_count <= 0)
+  {
+    return false;
+  }
+
+  Eigen::Matrix3Xd inner_points(3, std::max(0, piece_count - 1));
+  for (int index = 0; index < piece_count - 1; ++index)
+  {
+    inner_points.col(index) = route[static_cast<size_t>(index + 1)];
+  }
+  Eigen::VectorXd durations(piece_count);
+  for (int index = 0; index < piece_count; ++index)
+  {
+    const double distance = (route[static_cast<size_t>(index + 1)] - route[static_cast<size_t>(index)]).norm();
+    durations(index) = std::max(config_.minimum_piece_duration, distance / config_.cruise_velocity);
+  }
+
+  minco::MINCO_S3NU minco;
+  minco.setConditions(initial_state, final_state, piece_count);
+  for (int iteration = 0; iteration < 5; ++iteration)
+  {
+    minco.setParameters(inner_points, durations);
+    minco.getTrajectory(candidate.trajectory);
+    const double maximum_velocity = candidate.trajectory.getMaxVelRate();
+    if (!std::isfinite(maximum_velocity))
+    {
+      return false;
+    }
+    if (maximum_velocity <= config_.max_velocity * (1.0 + 1e-6))
+    {
+      minco.getEnergy(candidate.jerk_energy);
+      candidate.path_length = sampledLength(candidate.trajectory);
+      return std::isfinite(candidate.jerk_energy) && std::isfinite(candidate.path_length);
+    }
+    durations *= maximum_velocity / (0.95 * config_.max_velocity);
+  }
+  return false;
+}
+
+std::vector<Candidate> PrimitiveGenerator::generate(const std::vector<Eigen::Vector3d>& raw_route,
+                                                    const Eigen::Matrix3d& initial_state,
+                                                    const Eigen::Matrix3d& final_state) const
+{
+  const std::vector<Eigen::Vector3d> route = prepareRoute(raw_route);
+  std::vector<Candidate> candidates(static_cast<size_t>(config_.candidate_count));
+  if (route.size() < 3 || !initial_state.allFinite() || !final_state.allFinite())
+  {
+    for (Candidate& candidate : candidates)
+    {
+      candidate.status = CandidateStatus::kGenerationFailed;
+      candidate.detail = "invalid route or endpoint state";
+    }
+    return candidates;
+  }
+
+  for (int index = 0; index < config_.candidate_count; ++index)
+  {
+    Candidate& candidate = candidates[static_cast<size_t>(index)];
+    if (!buildTrajectory(offsetRoute(route, index), initial_state, final_state, candidate))
+    {
+      candidate.status = CandidateStatus::kGenerationFailed;
+      candidate.detail = "MINCO generation or velocity enforcement failed";
+    }
+  }
+  return candidates;
+}
+
+double PrimitiveGenerator::sampledLength(const Trajectory<5>& trajectory)
+{
+  if (trajectory.getPieceNum() <= 0)
+  {
+    return 0.0;
+  }
+  const double duration = trajectory.getTotalDuration();
+  const int sample_count = std::max(20, trajectory.getPieceNum() * 20);
+  double length = 0.0;
+  Eigen::Vector3d previous = trajectory.getPos(0.0);
+  for (int index = 1; index <= sample_count; ++index)
+  {
+    const Eigen::Vector3d current = trajectory.getPos(duration * static_cast<double>(index) / sample_count);
+    length += (current - previous).norm();
+    previous = current;
+  }
+  return length;
+}
+
+int selectBestCandidate(const std::vector<Candidate>& candidates)
+{
+  int best = -1;
+  for (size_t index = 0; index < candidates.size(); ++index)
+  {
+    if (!candidates[index].feasible())
+    {
+      continue;
+    }
+    if (best < 0 || candidates[index].path_length < candidates[static_cast<size_t>(best)].path_length - 1e-6 ||
+        (std::abs(candidates[index].path_length - candidates[static_cast<size_t>(best)].path_length) <= 1e-6 &&
+         candidates[index].jerk_energy < candidates[static_cast<size_t>(best)].jerk_energy))
+    {
+      best = static_cast<int>(index);
+    }
+  }
+  return best;
+}
+
+std::vector<Eigen::Vector3d> linkEndpoints(const Eigen::Vector3d& link1_tail,
+                                           const Eigen::Matrix3d& root_link_rotation,
+                                           const Eigen::VectorXd& joint_positions,
+                                           const std::vector<int>& pitch_joint_indices,
+                                           const std::vector<int>& yaw_joint_indices,
+                                           int link_num,
+                                           double link_length)
+{
+  std::vector<Eigen::Vector3d> endpoints;
+  if (link_num <= 0 || link_length <= 0.0)
+  {
+    return endpoints;
+  }
+  endpoints.reserve(static_cast<size_t>(link_num + 1));
+  Eigen::Matrix3d rotation = root_link_rotation;
+  Eigen::Vector3d position = link1_tail - link_length * rotation.col(0);
+  endpoints.push_back(position);
+  endpoints.push_back(link1_tail);
+  position = link1_tail;
+  for (int link = 1; link < link_num; ++link)
+  {
+    const size_t joint = static_cast<size_t>(link - 1);
+    const int pitch_index = joint < pitch_joint_indices.size() ? pitch_joint_indices[joint] : -1;
+    const int yaw_index = joint < yaw_joint_indices.size() ? yaw_joint_indices[joint] : -1;
+    const double pitch = pitch_index >= 0 && pitch_index < joint_positions.size() ? joint_positions(pitch_index) : 0.0;
+    const double yaw = yaw_index >= 0 && yaw_index < joint_positions.size() ? joint_positions(yaw_index) : 0.0;
+    rotation = rotation * multilink_copilot::follow_the_leader::rotationAroundY(pitch) *
+               multilink_copilot::follow_the_leader::rotationAroundZ(yaw);
+    position += link_length * rotation.col(0);
+    endpoints.push_back(position);
+  }
+  return endpoints;
+}
+
+bool bodyCollides(const std::vector<Eigen::Vector3d>& endpoints,
+                  double sample_spacing,
+                  const std::function<bool(const Eigen::Vector3d&)>& occupied)
+{
+  if (endpoints.size() < 2 || sample_spacing <= 0.0 || !occupied)
+  {
+    return true;
+  }
+  for (size_t segment = 1; segment < endpoints.size(); ++segment)
+  {
+    const Eigen::Vector3d delta = endpoints[segment] - endpoints[segment - 1];
+    const int sample_count = std::max(1, static_cast<int>(std::ceil(delta.norm() / sample_spacing)));
+    for (int sample = 0; sample <= sample_count; ++sample)
+    {
+      if (occupied(endpoints[segment - 1] + static_cast<double>(sample) / sample_count * delta))
+      {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+const char* candidateStatusName(CandidateStatus status)
+{
+  switch (status)
+  {
+    case CandidateStatus::kUnevaluated: return "unevaluated";
+    case CandidateStatus::kGenerationFailed: return "generation_failed";
+    case CandidateStatus::kCollision: return "collision";
+    case CandidateStatus::kJointLimit: return "joint_limit";
+    case CandidateStatus::kStability: return "stability";
+    case CandidateStatus::kFeasible: return "feasible";
+    case CandidateStatus::kSelected: return "selected";
+  }
+  return "unknown";
+}
+
+}  // namespace motion_primitive_planner

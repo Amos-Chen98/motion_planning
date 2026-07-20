@@ -99,6 +99,7 @@ public:
 
     bool odomReceived() const;
     const Eigen::Vector3d &latestPosition() const;
+    const Eigen::Quaterniond &latestOrientation() const;
     std::string resolvedOdomTopic() const;
 
     bool pointCloudToWorld(const sensor_msgs::PointCloud2 &msg,
@@ -129,6 +130,7 @@ private:
     ros::Publisher trajectoryPub_;
     Visualizer visualizer_;
     Eigen::Vector3d latestPosition_;
+    Eigen::Quaterniond latestOrientation_;
     bool odomReceived_;
     int trajectoryId_;
 };

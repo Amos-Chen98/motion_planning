@@ -28,6 +28,7 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DNDEBUG")
 
 catkin_package(
     INCLUDE_DIRS include
+    LIBRARIES multilink_copilot_geometry
     CATKIN_DEPENDS
     roscpp
     rospy
@@ -55,6 +56,10 @@ set(DIFFERENTIAL_KINEMATICS_QPOASES_DIR
 include_directories(${DIFFERENTIAL_KINEMATICS_QPOASES_DIR}/include)
 link_directories(${DIFFERENTIAL_KINEMATICS_QPOASES_DIR}/lib)
 
+# Shared geometry used by Copilot and root-trajectory evaluators.
+add_library(multilink_copilot_geometry src/follow_the_leader.cpp)
+target_link_libraries(multilink_copilot_geometry ${catkin_LIBRARIES})
+
 # Copilot planner executable
 set(COPILOT_PLANNER_SOURCES
     src/copilot_node.cpp
@@ -64,7 +69,7 @@ set(COPILOT_PLANNER_SOURCES
 )
 
 add_executable(copilot_planner ${COPILOT_PLANNER_SOURCES})
-target_link_libraries(copilot_planner ${catkin_LIBRARIES} qpOASES)
+target_link_libraries(copilot_planner multilink_copilot_geometry ${catkin_LIBRARIES} qpOASES)
 add_dependencies(copilot_planner aerial_robot_msgs_generate_messages_cpp)
 
 add_executable(geometry_only_copilot_planner
@@ -92,7 +97,9 @@ catkin_install_python(PROGRAMS
 # ############
 # # Install ##
 # ############
-install(TARGETS copilot_planner geometry_only_copilot_planner
+install(TARGETS multilink_copilot_geometry copilot_planner geometry_only_copilot_planner
+    ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+    LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
     RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
