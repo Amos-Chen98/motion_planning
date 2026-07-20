@@ -19,6 +19,7 @@
     <arg name="candidate_count" default="9" />
     <arg name="max_primitive_offset" default="0.8" />
     <arg name="fc_rp_min_threshold" default="3.2" />
+    <arg name="allow_copilot_stability_projection_fallback" default="false" />
 
     <arg name="voxel_width" default="0.10" />
     <arg name="dilate_radius" default="0.30" />
@@ -49,6 +50,8 @@
         <param name="CandidateCount" value="$(arg candidate_count)" />
         <param name="MaxPrimitiveOffset" value="$(arg max_primitive_offset)" />
         <param name="FcRpMinThreshold" value="$(arg fc_rp_min_threshold)" />
+        <param name="AllowCopilotStabilityProjectionFallback"
+               value="$(arg allow_copilot_stability_projection_fallback)" />
         <param name="PublishYawCommand" value="$(arg publish_yaw_command)" />
         <param name="MaxYawRate" value="$(arg max_yaw_rate)" />
         <param name="CommandHz" value="$(arg command_hz)" />

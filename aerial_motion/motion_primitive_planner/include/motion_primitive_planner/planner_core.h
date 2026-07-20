@@ -20,6 +20,7 @@ enum class CandidateStatus
   kCollision,
   kJointLimit,
   kStability,
+  kStabilityProjection,
   kFeasible,
   kSelected
 };
@@ -40,6 +41,8 @@ struct Candidate
   double path_length = 0.0;
   double jerk_energy = 0.0;
   double min_fc_rp = 0.0;
+  double joint_motion = 0.0;
+  bool requires_stability_projection = false;
   std::string detail;
 
   bool feasible() const
@@ -71,7 +74,8 @@ private:
   PrimitiveConfig config_;
 };
 
-int selectBestCandidate(const std::vector<Candidate>& candidates);
+int selectBestCandidate(const std::vector<Candidate>& candidates,
+                        bool allow_stability_projection_fallback = false);
 
 std::vector<Eigen::Vector3d> linkEndpoints(const Eigen::Vector3d& link1_tail,
                                            const Eigen::Matrix3d& root_link_rotation,

@@ -79,6 +79,32 @@ TEST(PrimitiveGenerator, InsertsAnInteriorPointForShortRoutes)
   }
 }
 
+TEST(PrimitiveGenerator, UsesTwoOffsetScalesForTheDefaultNineCandidates)
+{
+  const std::vector<Eigen::Vector3d> route = {
+      Eigen::Vector3d(0.0, 0.0, 1.0), Eigen::Vector3d(1.0, 0.0, 1.0), Eigen::Vector3d(2.0, 0.0, 1.0)};
+  PrimitiveConfig config;
+  config.candidate_count = 9;
+  config.max_offset = 0.8;
+  config.max_velocity = 0.5;
+  config.cruise_velocity = 0.3;
+  const PrimitiveGenerator generator(config);
+  const std::vector<Candidate> candidates =
+      generator.generate(route, endpointState(route.front()), endpointState(route.back()));
+  ASSERT_EQ(candidates.size(), 9u);
+
+  const Eigen::Vector3d nominal_mid =
+      candidates[0].trajectory.getPos(0.5 * candidates[0].trajectory.getTotalDuration());
+  const Eigen::Vector3d inner_mid =
+      candidates[1].trajectory.getPos(0.5 * candidates[1].trajectory.getTotalDuration());
+  const Eigen::Vector3d outer_mid =
+      candidates[5].trajectory.getPos(0.5 * candidates[5].trajectory.getTotalDuration());
+  const double inner_offset = (inner_mid - nominal_mid).norm();
+  const double outer_offset = (outer_mid - nominal_mid).norm();
+  EXPECT_GT(inner_offset, 0.1);
+  EXPECT_GT(outer_offset, 1.5 * inner_offset);
+}
+
 TEST(WholeBodyCollision, DetectsTrailingLinkWhenRootTailIsClear)
 {
   const Eigen::VectorXd joints = Eigen::VectorXd::Zero(6);
@@ -145,6 +171,55 @@ TEST(CandidateSelector, RanksOnlyFeasibleCandidatesByLengthThenJerk)
     candidate.status = CandidateStatus::kCollision;
   }
   EXPECT_EQ(selectBestCandidate(candidates), -1);
+}
+
+TEST(CandidateSelector, UsesCopilotProjectionOnlyWhenNoNominallyStableCandidateExists)
+{
+  std::vector<Candidate> candidates(3);
+  candidates[0].status = CandidateStatus::kStabilityProjection;
+  candidates[0].requires_stability_projection = true;
+  candidates[0].min_fc_rp = 3.0;
+  candidates[0].path_length = 1.0;
+  candidates[1].status = CandidateStatus::kStabilityProjection;
+  candidates[1].requires_stability_projection = true;
+  candidates[1].min_fc_rp = 3.1;
+  candidates[1].path_length = 2.0;
+  candidates[2].status = CandidateStatus::kFeasible;
+  candidates[2].min_fc_rp = 3.2;
+  candidates[2].path_length = 3.0;
+
+  EXPECT_EQ(selectBestCandidate(candidates, true), 2);
+
+  candidates[2].status = CandidateStatus::kStability;
+  EXPECT_EQ(selectBestCandidate(candidates), -1);
+  EXPECT_EQ(selectBestCandidate(candidates, true), 0);
+}
+
+TEST(CandidateSelector, RanksProjectionFallbackByLengthJointMotionMarginAndJerk)
+{
+  std::vector<Candidate> candidates(4);
+  for (Candidate& candidate : candidates)
+  {
+    candidate.status = CandidateStatus::kStabilityProjection;
+    candidate.requires_stability_projection = true;
+    candidate.min_fc_rp = 3.0;
+  }
+  candidates[0].min_fc_rp = 2.9;
+  candidates[0].path_length = 2.0;
+  candidates[1].path_length = 1.5;
+  candidates[1].jerk_energy = 1.0;
+  candidates[2].min_fc_rp = 2.8;
+  candidates[2].path_length = 1.0;
+  candidates[2].joint_motion = 2.0;
+  candidates[2].jerk_energy = 2.0;
+  candidates[3].path_length = 1.0;
+  candidates[3].joint_motion = 1.0;
+  candidates[3].jerk_energy = 1.0;
+
+  EXPECT_EQ(selectBestCandidate(candidates, true), 3);
+
+  candidates[3].requires_stability_projection = false;
+  EXPECT_EQ(selectBestCandidate(candidates, true), 2);
 }
 }  // namespace
 }  // namespace motion_primitive_planner

@@ -109,7 +109,7 @@ void CopilotPlanner::loadParameters()
   pnh_.param("publish_root_translation_threshold", publish_root_translation_threshold_, 0.05);
   pnh_.param("publish_root_rotation_threshold", publish_root_rotation_threshold_, 0.0872664626);
   pnh_.param("snake_ik_singularity_xz_norm_threshold", snake_ik_singularity_xz_norm_threshold_, 0.10);
-  pnh_.param("max_joint_step_before_publish", max_joint_step_before_publish_, 0.50);
+  pnh_.param("max_joint_step_before_publish", max_joint_step_before_publish_, 0.10);
   pnh_.param("max_baselink_tilt_before_publish", max_baselink_tilt_before_publish_, 1.20);
   pnh_.param("publish_stability_metrics", publish_stability_metrics_, false);
   pnh_.param("verbose", verbose_, false);
@@ -509,7 +509,7 @@ bool CopilotPlanner::passesFullStateTargetSafetyChecks(const geometry_msgs::Pose
     for (int i = 0; i < clamped_joint_positions.size(); ++i)
     {
       const double joint_step = std::abs(clamped_joint_positions(i) - latest_published_joint_positions_(i));
-      if (joint_step > max_joint_step_before_publish_)
+      if (joint_step > max_joint_step_before_publish_ + stability_qp_feasibility_tol_)
       {
         const std::string joint_name =
             i < static_cast<int>(link_joint_names_.size()) ? link_joint_names_.at(i) :

@@ -38,6 +38,7 @@ public:
 
   enum class StableCandidateSource
   {
+    kLatestPublished,
     kCurrentMeasured,
     kLatestStable,
     kStableHistory,
@@ -199,6 +200,9 @@ private:
   double computeTargetDirectionAngle(const Eigen::Vector3d& lhs, const Eigen::Vector3d& rhs) const;
   bool areSimilarJointPositions(const Eigen::VectorXd& lhs, const Eigen::VectorXd& rhs) const;
   const char* describeStableCandidateSource(StableCandidateSource source) const;
+  bool enforceStableJointCommandContinuity(const Eigen::VectorXd& measured_joint_positions,
+                                           Eigen::VectorXd& stable_joint_positions,
+                                           StableCandidateSource& accepted_source);
   void restoreRobotModelToLinkJointPositions(const Eigen::VectorXd& joint_positions);
   
   // Helper functions

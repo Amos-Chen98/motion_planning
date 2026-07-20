@@ -9,8 +9,10 @@ trajectory_buffer_max_length: 10.0
 snake_mode_enabled: true
 snake_ik_singularity_xz_norm_threshold: 0.10
 
-# Output safety gates for full_state_target.
-max_joint_step_before_publish: 0.50
+# Per-command continuity limit and output safety gates for full_state_target.
+# A positive joint-step limit is applied before publication and the bounded
+# intermediate configuration is accepted only if it remains stable.
+max_joint_step_before_publish: 0.10
 max_baselink_tilt_before_publish: 1.20
 
 # Publish gating for full_state_target.

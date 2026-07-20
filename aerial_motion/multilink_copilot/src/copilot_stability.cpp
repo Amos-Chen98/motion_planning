@@ -2,6 +2,7 @@
 // Stability evaluation, reference selection, and joint-space helpers
 
 #include <multilink_copilot/copilot.h>
+#include <multilink_copilot/joint_command_continuity.h>
 
 #include <tf/transform_datatypes.h>
 #include <tf_conversions/tf_kdl.h>
@@ -28,42 +29,46 @@ int getSafeCandidatePriority(CopilotPlanner::StableCandidateSource source)
 {
   switch (source)
   {
-    case CopilotPlanner::StableCandidateSource::kCurrentMeasured:
+    case CopilotPlanner::StableCandidateSource::kLatestPublished:
       return 0;
-    case CopilotPlanner::StableCandidateSource::kLatestStable:
+    case CopilotPlanner::StableCandidateSource::kCurrentMeasured:
       return 1;
-    case CopilotPlanner::StableCandidateSource::kStableHistory:
+    case CopilotPlanner::StableCandidateSource::kLatestStable:
       return 2;
-    case CopilotPlanner::StableCandidateSource::kDesiredSeed:
+    case CopilotPlanner::StableCandidateSource::kStableHistory:
       return 3;
-    case CopilotPlanner::StableCandidateSource::kProjected:
+    case CopilotPlanner::StableCandidateSource::kDesiredSeed:
       return 4;
-    case CopilotPlanner::StableCandidateSource::kRepair:
+    case CopilotPlanner::StableCandidateSource::kProjected:
       return 5;
+    case CopilotPlanner::StableCandidateSource::kRepair:
+      return 6;
   }
 
-  return 6;
+  return 7;
 }
 
 int getRepairCandidatePriority(CopilotPlanner::StableCandidateSource source)
 {
   switch (source)
   {
-    case CopilotPlanner::StableCandidateSource::kCurrentMeasured:
+    case CopilotPlanner::StableCandidateSource::kLatestPublished:
       return 0;
-    case CopilotPlanner::StableCandidateSource::kDesiredSeed:
+    case CopilotPlanner::StableCandidateSource::kCurrentMeasured:
       return 1;
-    case CopilotPlanner::StableCandidateSource::kLatestStable:
+    case CopilotPlanner::StableCandidateSource::kDesiredSeed:
       return 2;
-    case CopilotPlanner::StableCandidateSource::kStableHistory:
+    case CopilotPlanner::StableCandidateSource::kLatestStable:
       return 3;
-    case CopilotPlanner::StableCandidateSource::kProjected:
+    case CopilotPlanner::StableCandidateSource::kStableHistory:
       return 4;
-    case CopilotPlanner::StableCandidateSource::kRepair:
+    case CopilotPlanner::StableCandidateSource::kProjected:
       return 5;
+    case CopilotPlanner::StableCandidateSource::kRepair:
+      return 6;
   }
 
-  return 6;
+  return 7;
 }
 }  // namespace
 
@@ -126,6 +131,12 @@ bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_
   }
 
   stable_joint_positions = clampLinkJointPositions(stable_joint_positions);
+  if (!enforceStableJointCommandContinuity(measured_joint_positions, stable_joint_positions, accepted_source))
+  {
+    restoreRobotModelToLinkJointPositions(precheck_joint_positions);
+    return false;
+  }
+
   restoreRobotModelToLinkJointPositions(stable_joint_positions);
   rememberStableJointPositions(stable_joint_positions, accepted_source);
 
@@ -312,7 +323,7 @@ std::vector<CopilotPlanner::StableCandidate> CopilotPlanner::buildStableCandidat
     const Eigen::Vector3d& current_target_direction)
 {
   std::vector<StableCandidate> candidate_pool;
-  candidate_pool.reserve(static_cast<size_t>(2 + stability_candidate_top_k_ + 1));
+  candidate_pool.reserve(static_cast<size_t>(3 + stability_candidate_top_k_ + 1));
 
   const auto append_candidate = [&](const Eigen::VectorXd& raw_joint_positions, StableCandidateSource source,
                                     double target_direction_angle = 0.0) {
@@ -330,6 +341,11 @@ std::vector<CopilotPlanner::StableCandidate> CopilotPlanner::buildStableCandidat
   };
 
   append_candidate(measured_joint_positions, StableCandidateSource::kCurrentMeasured);
+
+  if (has_latest_published_joint_positions_ && latest_published_joint_positions_.size() == link_joint_num_)
+  {
+    append_candidate(latest_published_joint_positions_, StableCandidateSource::kLatestPublished);
+  }
 
   if (has_latest_stable_joint_positions_ && latest_stable_joint_positions_.size() == link_joint_num_)
   {
@@ -369,15 +385,15 @@ bool CopilotPlanner::tryGetStableReferenceJointPositions(const std::vector<Stabl
   const auto best_candidate = std::min_element(
       safe_candidates.begin(), safe_candidates.end(),
       [](const StableCandidate& lhs, const StableCandidate& rhs) {
-        if (lhs.desired_distance != rhs.desired_distance)
+        if (getSafeCandidatePriority(lhs.source) != getSafeCandidatePriority(rhs.source))
         {
-          return lhs.desired_distance < rhs.desired_distance;
+          return getSafeCandidatePriority(lhs.source) < getSafeCandidatePriority(rhs.source);
         }
         if (lhs.measured_distance != rhs.measured_distance)
         {
           return lhs.measured_distance < rhs.measured_distance;
         }
-        return getSafeCandidatePriority(lhs.source) < getSafeCandidatePriority(rhs.source);
+        return lhs.desired_distance < rhs.desired_distance;
       });
 
   stable_reference = best_candidate->joint_positions;
@@ -613,6 +629,8 @@ const char* CopilotPlanner::describeStableCandidateSource(StableCandidateSource 
 {
   switch (source)
   {
+    case StableCandidateSource::kLatestPublished:
+      return "latest_published";
     case StableCandidateSource::kCurrentMeasured:
       return "current_measured";
     case StableCandidateSource::kLatestStable:
@@ -628,6 +646,67 @@ const char* CopilotPlanner::describeStableCandidateSource(StableCandidateSource 
   }
 
   return "unknown";
+}
+
+bool CopilotPlanner::enforceStableJointCommandContinuity(const Eigen::VectorXd& measured_joint_positions,
+                                                         Eigen::VectorXd& stable_joint_positions,
+                                                         StableCandidateSource& accepted_source)
+{
+  if (max_joint_step_before_publish_ <= 0.0 || link_joint_num_ <= 0)
+  {
+    return true;
+  }
+
+  Eigen::VectorXd continuity_reference = measured_joint_positions;
+  StableCandidateSource reference_source = StableCandidateSource::kCurrentMeasured;
+  if (has_latest_published_joint_positions_ && latest_published_joint_positions_.size() == link_joint_num_)
+  {
+    continuity_reference = clampLinkJointPositions(latest_published_joint_positions_);
+    reference_source = StableCandidateSource::kLatestPublished;
+  }
+
+  Eigen::VectorXd limited_joint_positions;
+  bool was_limited = false;
+  if (!limitJointPositionStep(continuity_reference, stable_joint_positions, max_joint_step_before_publish_,
+                              limited_joint_positions, was_limited))
+  {
+    ROS_ERROR_THROTTLE(1.0, "[CopilotPlanner] Cannot enforce joint command continuity due to invalid input");
+    return false;
+  }
+
+  if (!was_limited)
+  {
+    return true;
+  }
+
+  const double requested_max_step =
+      (stable_joint_positions - continuity_reference).cwiseAbs().maxCoeff();
+  StabilityMetrics limited_metrics;
+  if (evaluateStability(limited_joint_positions, limited_metrics) && limited_metrics.safe)
+  {
+    stable_joint_positions = limited_joint_positions;
+    accepted_source = StableCandidateSource::kProjected;
+    ROS_WARN_THROTTLE(0.5,
+                      "[CopilotPlanner] Rate-limited stable joint target: requested max step %.3f rad, "
+                      "limited to %.3f rad",
+                      requested_max_step, max_joint_step_before_publish_);
+    return true;
+  }
+
+  StabilityMetrics reference_metrics;
+  if (evaluateStability(continuity_reference, reference_metrics) && reference_metrics.safe)
+  {
+    stable_joint_positions = continuity_reference;
+    accepted_source = reference_source;
+    ROS_WARN_THROTTLE(0.5,
+                      "[CopilotPlanner] Holding the previous stable joint target: the bounded transition toward "
+                      "a different stability branch is unsafe");
+    return true;
+  }
+
+  ROS_ERROR_THROTTLE(1.0,
+                     "[CopilotPlanner] Neither the bounded joint transition nor its continuity reference is stable");
+  return false;
 }
 
 bool CopilotPlanner::checkStability(const Eigen::VectorXd& joint_positions, bool report_result)

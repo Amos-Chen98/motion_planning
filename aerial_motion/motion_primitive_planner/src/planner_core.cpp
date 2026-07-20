@@ -81,9 +81,16 @@ std::vector<Eigen::Vector3d> PrimitiveGenerator::offsetRoute(const std::vector<E
   const Eigen::Vector3d forward = chord.normalized();
   const Eigen::Vector3d normal = safeNormal(forward);
   const Eigen::Vector3d binormal = forward.cross(normal).normalized();
-  const double angle = 2.0 * M_PI * static_cast<double>(candidate_index - 1) /
-                       static_cast<double>(config_.candidate_count - 1);
-  const double amplitude = std::min(config_.max_offset, kShortRouteOffsetRatio * routeLength(route));
+  const int alternative_count = config_.candidate_count - 1;
+  const int radial_level_count = alternative_count >= 8 ? 2 : 1;
+  const int direction_count = (alternative_count + radial_level_count - 1) / radial_level_count;
+  const int radial_level = (candidate_index - 1) / direction_count + 1;
+  const int direction_index = (candidate_index - 1) % direction_count;
+  const double angle = 2.0 * M_PI * static_cast<double>(direction_index) /
+                       static_cast<double>(direction_count);
+  const double maximum_amplitude = std::min(config_.max_offset, kShortRouteOffsetRatio * routeLength(route));
+  const double amplitude = maximum_amplitude * static_cast<double>(radial_level) /
+                           static_cast<double>(radial_level_count);
   const Eigen::Vector3d offset_direction = std::cos(angle) * normal + std::sin(angle) * binormal;
 
   std::vector<Eigen::Vector3d> result = route;
@@ -190,7 +197,8 @@ double PrimitiveGenerator::sampledLength(const Trajectory<5>& trajectory)
   return length;
 }
 
-int selectBestCandidate(const std::vector<Candidate>& candidates)
+int selectBestCandidate(const std::vector<Candidate>& candidates,
+                        bool allow_stability_projection_fallback)
 {
   int best = -1;
   for (size_t index = 0; index < candidates.size(); ++index)
@@ -202,6 +210,37 @@ int selectBestCandidate(const std::vector<Candidate>& candidates)
     if (best < 0 || candidates[index].path_length < candidates[static_cast<size_t>(best)].path_length - 1e-6 ||
         (std::abs(candidates[index].path_length - candidates[static_cast<size_t>(best)].path_length) <= 1e-6 &&
          candidates[index].jerk_energy < candidates[static_cast<size_t>(best)].jerk_energy))
+    {
+      best = static_cast<int>(index);
+    }
+  }
+  if (best >= 0 || !allow_stability_projection_fallback)
+  {
+    return best;
+  }
+
+  // A root primitive whose nominal follow-the-leader shape has a low
+  // roll/pitch margin is still executable when the downstream Copilot can
+  // project that shape to a stable joint target.  Keep the root motion small
+  // so that the projected command is less likely to hit Copilot's joint-step
+  // or baselink-tilt publication gates.  For equivalent root paths, preserve
+  // the current fold by minimizing nominal joint motion.  Use nominal margin
+  // and smoothness as the remaining tie-breakers.
+  for (size_t index = 0; index < candidates.size(); ++index)
+  {
+    const Candidate& candidate = candidates[index];
+    if (candidate.status != CandidateStatus::kStabilityProjection ||
+        !candidate.requires_stability_projection || !std::isfinite(candidate.min_fc_rp))
+    {
+      continue;
+    }
+    if (best < 0 || candidate.path_length < candidates[static_cast<size_t>(best)].path_length - 1e-6 ||
+        (std::abs(candidate.path_length - candidates[static_cast<size_t>(best)].path_length) <= 1e-6 &&
+         (candidate.joint_motion < candidates[static_cast<size_t>(best)].joint_motion - 1e-6 ||
+          (std::abs(candidate.joint_motion - candidates[static_cast<size_t>(best)].joint_motion) <= 1e-6 &&
+           (candidate.min_fc_rp > candidates[static_cast<size_t>(best)].min_fc_rp + 1e-6 ||
+            (std::abs(candidate.min_fc_rp - candidates[static_cast<size_t>(best)].min_fc_rp) <= 1e-6 &&
+             candidate.jerk_energy < candidates[static_cast<size_t>(best)].jerk_energy))))))
     {
       best = static_cast<int>(index);
     }
@@ -275,6 +314,7 @@ const char* candidateStatusName(CandidateStatus status)
     case CandidateStatus::kCollision: return "collision";
     case CandidateStatus::kJointLimit: return "joint_limit";
     case CandidateStatus::kStability: return "stability";
+    case CandidateStatus::kStabilityProjection: return "stability_projection";
     case CandidateStatus::kFeasible: return "feasible";
     case CandidateStatus::kSelected: return "selected";
   }

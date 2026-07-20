@@ -78,6 +78,13 @@ add_executable(geometry_only_copilot_planner
 target_link_libraries(geometry_only_copilot_planner ${catkin_LIBRARIES})
 add_dependencies(geometry_only_copilot_planner aerial_robot_msgs_generate_messages_cpp)
 
+if(CATKIN_ENABLE_TESTING)
+    catkin_add_gtest(joint_command_continuity_test test/joint_command_continuity_test.cpp)
+    if(TARGET joint_command_continuity_test)
+        target_link_libraries(joint_command_continuity_test ${catkin_LIBRARIES})
+    endif()
+endif()
+
 catkin_install_python(PROGRAMS
     scripts/evaluation/envelope_width_evaluator.py
     scripts/evaluation/last_link_tail_pose_publisher.py

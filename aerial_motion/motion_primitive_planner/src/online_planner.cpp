@@ -33,6 +33,13 @@ namespace
 constexpr char kRobotModelPlugin[] = "dragon/hydrus_like_robot_model";
 constexpr double kEpsilon = 1e-6;
 
+enum class StabilityResult
+{
+  kSafe,
+  kLowFcRp,
+  kOtherViolation
+};
+
 double yawFromQuaternion(const Eigen::Quaterniond& quaternion)
 {
   const Eigen::Quaterniond q = quaternion.normalized();
@@ -93,6 +100,7 @@ struct PlannerConfig
   double static_thrust_max = 30.0;
   double overlap_min_clearance = 0.01;
   double feasibility_tolerance = 1e-4;
+  bool allow_copilot_stability_projection_fallback = false;
 
   explicit PlannerConfig(const ros::NodeHandle& private_nh) : common(private_nh)
   {
@@ -118,6 +126,8 @@ struct PlannerConfig
     private_nh.param("StaticThrustMax", static_thrust_max, static_thrust_max);
     private_nh.param("OverlapMinClearance", overlap_min_clearance, overlap_min_clearance);
     private_nh.param("FeasibilityTolerance", feasibility_tolerance, feasibility_tolerance);
+    private_nh.param("AllowCopilotStabilityProjectionFallback", allow_copilot_stability_projection_fallback,
+                     allow_copilot_stability_projection_fallback);
     primitive.max_velocity = common.maxVelMag;
 
     common.validateOrThrow();
@@ -168,8 +178,9 @@ public:
     selected_min_fc_pub_ = nh_.advertise<std_msgs::Float64>("selected_min_fc_rp", 1, true);
     ros_interface_.visualizer().clearTrajectory();
     timer_ = nh_.createTimer(ros::Duration(1.0 / config_.replan_hz), &OnlinePlanner::timerCallback, this);
-    ROS_INFO("Motion primitive planner ready: N=%d, horizon=%.2f m, fc_rp_min>=%.2f.",
-             config_.primitive.candidate_count, config_.planning_horizon, config_.fc_rp_min_threshold);
+    ROS_INFO("Motion primitive planner ready: N=%d, horizon=%.2f m, fc_rp_min>=%.2f, Copilot projection fallback=%s.",
+             config_.primitive.candidate_count, config_.planning_horizon, config_.fc_rp_min_threshold,
+             config_.allow_copilot_stability_projection_fallback ? "enabled" : "disabled");
   }
 
 private:
@@ -374,7 +385,8 @@ private:
     return true;
   }
 
-  bool stable(const Eigen::VectorXd& joints, double yaw, double& fc_rp, std::string& detail)
+  StabilityResult evaluateStability(const Eigen::VectorXd& joints, double yaw, double& fc_rp,
+                                    std::string& detail)
   {
     KDL::JntArray full_joints = fullJointPositions(joints);
     const KDL::Rotation root_rotation = KDL::Rotation::RotZ(yaw + M_PI);
@@ -390,10 +402,11 @@ private:
     const double thrust_max = thrust.size() > 0 ? thrust.maxCoeff() : 0.0;
     const double overlap = robot_model_->getClosestRotorDist() - 2.0 * robot_model_->getEdfRadius();
     const double tolerance = config_.feasibility_tolerance;
-    if (!std::isfinite(fc_rp) || fc_rp + tolerance < config_.fc_rp_min_threshold)
+    if (!std::isfinite(fc_rp) || !std::isfinite(fc_t) || !std::isfinite(thrust_min) ||
+        !std::isfinite(thrust_max) || !std::isfinite(overlap))
     {
-      detail = "fc_rp_min=" + std::to_string(fc_rp);
-      return false;
+      detail = "non-finite stability metric";
+      return StabilityResult::kOtherViolation;
     }
     if ((config_.check_fc_t && fc_t + tolerance < config_.fc_t_min_threshold) ||
         thrust_min + tolerance < config_.static_thrust_min ||
@@ -401,9 +414,14 @@ private:
         overlap + tolerance < config_.overlap_min_clearance)
     {
       detail = "thrust, fc_t, or rotor clearance";
-      return false;
+      return StabilityResult::kOtherViolation;
     }
-    return true;
+    if (fc_rp + tolerance < config_.fc_rp_min_threshold)
+    {
+      detail = "nominal fc_rp_min=" + std::to_string(fc_rp);
+      return StabilityResult::kLowFcRp;
+    }
+    return StabilityResult::kSafe;
   }
 
   void evaluateCandidate(Candidate& candidate)
@@ -419,6 +437,9 @@ private:
                      ? executed_yaw_
                      : yawFromQuaternion(ros_interface_.latestOrientation());
     candidate.min_fc_rp = std::numeric_limits<double>::infinity();
+    candidate.joint_motion = 0.0;
+    candidate.requires_stability_projection = false;
+    Eigen::VectorXd previous_predicted_joints = predicted_joints;
     const double duration = candidate.trajectory.getTotalDuration();
     const double command_dt = 1.0 / config_.command_hz;
     const int sample_count = std::max(1, static_cast<int>(std::ceil(duration / command_dt)));
@@ -456,6 +477,8 @@ private:
                                      yaw_indices_)
                                : path_joints;
       }
+      candidate.joint_motion += (predicted_joints - previous_predicted_joints).norm();
+      previous_predicted_joints = predicted_joints;
       const bool final_sample = sample == sample_count;
       if (!history_changed && time + kEpsilon < next_evaluation_time && !final_sample)
       {
@@ -480,15 +503,34 @@ private:
         return;
       }
       double fc_rp = 0.0;
-      if (!stable(predicted_joints, yaw, fc_rp, candidate.detail))
+      const StabilityResult stability = evaluateStability(predicted_joints, yaw, fc_rp, candidate.detail);
+      candidate.min_fc_rp = std::min(candidate.min_fc_rp, fc_rp);
+      if (stability == StabilityResult::kOtherViolation)
       {
         candidate.status = CandidateStatus::kStability;
-        candidate.min_fc_rp = std::min(candidate.min_fc_rp, fc_rp);
         return;
       }
-      candidate.min_fc_rp = std::min(candidate.min_fc_rp, fc_rp);
+      if (stability == StabilityResult::kLowFcRp)
+      {
+        if (!config_.allow_copilot_stability_projection_fallback)
+        {
+          candidate.status = CandidateStatus::kStability;
+          return;
+        }
+        candidate.requires_stability_projection = true;
+      }
     }
-    candidate.status = CandidateStatus::kFeasible;
+    if (candidate.requires_stability_projection)
+    {
+      candidate.status = CandidateStatus::kStabilityProjection;
+      candidate.detail = "nominal fc_rp_min=" + std::to_string(candidate.min_fc_rp) +
+                         "; downstream Copilot projection required";
+    }
+    else
+    {
+      candidate.status = CandidateStatus::kFeasible;
+      candidate.detail.clear();
+    }
   }
 
   void publishDiagnostics(const std::vector<Candidate>& candidates, int selected)
@@ -524,7 +566,8 @@ private:
         marker.color.g = 1.0;
         marker.color.b = 1.0;
       }
-      else if (candidate.status == CandidateStatus::kStability)
+      else if (candidate.status == CandidateStatus::kStability ||
+               candidate.status == CandidateStatus::kStabilityProjection)
       {
         marker.color.r = 1.0;
         marker.color.g = 0.5;
@@ -623,10 +666,13 @@ private:
     }
     for (size_t index = 0; index < candidates.size(); ++index)
     {
-      ROS_DEBUG("Primitive %zu: %s, min_fc=%.3f, %s", index, candidateStatusName(candidates[index].status),
-                candidates[index].min_fc_rp, candidates[index].detail.c_str());
+      ROS_DEBUG("Primitive %zu: %s, min_fc=%.3f, joint_motion=%.3f, %s", index,
+                candidateStatusName(candidates[index].status), candidates[index].min_fc_rp,
+                candidates[index].joint_motion, candidates[index].detail.c_str());
     }
-    const int selected = selectBestCandidate(candidates);
+    const int selected = selectBestCandidate(candidates, config_.allow_copilot_stability_projection_fallback);
+    const bool selected_requires_projection =
+        selected >= 0 && candidates[static_cast<size_t>(selected)].requires_stability_projection;
     if (selected >= 0)
     {
       candidates[static_cast<size_t>(selected)].status = CandidateStatus::kSelected;
@@ -639,6 +685,14 @@ private:
       ROS_WARN("All %zu primitives rejected in %.1f ms; keeping the previous trajectory.", candidates.size(),
                elapsed);
       return;
+    }
+    if (selected_requires_projection)
+    {
+      ROS_WARN("No nominally stable primitive was available; selecting primitive %d "
+               "(nominal min fc_rp %.3f, joint motion %.3f rad) and relying on multilink_copilot to project "
+               "the joint target to a stable configuration.",
+               selected, candidates[static_cast<size_t>(selected)].min_fc_rp,
+               candidates[static_cast<size_t>(selected)].joint_motion);
     }
     trajectory_ = candidates[static_cast<size_t>(selected)].trajectory;
     trajectory_stamp_ = handover;

@@ -27,3 +27,7 @@ StaticThrustMin: 2.0
 StaticThrustMax: 30.0
 OverlapMinClearance: 0.01
 FeasibilityTolerance: 1.0e-4
+
+# Keep false unless a downstream multilink_copilot performs the joint-space
+# stability projection.  The Naraha free-space integration launch enables it.
+AllowCopilotStabilityProjectionFallback: false
