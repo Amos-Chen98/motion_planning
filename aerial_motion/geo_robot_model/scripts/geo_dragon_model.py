@@ -533,9 +533,16 @@ class DragonGeoRobotModel:
             marker.scale.x = self.joint_diameter
             marker.scale.y = self.joint_diameter
             marker.scale.z = self.joint_diameter
-            marker.color.r = 0.15
-            marker.color.g = 0.15
-            marker.color.b = 0.15
+            if joint_index == 0:
+                # Highlight the root endpoint so the head of the kinematic chain
+                # remains immediately identifiable in folded configurations.
+                marker.color.r = 1.0
+                marker.color.g = 0.10
+                marker.color.b = 0.05
+            else:
+                marker.color.r = 0.15
+                marker.color.g = 0.15
+                marker.color.b = 0.15
             marker.color.a = 1.0
             marker_array.markers.append(marker)
 

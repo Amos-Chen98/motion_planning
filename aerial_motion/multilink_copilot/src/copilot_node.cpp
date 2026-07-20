@@ -362,7 +362,10 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   const auto planning_end_time = std::chrono::steady_clock::now();
   const double planning_duration_ms =
       std::chrono::duration<double, std::milli>(planning_end_time - planning_start_time).count();
-  ROS_INFO_THROTTLE(1.0, "[CopilotPlanner] Joint cmd planning time: %.3f ms", planning_duration_ms);
+  if (verbose_)
+  {
+    ROS_INFO_THROTTLE(1.0, "[CopilotPlanner] Joint cmd planning time: %.3f ms", planning_duration_ms);
+  }
 
   if (!stable_solved)
   {
