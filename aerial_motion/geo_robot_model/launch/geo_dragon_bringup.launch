@@ -15,6 +15,7 @@
   <arg name="use_sim_time" default="false" />
   <arg name="publish_rate" default="40.0" />
   <arg name="lidar" default="false" />
+  <arg name="RViz" default="true" />
   <arg name="spawn_x" default="0.0" />
   <arg name="spawn_y" default="0.0" />
   <arg name="spawn_z" default="1.0" />
@@ -56,4 +57,7 @@
     <param name="LidarImuFrameId" type="str" value="$(arg lidar_frame_id)" />
     <param name="PublishRate" type="double" value="$(arg cloud_publish_rate)" />
   </node>
+
+  <node if="$(arg RViz)" pkg="rviz" type="rviz" name="rviz" output="screen"
+        args="-d $(find geo_robot_model)/rviz/dragon_nav.rviz" />
 </launch>
