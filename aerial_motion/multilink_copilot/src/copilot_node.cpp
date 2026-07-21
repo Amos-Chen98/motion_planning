@@ -78,6 +78,21 @@ CopilotPlanner::CopilotPlanner()
   loadParameters();
   initializeRobotModel();
 
+  StabilityConfig stability_config;
+  stability_config.qp_max_iterations = stability_qp_max_iterations_;
+  stability_config.qp_joint_step_limit = stability_qp_joint_step_limit_;
+  stability_config.qp_regularization = stability_qp_regularization_;
+  stability_config.qp_convergence_tolerance = stability_qp_convergence_tol_;
+  stability_config.feasibility_tolerance = stability_qp_feasibility_tol_;
+  stability_config.check_fc_t = stability_check_fc_t_;
+  stability_config.fc_rp_min_threshold = stability_fc_rp_min_thre_;
+  stability_config.fc_t_min_threshold = stability_fc_t_min_thre_;
+  stability_config.static_thrust_min = stability_static_thrust_min_;
+  stability_config.static_thrust_max = stability_static_thrust_max_;
+  stability_config.overlap_min_clearance = stability_overlap_min_clearance_;
+  stability_config.max_baselink_tilt = max_baselink_tilt_before_publish_;
+  stability_evaluator_.reset(new StabilityEvaluator(dragon_robot_model_, stability_config));
+
   target_pose_sub_ = nh_.subscribe("root/target_pose", 1, &CopilotPlanner::targetPoseCallback, this); // root link's tail pose
   joint_state_sub_ = nh_.subscribe("joint_states", 1, &CopilotPlanner::jointStateCallback, this);
   full_state_target_pub_ = nh_.advertise<aerial_robot_msgs::FullStateTarget>("full_state_target", 1);
@@ -349,7 +364,7 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   else if (snake_mode_enabled_)
   {
     latest_snake_targets_ = computeWarmupTargetPositions();
-    desired_joint_positions = computeWarmupJointPositions(latest_snake_targets_);
+    desired_joint_positions = computeWarmupNominalJointPositions(latest_snake_targets_);
   }
   else
   {

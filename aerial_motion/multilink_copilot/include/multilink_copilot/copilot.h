@@ -9,10 +9,12 @@
 #include <visualization_msgs/MarkerArray.h>
 #include <dragon/model/hydrus_like_robot_model.h>
 #include <multilink_copilot/follow_the_leader.h>
+#include <multilink_copilot/stability_evaluator.h>
 #include <pluginlib/class_loader.h>
 #include <kdl/jntarray.hpp>
 #include <Eigen/Dense>
 #include <deque>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -26,15 +28,7 @@ public:
   CopilotPlanner();
   ~CopilotPlanner() = default;
 
-  struct StabilityMetrics
-  {
-    bool safe = false;
-    double fc_rp_min = 0.0;
-    double fc_t_min = 0.0;
-    double static_thrust_min = 0.0;
-    double static_thrust_max = 0.0;
-    double overlap_clearance = 0.0;
-  };
+  using StabilityMetrics = multilink_copilot::StabilityMetrics;
 
   enum class StableCandidateSource
   {
@@ -82,6 +76,7 @@ private:
   // Robot model
   pluginlib::ClassLoader<aerial_robot_model::RobotModel> robot_model_loader_;
   boost::shared_ptr<Dragon::HydrusLikeRobotModel> dragon_robot_model_;
+  std::unique_ptr<StabilityEvaluator> stability_evaluator_;
   
   // Robot parameters
   int link_num_;
@@ -162,7 +157,7 @@ private:
   std::vector<Eigen::Vector3d> computeSnakeTargetPositions();
   std::vector<Eigen::Vector3d> computeWarmupTargetPositions();
   Eigen::VectorXd computeJointAnglesFromSnakeTarget(const std::vector<Eigen::Vector3d>& target_positions);
-  Eigen::VectorXd computeWarmupJointPositions(const std::vector<Eigen::Vector3d>& target_positions);
+  Eigen::VectorXd computeWarmupNominalJointPositions(const std::vector<Eigen::Vector3d>& target_positions);
   
   // Stability check
   bool checkStability(const Eigen::VectorXd& joint_positions, bool report_result = true);

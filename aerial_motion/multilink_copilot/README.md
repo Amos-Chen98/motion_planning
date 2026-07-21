@@ -45,9 +45,7 @@ The copilot planner shares the same behavior across all demos:
 - The planner waits for the first complete `joint_states` message before
   publishing `full_state_target`; until then it still tracks
   `root/target_pose` and accumulates the internal trajectory buffer.
-- In snake-mode startup and warmup, the planner keeps the current measured joint
-  configuration as the baseline and only blends links toward the snake target
-  once enough trajectory has been observed for each link segment.
+- In snake-mode startup and warmup, the planner appends the current measured body geometry behind the available first-link-tail history, then reconstructs the nominal joints directly from that continuous geometric chain. It does not extrapolate the oldest trajectory tangent or blend joints according to accumulated history length.
 - Full-state publishing can be gated by significant root motion using the
   thresholds defined in the YAML configuration.
 

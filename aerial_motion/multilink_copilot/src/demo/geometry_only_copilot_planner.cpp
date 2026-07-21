@@ -3,8 +3,8 @@
 #include <aerial_robot_msgs/FullStateTarget.h>
 #include <geometry_msgs/Point.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <multilink_copilot/follow_the_leader.h>
 #include <ros/ros.h>
-#include <sensor_msgs/JointState.h>
 #include <std_msgs/ColorRGBA.h>
 #include <tf/transform_datatypes.h>
 #include <visualization_msgs/MarkerArray.h>
@@ -17,7 +17,6 @@
 #include <cmath>
 #include <deque>
 #include <exception>
-#include <limits>
 #include <string>
 #include <vector>
 
@@ -26,33 +25,6 @@ namespace multilink_copilot
 namespace
 {
 constexpr double kDirectionNormEpsilon = 1e-6;
-constexpr double kWarmupDistanceTolerance = 0.02;
-constexpr double kSearchParameterEpsilon = 1e-9;
-
-struct TrajectoryPoint
-{
-  Eigen::Vector3d position = Eigen::Vector3d::Zero();
-};
-
-struct TrajectorySearchCursor
-{
-  int segment_index = -1;
-  double alpha = 0.0;
-  Eigen::Vector3d position = Eigen::Vector3d::Zero();
-
-  bool valid() const
-  {
-    return segment_index >= 0;
-  }
-};
-
-struct TrajectorySearchResult
-{
-  Eigen::Vector3d position = Eigen::Vector3d::Zero();
-  TrajectorySearchCursor cursor;
-  double distance_error = std::numeric_limits<double>::infinity();
-  bool exact_match = false;
-};
 
 double clamp01(double value)
 {
@@ -96,178 +68,6 @@ Eigen::Matrix3d rotationAroundZ(double angle)
   return rotation;
 }
 
-Eigen::Vector3d interpolateSegmentPoint(const std::vector<Eigen::Vector3d>& polyline,
-                                        int segment_index,
-                                        double alpha)
-{
-  return polyline[segment_index] + alpha * (polyline[segment_index + 1] - polyline[segment_index]);
-}
-
-std::vector<Eigen::Vector3d> buildTrajectorySearchPolyline(const std::deque<TrajectoryPoint>& trajectory_buffer,
-                                                           const Eigen::Vector3d& current_position)
-{
-  std::vector<Eigen::Vector3d> polyline;
-  polyline.reserve(trajectory_buffer.size() + 1);
-  for (const auto& point : trajectory_buffer)
-  {
-    polyline.push_back(point.position);
-  }
-
-  if (polyline.empty() || (polyline.back() - current_position).norm() > kDirectionNormEpsilon)
-  {
-    polyline.push_back(current_position);
-  }
-
-  return polyline;
-}
-
-TrajectorySearchCursor makeNewestTrajectoryCursor(const std::vector<Eigen::Vector3d>& polyline)
-{
-  TrajectorySearchCursor cursor;
-  if (polyline.size() < 2)
-  {
-    return cursor;
-  }
-
-  cursor.segment_index = static_cast<int>(polyline.size()) - 2;
-  cursor.alpha = 1.0;
-  cursor.position = polyline.back();
-  return cursor;
-}
-
-TrajectorySearchCursor normalizeCursorForBackwardTraversal(const std::vector<Eigen::Vector3d>& polyline,
-                                                           const TrajectorySearchCursor& raw_cursor)
-{
-  TrajectorySearchCursor cursor = raw_cursor;
-  if (polyline.size() < 2 || cursor.segment_index < 0 || cursor.segment_index + 1 >= static_cast<int>(polyline.size()))
-  {
-    cursor.segment_index = -1;
-    return cursor;
-  }
-
-  cursor.alpha = clamp01(cursor.alpha);
-  cursor.position = interpolateSegmentPoint(polyline, cursor.segment_index, cursor.alpha);
-
-  if (cursor.alpha <= kSearchParameterEpsilon && cursor.segment_index > 0)
-  {
-    --cursor.segment_index;
-    cursor.alpha = 1.0;
-    cursor.position = polyline[cursor.segment_index + 1];
-  }
-
-  return cursor;
-}
-
-void updateBestSearchResult(const Eigen::Vector3d& from_point,
-                            double target_distance,
-                            const Eigen::Vector3d& segment_start,
-                            const Eigen::Vector3d& segment_delta,
-                            int segment_index,
-                            double alpha_start,
-                            double u,
-                            TrajectorySearchResult& best_result)
-{
-  const double clamped_u = clamp01(u);
-  const Eigen::Vector3d candidate = segment_start + clamped_u * segment_delta;
-  const double distance_error = std::abs((candidate - from_point).norm() - target_distance);
-  if (distance_error >= best_result.distance_error)
-  {
-    return;
-  }
-
-  best_result.position = candidate;
-  best_result.cursor.segment_index = segment_index;
-  best_result.cursor.alpha = alpha_start * (1.0 - clamped_u);
-  best_result.cursor.position = candidate;
-  best_result.distance_error = distance_error;
-  best_result.exact_match = false;
-}
-
-TrajectorySearchResult findPointOnTrajectoryAtDistance(const std::vector<Eigen::Vector3d>& polyline,
-                                                       const TrajectorySearchCursor& start_cursor,
-                                                       const Eigen::Vector3d& from_point,
-                                                       double target_distance)
-{
-  TrajectorySearchResult best_result;
-  best_result.position = polyline.front();
-  best_result.cursor.segment_index = 0;
-  best_result.cursor.alpha = 0.0;
-  best_result.cursor.position = polyline.front();
-  best_result.distance_error = std::abs((polyline.front() - from_point).norm() - target_distance);
-
-  const TrajectorySearchCursor cursor = normalizeCursorForBackwardTraversal(polyline, start_cursor);
-  if (!cursor.valid())
-  {
-    return best_result;
-  }
-
-  for (int segment_index = cursor.segment_index; segment_index >= 0; --segment_index)
-  {
-    const double alpha_start = (segment_index == cursor.segment_index) ? cursor.alpha : 1.0;
-    const Eigen::Vector3d segment_start =
-        (segment_index == cursor.segment_index) ? cursor.position : polyline[segment_index + 1];
-    const Eigen::Vector3d segment_end = polyline[segment_index];
-    const Eigen::Vector3d segment_delta = segment_end - segment_start;
-    const double segment_length_sq = segment_delta.squaredNorm();
-
-    if (segment_length_sq < kDirectionNormEpsilon * kDirectionNormEpsilon)
-    {
-      updateBestSearchResult(from_point, target_distance, segment_start, segment_delta, segment_index, alpha_start, 0.0,
-                             best_result);
-      continue;
-    }
-
-    const Eigen::Vector3d relative_start = segment_start - from_point;
-    const double a = segment_length_sq;
-    const double b = 2.0 * segment_delta.dot(relative_start);
-    const double c = relative_start.squaredNorm() - target_distance * target_distance;
-    const double discriminant = b * b - 4.0 * a * c;
-
-    if (discriminant >= -kSearchParameterEpsilon)
-    {
-      const double sqrt_discriminant = std::sqrt(std::max(0.0, discriminant));
-      const double inv_denominator = 0.5 / a;
-      const double u_candidates[2] = {(-b - sqrt_discriminant) * inv_denominator,
-                                      (-b + sqrt_discriminant) * inv_denominator};
-      double best_u = std::numeric_limits<double>::infinity();
-
-      for (double u : u_candidates)
-      {
-        if (u >= -kSearchParameterEpsilon && u <= 1.0 + kSearchParameterEpsilon && u < best_u)
-        {
-          best_u = clamp01(u);
-        }
-      }
-
-      if (std::isfinite(best_u))
-      {
-        TrajectorySearchResult result;
-        result.position = segment_start + best_u * segment_delta;
-        result.cursor.segment_index = segment_index;
-        result.cursor.alpha = alpha_start * (1.0 - best_u);
-        result.cursor.position = result.position;
-        result.cursor = normalizeCursorForBackwardTraversal(polyline, result.cursor);
-        result.distance_error = std::abs((result.position - from_point).norm() - target_distance);
-        result.exact_match = true;
-        return result;
-      }
-    }
-
-    updateBestSearchResult(from_point, target_distance, segment_start, segment_delta, segment_index, alpha_start, 0.0,
-                           best_result);
-    updateBestSearchResult(from_point, target_distance, segment_start, segment_delta, segment_index, alpha_start, 1.0,
-                           best_result);
-
-    const double projection_u =
-        clamp01((from_point - segment_start).dot(segment_delta) / std::max(segment_length_sq, kDirectionNormEpsilon));
-    updateBestSearchResult(from_point, target_distance, segment_start, segment_delta, segment_index, alpha_start,
-                           projection_u, best_result);
-  }
-
-  best_result.cursor = normalizeCursorForBackwardTraversal(polyline, best_result.cursor);
-  return best_result;
-}
-
 tf::Quaternion normalizedQuaternionFromMsg(const geometry_msgs::Quaternion& msg)
 {
   tf::Quaternion quat;
@@ -296,70 +96,6 @@ Eigen::Vector3d getRootLinkDirectionFromPose(const geometry_msgs::Pose& pose)
   }
 
   return link1_direction.normalized();
-}
-
-Eigen::Vector3d computeOldestBackwardDirection(const std::deque<TrajectoryPoint>& trajectory_buffer,
-                                               const Eigen::Vector3d& fallback_direction)
-{
-  for (size_t i = 0; i + 1 < trajectory_buffer.size(); ++i)
-  {
-    const Eigen::Vector3d segment = trajectory_buffer[i + 1].position - trajectory_buffer[i].position;
-    if (segment.norm() >= kDirectionNormEpsilon)
-    {
-      return -segment.normalized();
-    }
-  }
-
-  if (fallback_direction.norm() >= kDirectionNormEpsilon)
-  {
-    return -fallback_direction.normalized();
-  }
-
-  return Eigen::Vector3d(-1.0, 0.0, 0.0);
-}
-
-Eigen::Vector3d extrapolatePointAlongRayAtDistance(const Eigen::Vector3d& from_point,
-                                                   const Eigen::Vector3d& ray_origin,
-                                                   const Eigen::Vector3d& ray_direction,
-                                                   double target_distance)
-{
-  Eigen::Vector3d direction = ray_direction;
-  if (direction.norm() < kDirectionNormEpsilon)
-  {
-    direction = Eigen::Vector3d(-1.0, 0.0, 0.0);
-  }
-  else
-  {
-    direction.normalize();
-  }
-
-  const Eigen::Vector3d delta = ray_origin - from_point;
-  const double b = delta.dot(direction);
-  const double c = delta.squaredNorm() - target_distance * target_distance;
-  const double discriminant = b * b - c;
-
-  if (discriminant >= 0.0)
-  {
-    const double sqrt_discriminant = std::sqrt(discriminant);
-    const double lambda_candidates[2] = {-b - sqrt_discriminant, -b + sqrt_discriminant};
-    double best_lambda = std::numeric_limits<double>::infinity();
-
-    for (double lambda : lambda_candidates)
-    {
-      if (lambda >= 0.0 && lambda < best_lambda)
-      {
-        best_lambda = lambda;
-      }
-    }
-
-    if (std::isfinite(best_lambda))
-    {
-      return ray_origin + best_lambda * direction;
-    }
-  }
-
-  const double closest_lambda = std::max(0.0, -b);
-  return ray_origin + closest_lambda * direction;
 }
 
 geometry_msgs::Point toPoint(const Eigen::Vector3d& position)
@@ -478,13 +214,20 @@ private:
   void buildJointNames()
   {
     link_joint_names_.clear();
+    pitch_joint_indices_.clear();
+    yaw_joint_indices_.clear();
     link_joint_names_.reserve(static_cast<size_t>(std::max(0, 2 * (link_num_ - 1))));
+    pitch_joint_indices_.reserve(static_cast<size_t>(std::max(0, link_num_ - 1)));
+    yaw_joint_indices_.reserve(static_cast<size_t>(std::max(0, link_num_ - 1)));
     for (int link_index = 1; link_index < link_num_; ++link_index)
     {
+      pitch_joint_indices_.push_back(2 * (link_index - 1));
+      yaw_joint_indices_.push_back(2 * (link_index - 1) + 1);
       link_joint_names_.push_back("joint" + std::to_string(link_index) + "_pitch");
       link_joint_names_.push_back("joint" + std::to_string(link_index) + "_yaw");
     }
     link_joint_num_ = static_cast<int>(link_joint_names_.size());
+    latest_published_joint_positions_ = Eigen::VectorXd::Zero(link_joint_num_);
   }
 
   void targetPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
@@ -560,7 +303,6 @@ private:
     {
       target_positions = computeWarmupTargetPositions();
     }
-    completeFollowerTailPositions(target_positions);
 
     const Eigen::VectorXd nominal_joint_positions = computeJointAnglesFromSnakeTarget(target_positions);
     updateLatestBody(root_position, link1_tail_position, target_positions, nominal_joint_positions);
@@ -571,6 +313,7 @@ private:
     if (shouldPublishFullStateTarget(root_target_pose))
     {
       publishFullStateTarget(root_target_pose, nominal_joint_positions);
+      latest_published_joint_positions_ = nominal_joint_positions;
       recordPublishedRootPose(root_target_pose);
     }
   }
@@ -620,106 +363,45 @@ private:
 
   std::vector<Eigen::Vector3d> computeWarmupTargetPositions() const
   {
-    std::vector<Eigen::Vector3d> target_positions;
-    if (link_num_ <= 1 || trajectory_buffer_.size() < 2 || !latest_target_pose_)
+    if (link_num_ <= 1 || trajectory_buffer_.empty() || !latest_target_pose_ ||
+        latest_published_joint_positions_.size() != link_joint_num_)
     {
-      return target_positions;
+      return {};
     }
 
-    const std::vector<Eigen::Vector3d> trajectory_polyline =
-        buildTrajectorySearchPolyline(trajectory_buffer_, getLink1TailPositionFromPose(latest_target_pose_->pose));
-    if (trajectory_polyline.size() < 2)
+    const tf::Quaternion root_quat = normalizedQuaternionFromMsg(latest_target_pose_->pose.orientation);
+    const tf::Matrix3x3 root_rotation_tf(root_quat);
+    Eigen::Matrix3d root_rotation = Eigen::Matrix3d::Identity();
+    for (int row = 0; row < 3; ++row)
     {
-      return target_positions;
-    }
-
-    target_positions.reserve(static_cast<size_t>(link_num_ - 1));
-    const Eigen::Vector3d current_link_direction = getRootLinkDirectionFromPose(latest_target_pose_->pose);
-    const Eigen::Vector3d oldest_backward_direction =
-        computeOldestBackwardDirection(trajectory_buffer_, current_link_direction);
-    Eigen::Vector3d current_head = getLink1TailPositionFromPose(latest_target_pose_->pose);
-    TrajectorySearchCursor trajectory_cursor = makeNewestTrajectoryCursor(trajectory_polyline);
-
-    bool tail_extension_started = false;
-    for (int i = 2; i <= link_num_; ++i)
-    {
-      Eigen::Vector3d target = current_head;
-      if (!tail_extension_started)
+      for (int col = 0; col < 3; ++col)
       {
-        const TrajectorySearchResult search_result =
-            findPointOnTrajectoryAtDistance(trajectory_polyline, trajectory_cursor, current_head, link_length_);
-        if (search_result.distance_error <= kWarmupDistanceTolerance)
-        {
-          target = search_result.position;
-          trajectory_cursor = search_result.cursor;
-        }
-        else
-        {
-          tail_extension_started = true;
-          target = extrapolatePointAlongRayAtDistance(current_head, trajectory_buffer_.front().position,
-                                                      oldest_backward_direction, link_length_);
-        }
+        root_rotation(row, col) = root_rotation_tf[row][col];
       }
-      else
-      {
-        target = current_head + oldest_backward_direction * link_length_;
-      }
-
-      target_positions.push_back(target);
-      current_head = target;
     }
 
-    return target_positions;
+    const Eigen::Vector3d current_root_tail =
+        getLink1TailPositionFromPose(latest_target_pose_->pose);
+    const std::deque<TrajectoryPoint> nominal_history =
+        follow_the_leader::prependCurrentBodyMorphology(
+            trajectory_buffer_, current_root_tail, root_rotation,
+            latest_published_joint_positions_, pitch_joint_indices_, yaw_joint_indices_,
+            link_num_, link_length_);
+    return follow_the_leader::computeTargetPositions(
+        nominal_history, current_root_tail, link_num_, link_length_);
   }
 
   std::vector<Eigen::Vector3d> computeSnakeTargetPositions() const
   {
-    std::vector<Eigen::Vector3d> target_positions;
     if (link_num_ <= 1 || trajectory_buffer_.size() < 2 || !latest_target_pose_)
     {
-      return target_positions;
+      return {};
     }
 
-    const std::vector<Eigen::Vector3d> trajectory_polyline =
-        buildTrajectorySearchPolyline(trajectory_buffer_, getLink1TailPositionFromPose(latest_target_pose_->pose));
-    if (trajectory_polyline.size() < 2)
-    {
-      return target_positions;
-    }
-
-    target_positions.reserve(static_cast<size_t>(link_num_ - 1));
-    Eigen::Vector3d current_head = getLink1TailPositionFromPose(latest_target_pose_->pose);
-    TrajectorySearchCursor trajectory_cursor = makeNewestTrajectoryCursor(trajectory_polyline);
-    for (int i = 2; i <= link_num_; ++i)
-    {
-      const TrajectorySearchResult search_result =
-          findPointOnTrajectoryAtDistance(trajectory_polyline, trajectory_cursor, current_head, link_length_);
-      target_positions.push_back(search_result.position);
-      current_head = search_result.position;
-      trajectory_cursor = search_result.cursor;
-    }
-
-    return target_positions;
-  }
-
-  void completeFollowerTailPositions(std::vector<Eigen::Vector3d>& target_positions) const
-  {
-    if (!latest_target_pose_)
-    {
-      return;
-    }
-
-    target_positions.reserve(static_cast<size_t>(std::max(0, link_num_ - 1)));
-    const Eigen::Vector3d current_link_direction = getRootLinkDirectionFromPose(latest_target_pose_->pose);
-    const Eigen::Vector3d backward_direction = computeOldestBackwardDirection(trajectory_buffer_, current_link_direction);
-    Eigen::Vector3d current_head = target_positions.empty() ? getLink1TailPositionFromPose(latest_target_pose_->pose) :
-                                                              target_positions.back();
-
-    while (static_cast<int>(target_positions.size()) < link_num_ - 1)
-    {
-      current_head = current_head + backward_direction * link_length_;
-      target_positions.push_back(current_head);
-    }
+    const Eigen::Vector3d current_root_tail =
+        getLink1TailPositionFromPose(latest_target_pose_->pose);
+    return follow_the_leader::computeTargetPositions(
+        trajectory_buffer_, current_root_tail, link_num_, link_length_);
   }
 
   Eigen::VectorXd computeJointAnglesFromSnakeTarget(const std::vector<Eigen::Vector3d>& target_positions) const
@@ -1248,10 +930,13 @@ private:
   std::string target_pose_frame_type_ = "FLU";
   std::string marker_frame_id_ = "world";
   std::vector<std::string> link_joint_names_;
+  std::vector<int> pitch_joint_indices_;
+  std::vector<int> yaw_joint_indices_;
 
   geometry_msgs::PoseStamped::ConstPtr latest_target_pose_;
   geometry_msgs::Pose last_published_root_pose_;
   Eigen::Vector3d last_recorded_position_ = Eigen::Vector3d::Zero();
+  Eigen::VectorXd latest_published_joint_positions_;
   std::deque<TrajectoryPoint> trajectory_buffer_;
   std::vector<Eigen::Vector3d> root_link_tail_history_;
   std::vector<Eigen::Vector3d> planned_root_link_tail_trajectory_;

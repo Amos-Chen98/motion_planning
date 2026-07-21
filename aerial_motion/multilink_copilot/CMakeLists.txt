@@ -28,7 +28,7 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DNDEBUG")
 
 catkin_package(
     INCLUDE_DIRS include
-    LIBRARIES multilink_copilot_geometry
+    LIBRARIES multilink_copilot_geometry multilink_copilot_stability
     CATKIN_DEPENDS
     roscpp
     rospy
@@ -60,6 +60,10 @@ link_directories(${DIFFERENTIAL_KINEMATICS_QPOASES_DIR}/lib)
 add_library(multilink_copilot_geometry src/follow_the_leader.cpp)
 target_link_libraries(multilink_copilot_geometry ${catkin_LIBRARIES})
 
+# Shared DRAGON stability metrics and projection used by Copilot and whole-body planners.
+add_library(multilink_copilot_stability src/stability_evaluator.cpp)
+target_link_libraries(multilink_copilot_stability ${catkin_LIBRARIES} qpOASES)
+
 # Copilot planner executable
 set(COPILOT_PLANNER_SOURCES
     src/copilot_node.cpp
@@ -69,19 +73,32 @@ set(COPILOT_PLANNER_SOURCES
 )
 
 add_executable(copilot_planner ${COPILOT_PLANNER_SOURCES})
-target_link_libraries(copilot_planner multilink_copilot_geometry ${catkin_LIBRARIES} qpOASES)
+target_link_libraries(copilot_planner multilink_copilot_geometry multilink_copilot_stability ${catkin_LIBRARIES})
 add_dependencies(copilot_planner aerial_robot_msgs_generate_messages_cpp)
 
 add_executable(geometry_only_copilot_planner
     src/demo/geometry_only_copilot_planner.cpp
 )
-target_link_libraries(geometry_only_copilot_planner ${catkin_LIBRARIES})
+target_link_libraries(geometry_only_copilot_planner multilink_copilot_geometry ${catkin_LIBRARIES})
 add_dependencies(geometry_only_copilot_planner aerial_robot_msgs_generate_messages_cpp)
 
 if(CATKIN_ENABLE_TESTING)
+    find_package(rostest REQUIRED)
     catkin_add_gtest(joint_command_continuity_test test/joint_command_continuity_test.cpp)
     if(TARGET joint_command_continuity_test)
         target_link_libraries(joint_command_continuity_test ${catkin_LIBRARIES})
+    endif()
+    catkin_add_gtest(follow_the_leader_test test/follow_the_leader_test.cpp)
+    if(TARGET follow_the_leader_test)
+        target_link_libraries(follow_the_leader_test multilink_copilot_geometry ${catkin_LIBRARIES})
+    endif()
+    add_rostest_gtest(geometry_only_warmup_test
+        test/geometry_only_warmup.test
+        test/geometry_only_warmup_test.cpp
+    )
+    if(TARGET geometry_only_warmup_test)
+        target_link_libraries(geometry_only_warmup_test multilink_copilot_geometry ${catkin_LIBRARIES})
+        add_dependencies(geometry_only_warmup_test aerial_robot_msgs_generate_messages_cpp)
     endif()
 endif()
 
@@ -104,7 +121,7 @@ catkin_install_python(PROGRAMS
 # ############
 # # Install ##
 # ############
-install(TARGETS multilink_copilot_geometry copilot_planner geometry_only_copilot_planner
+install(TARGETS multilink_copilot_geometry multilink_copilot_stability copilot_planner geometry_only_copilot_planner
     ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
     LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
     RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

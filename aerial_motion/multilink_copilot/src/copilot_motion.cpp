@@ -10,19 +10,6 @@ namespace multilink_copilot
 namespace
 {
 constexpr double kDirectionNormEpsilon = 1e-6;
-
-Eigen::Vector3d getRootLinkDirection(const geometry_msgs::PoseStamped::ConstPtr& target_pose)
-{
-  if (!target_pose)
-  {
-    return Eigen::Vector3d::UnitX();
-  }
-  tf::Quaternion root_quat;
-  tf::quaternionMsgToTF(target_pose->pose.orientation, root_quat);
-  const tf::Vector3 direction = tf::Matrix3x3(root_quat) * tf::Vector3(1.0, 0.0, 0.0);
-  const Eigen::Vector3d result(direction.x(), direction.y(), direction.z());
-  return result.norm() < kDirectionNormEpsilon ? Eigen::Vector3d::UnitX() : result.normalized();
-}
 }  // namespace
 
 void CopilotPlanner::updateTrajectoryBuffer(const Eigen::Vector3d& link1_tail_position,
@@ -80,13 +67,32 @@ bool CopilotPlanner::prepareTrajectoryData()
 
 std::vector<Eigen::Vector3d> CopilotPlanner::computeWarmupTargetPositions()
 {
-  if (trajectory_buffer_.size() < 2 || !latest_target_pose_)
+  if (trajectory_buffer_.empty() || !latest_target_pose_ ||
+      !has_latest_measured_link_joint_positions_ ||
+      latest_measured_link_joint_positions_.size() != link_joint_num_)
   {
     return {};
   }
-  return follow_the_leader::computeTargetPositions(trajectory_buffer_, link1_tail_pos_world_,
-                                                   getRootLinkDirection(latest_target_pose_), link_num_,
-                                                   link_length_, true);
+
+  tf::Quaternion root_quat;
+  tf::quaternionMsgToTF(latest_target_pose_->pose.orientation, root_quat);
+  const tf::Matrix3x3 root_rotation_tf(root_quat);
+  Eigen::Matrix3d root_rotation = Eigen::Matrix3d::Identity();
+  for (int row = 0; row < 3; ++row)
+  {
+    for (int col = 0; col < 3; ++col)
+    {
+      root_rotation(row, col) = root_rotation_tf[row][col];
+    }
+  }
+
+  const std::deque<TrajectoryPoint> nominal_history =
+      follow_the_leader::prependCurrentBodyMorphology(
+          trajectory_buffer_, link1_tail_pos_world_, root_rotation,
+          latest_measured_link_joint_positions_, pitch_joint_local_indices_,
+          yaw_joint_local_indices_, link_num_, link_length_);
+  return follow_the_leader::computeTargetPositions(nominal_history, link1_tail_pos_world_,
+                                                   link_num_, link_length_);
 }
 
 std::vector<Eigen::Vector3d> CopilotPlanner::computeSnakeTargetPositions()
@@ -96,8 +102,7 @@ std::vector<Eigen::Vector3d> CopilotPlanner::computeSnakeTargetPositions()
     return {};
   }
   return follow_the_leader::computeTargetPositions(trajectory_buffer_, link1_tail_pos_world_,
-                                                   getRootLinkDirection(latest_target_pose_), link_num_,
-                                                   link_length_, false);
+                                                   link_num_, link_length_);
 }
 
 Eigen::VectorXd CopilotPlanner::computeJointAnglesFromSnakeTarget(const std::vector<Eigen::Vector3d>& target_positions)
@@ -123,18 +128,17 @@ Eigen::VectorXd CopilotPlanner::computeJointAnglesFromSnakeTarget(const std::vec
                                                snake_ik_singularity_xz_norm_threshold_, reference);
 }
 
-Eigen::VectorXd CopilotPlanner::computeWarmupJointPositions(const std::vector<Eigen::Vector3d>& target_positions)
+Eigen::VectorXd CopilotPlanner::computeWarmupNominalJointPositions(
+    const std::vector<Eigen::Vector3d>& target_positions)
 {
-  Eigen::VectorXd desired_joint_positions = clampLinkJointPositions(getCurrentLinkJointPositions());
+  const Eigen::VectorXd measured_joint_positions =
+      clampLinkJointPositions(latest_measured_link_joint_positions_);
   if (target_positions.empty())
   {
-    return desired_joint_positions;
+    return measured_joint_positions;
   }
 
-  const Eigen::VectorXd path_joint_positions = computeJointAnglesFromSnakeTarget(target_positions);
-  return clampLinkJointPositions(follow_the_leader::computeWarmupJointPositions(
-      desired_joint_positions, path_joint_positions, total_arc_length_, link_length_, pitch_joint_local_indices_,
-      yaw_joint_local_indices_));
+  return clampLinkJointPositions(computeJointAnglesFromSnakeTarget(target_positions));
 }
 
 double CopilotPlanner::getReferenceJointPosition(int local_joint_index) const

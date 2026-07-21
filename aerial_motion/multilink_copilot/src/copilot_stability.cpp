@@ -181,140 +181,30 @@ void CopilotPlanner::updateRobotModelForTargetConfiguration(const KDL::JntArray&
 bool CopilotPlanner::evaluateStability(const Eigen::VectorXd& joint_positions, StabilityMetrics& metrics)
 {
   const Eigen::VectorXd clamped_joint_positions = clampLinkJointPositions(joint_positions);
-  const KDL::JntArray kdl_joint_positions = buildUpdatedJointPositions(clamped_joint_positions);
-
-  updateRobotModelForTargetConfiguration(kdl_joint_positions);
-  dragon_robot_model_->updateJacobians(kdl_joint_positions, false);
-
-  metrics.fc_rp_min = dragon_robot_model_->getFeasibleControlRollPitchMin();
-  metrics.fc_t_min = dragon_robot_model_->getFeasibleControlTMin();
-
-  const Eigen::VectorXd& static_thrust = dragon_robot_model_->getStaticThrust();
-  if (static_thrust.size() > 0)
+  KDL::Rotation root_rotation = KDL::Rotation::Identity();
+  if (latest_target_pose_)
   {
-    metrics.static_thrust_min = static_thrust.minCoeff();
-    metrics.static_thrust_max = static_thrust.maxCoeff();
+    const geometry_msgs::Pose root_pose = convertLink1TailPoseToRootPose(latest_target_pose_->pose);
+    root_rotation = KDL::Rotation::Quaternion(root_pose.orientation.x, root_pose.orientation.y,
+                                              root_pose.orientation.z, root_pose.orientation.w);
   }
-  else
-  {
-    metrics.static_thrust_min = 0.0;
-    metrics.static_thrust_max = 0.0;
-  }
-
-  metrics.overlap_clearance =
-      dragon_robot_model_->getClosestRotorDist() - 2.0 * dragon_robot_model_->getEdfRadius();
-  metrics.safe = satisfiesSafeStability(metrics);
-  return true;
+  stability_evaluator_->setRootLinkRotation(root_rotation);
+  return stability_evaluator_->evaluate(clamped_joint_positions, metrics);
 }
 
 bool CopilotPlanner::satisfiesSafeStability(const StabilityMetrics& metrics) const
 {
-  if (metrics.fc_rp_min + stability_qp_feasibility_tol_ < stability_fc_rp_min_thre_)
-  {
-    return false;
-  }
-
-  if (stability_check_fc_t_ && metrics.fc_t_min + stability_qp_feasibility_tol_ < stability_fc_t_min_thre_)
-  {
-    return false;
-  }
-
-  if (metrics.static_thrust_min + stability_qp_feasibility_tol_ < stability_static_thrust_min_)
-  {
-    return false;
-  }
-
-  if (metrics.static_thrust_max - stability_qp_feasibility_tol_ > stability_static_thrust_max_)
-  {
-    return false;
-  }
-
-  if (metrics.overlap_clearance + stability_qp_feasibility_tol_ < stability_overlap_min_clearance_)
-  {
-    return false;
-  }
-
-  return true;
+  return stability_evaluator_->satisfiesSafeStability(metrics);
 }
 
 std::string CopilotPlanner::describeStabilityViolations(const StabilityMetrics& metrics) const
 {
-  std::ostringstream stream;
-  bool has_violation = false;
-
-  const auto append_separator = [&stream, &has_violation]() {
-    if (has_violation)
-    {
-      stream << "; ";
-    }
-    has_violation = true;
-  };
-
-  if (metrics.fc_rp_min + stability_qp_feasibility_tol_ < stability_fc_rp_min_thre_)
-  {
-    append_separator();
-    stream << "fc_rp_min below threshold (" << metrics.fc_rp_min << " < " << stability_fc_rp_min_thre_ << ")";
-  }
-
-  if (stability_check_fc_t_ && metrics.fc_t_min + stability_qp_feasibility_tol_ < stability_fc_t_min_thre_)
-  {
-    append_separator();
-    stream << "fc_t_min below threshold (" << metrics.fc_t_min << " < " << stability_fc_t_min_thre_ << ")";
-  }
-
-  if (metrics.static_thrust_min + stability_qp_feasibility_tol_ < stability_static_thrust_min_)
-  {
-    append_separator();
-    stream << "static_thrust_min below safe range (" << metrics.static_thrust_min << " < "
-           << stability_static_thrust_min_ << ")";
-  }
-
-  if (metrics.static_thrust_max - stability_qp_feasibility_tol_ > stability_static_thrust_max_)
-  {
-    append_separator();
-    stream << "static_thrust_max above safe range (" << metrics.static_thrust_max << " > "
-           << stability_static_thrust_max_ << ")";
-  }
-
-  if (metrics.overlap_clearance + stability_qp_feasibility_tol_ < stability_overlap_min_clearance_)
-  {
-    append_separator();
-    stream << "overlap_clearance below threshold (" << metrics.overlap_clearance << " < "
-           << stability_overlap_min_clearance_ << ")";
-  }
-
-  if (!has_violation)
-  {
-    stream << "none";
-  }
-
-  return stream.str();
+  return stability_evaluator_->describeViolations(metrics);
 }
 
 double CopilotPlanner::computeStabilityViolationScore(const StabilityMetrics& metrics) const
 {
-  const auto positive_gap = [](double gap) { return std::max(0.0, gap); };
-  const auto safe_scale = [this](double threshold) {
-    return std::max(std::abs(threshold), stability_qp_feasibility_tol_);
-  };
-
-  double score = positive_gap(stability_fc_rp_min_thre_ - (metrics.fc_rp_min + stability_qp_feasibility_tol_)) /
-                 safe_scale(stability_fc_rp_min_thre_);
-
-  if (stability_check_fc_t_)
-  {
-    score += positive_gap(stability_fc_t_min_thre_ - (metrics.fc_t_min + stability_qp_feasibility_tol_)) /
-             safe_scale(stability_fc_t_min_thre_);
-  }
-
-  score += positive_gap(stability_static_thrust_min_ - (metrics.static_thrust_min + stability_qp_feasibility_tol_)) /
-           safe_scale(stability_static_thrust_min_);
-  score += positive_gap(metrics.static_thrust_max - stability_static_thrust_max_ - stability_qp_feasibility_tol_) /
-           safe_scale(stability_static_thrust_max_);
-  score += positive_gap(stability_overlap_min_clearance_ - (metrics.overlap_clearance + stability_qp_feasibility_tol_)) /
-           safe_scale(stability_overlap_min_clearance_);
-
-  return score;
+  return stability_evaluator_->violationScore(metrics);
 }
 
 std::vector<CopilotPlanner::StableCandidate> CopilotPlanner::buildStableCandidates(

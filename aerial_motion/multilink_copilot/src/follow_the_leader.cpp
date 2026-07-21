@@ -11,7 +11,6 @@ namespace follow_the_leader
 namespace
 {
 constexpr double kDirectionNormEpsilon = 1e-6;
-constexpr double kWarmupDistanceTolerance = 0.02;
 constexpr double kSearchParameterEpsilon = 1e-9;
 
 struct TrajectorySearchCursor
@@ -38,12 +37,6 @@ double clamp01(double value)
 double clampUnit(double value)
 {
   return std::max(-1.0, std::min(1.0, value));
-}
-
-double smoothstep01(double value)
-{
-  value = clamp01(value);
-  return value * value * (3.0 - 2.0 * value);
 }
 
 std::vector<Eigen::Vector3d> buildPolyline(const std::deque<TrajectoryPoint>& trajectory_buffer,
@@ -193,51 +186,6 @@ TrajectorySearchResult findAtDistance(const std::vector<Eigen::Vector3d>& polyli
   return best;
 }
 
-Eigen::Vector3d oldestBackwardDirection(const std::deque<TrajectoryPoint>& trajectory_buffer,
-                                        const Eigen::Vector3d& fallback_direction)
-{
-  for (size_t i = 0; i + 1 < trajectory_buffer.size(); ++i)
-  {
-    const Eigen::Vector3d segment = trajectory_buffer[i + 1].position - trajectory_buffer[i].position;
-    if (segment.norm() >= kDirectionNormEpsilon)
-    {
-      return -segment.normalized();
-    }
-  }
-  return fallback_direction.norm() >= kDirectionNormEpsilon ? -fallback_direction.normalized()
-                                                            : Eigen::Vector3d(-1.0, 0.0, 0.0);
-}
-
-Eigen::Vector3d extrapolateAtDistance(const Eigen::Vector3d& from_point,
-                                      const Eigen::Vector3d& ray_origin,
-                                      const Eigen::Vector3d& ray_direction,
-                                      double target_distance)
-{
-  const Eigen::Vector3d direction = ray_direction.norm() >= kDirectionNormEpsilon
-                                        ? ray_direction.normalized()
-                                        : Eigen::Vector3d(-1.0, 0.0, 0.0);
-  const Eigen::Vector3d delta = ray_origin - from_point;
-  const double b = delta.dot(direction);
-  const double discriminant = b * b - (delta.squaredNorm() - target_distance * target_distance);
-  if (discriminant >= 0.0)
-  {
-    const double root = std::sqrt(discriminant);
-    const double candidates[2] = {-b - root, -b + root};
-    double best = std::numeric_limits<double>::infinity();
-    for (double candidate : candidates)
-    {
-      if (candidate >= 0.0 && candidate < best)
-      {
-        best = candidate;
-      }
-    }
-    if (std::isfinite(best))
-    {
-      return ray_origin + best * direction;
-    }
-  }
-  return ray_origin + std::max(0.0, -b) * direction;
-}
 }  // namespace
 
 Eigen::Matrix3d rotationAroundY(double angle)
@@ -264,12 +212,63 @@ Eigen::Matrix3d rotationAroundZ(double angle)
   return rotation;
 }
 
+std::deque<TrajectoryPoint> prependCurrentBodyMorphology(
+    const std::deque<TrajectoryPoint>& root_tail_history,
+    const Eigen::Vector3d& current_root_tail_position,
+    const Eigen::Matrix3d& current_root_link_rotation,
+    const Eigen::VectorXd& current_joint_positions,
+    const std::vector<int>& pitch_joint_indices,
+    const std::vector<int>& yaw_joint_indices,
+    int link_num,
+    double link_length)
+{
+  std::deque<TrajectoryPoint> combined = root_tail_history;
+  if (combined.empty())
+  {
+    combined.push_back({current_root_tail_position});
+  }
+  if (link_num <= 1 || link_length <= 0.0)
+  {
+    return combined;
+  }
+
+  std::vector<Eigen::Vector3d> body_tail_offsets;
+  body_tail_offsets.reserve(static_cast<size_t>(link_num - 1));
+  Eigen::Matrix3d link_rotation = current_root_link_rotation;
+  Eigen::Vector3d link_tail = current_root_tail_position;
+  for (int link_index = 0; link_index < link_num - 1; ++link_index)
+  {
+    const int pitch_index = link_index < static_cast<int>(pitch_joint_indices.size())
+                                ? pitch_joint_indices[static_cast<size_t>(link_index)]
+                                : -1;
+    const int yaw_index = link_index < static_cast<int>(yaw_joint_indices.size())
+                              ? yaw_joint_indices[static_cast<size_t>(link_index)]
+                              : -1;
+    const double pitch = pitch_index >= 0 && pitch_index < current_joint_positions.size()
+                             ? current_joint_positions(pitch_index)
+                             : 0.0;
+    const double yaw = yaw_index >= 0 && yaw_index < current_joint_positions.size()
+                           ? current_joint_positions(yaw_index)
+                           : 0.0;
+    link_rotation = link_rotation * rotationAroundY(pitch) * rotationAroundZ(yaw);
+    link_tail += link_length * link_rotation.col(0);
+    body_tail_offsets.push_back(link_tail - current_root_tail_position);
+  }
+
+  // The history is stored from oldest to newest. push_front in link order therefore
+  // produces [last body tail, ..., link2 tail, oldest root-tail history, ..., current].
+  const Eigen::Vector3d attachment = combined.front().position;
+  for (const Eigen::Vector3d& offset : body_tail_offsets)
+  {
+    combined.push_front({attachment + offset});
+  }
+  return combined;
+}
+
 std::vector<Eigen::Vector3d> computeTargetPositions(const std::deque<TrajectoryPoint>& trajectory_buffer,
                                                     const Eigen::Vector3d& current_position,
-                                                    const Eigen::Vector3d& fallback_link_direction,
                                                     int link_num,
-                                                    double link_length,
-                                                    bool extend_short_history)
+                                                    double link_length)
 {
   std::vector<Eigen::Vector3d> targets;
   targets.reserve(static_cast<size_t>(std::max(0, link_num - 1)));
@@ -281,31 +280,12 @@ std::vector<Eigen::Vector3d> computeTargetPositions(const std::deque<TrajectoryP
 
   Eigen::Vector3d head = current_position;
   TrajectorySearchCursor cursor = newestCursor(polyline);
-  const Eigen::Vector3d backward_direction = oldestBackwardDirection(trajectory_buffer, fallback_link_direction);
-  bool extending = false;
   for (int link = 2; link <= link_num; ++link)
   {
-    Eigen::Vector3d target;
-    if (!extending)
-    {
-      const TrajectorySearchResult result = findAtDistance(polyline, cursor, head, link_length);
-      if (!extend_short_history || result.distance_error <= kWarmupDistanceTolerance)
-      {
-        target = result.position;
-        cursor = result.cursor;
-      }
-      else
-      {
-        extending = true;
-        target = extrapolateAtDistance(head, trajectory_buffer.front().position, backward_direction, link_length);
-      }
-    }
-    else
-    {
-      target = head + backward_direction * link_length;
-    }
-    targets.push_back(target);
-    head = target;
+    const TrajectorySearchResult result = findAtDistance(polyline, cursor, head, link_length);
+    targets.push_back(result.position);
+    head = result.position;
+    cursor = result.cursor;
   }
   return targets;
 }
@@ -364,34 +344,6 @@ Eigen::VectorXd computeJointAngles(const std::vector<Eigen::Vector3d>& target_po
     tail = target_positions[index];
   }
   return joints;
-}
-
-Eigen::VectorXd computeWarmupJointPositions(const Eigen::VectorXd& current_joint_positions,
-                                            const Eigen::VectorXd& path_joint_positions,
-                                            double total_arc_length,
-                                            double link_length,
-                                            const std::vector<int>& pitch_joint_indices,
-                                            const std::vector<int>& yaw_joint_indices)
-{
-  Eigen::VectorXd desired = current_joint_positions;
-  const double activation_distance = std::max(link_length, kDirectionNormEpsilon);
-  const size_t segment_count = std::max(pitch_joint_indices.size(), yaw_joint_indices.size());
-  for (size_t index = 0; index < segment_count; ++index)
-  {
-    const double progress = (total_arc_length - static_cast<double>(index) * link_length) / activation_distance;
-    const double activation = smoothstep01(progress);
-    const int indices[2] = {
-        index < pitch_joint_indices.size() ? pitch_joint_indices[index] : -1,
-        index < yaw_joint_indices.size() ? yaw_joint_indices[index] : -1};
-    for (int joint_index : indices)
-    {
-      if (joint_index >= 0 && joint_index < desired.size() && joint_index < path_joint_positions.size())
-      {
-        desired(joint_index) += activation * (path_joint_positions(joint_index) - desired(joint_index));
-      }
-    }
-  }
-  return desired;
 }
 
 }  // namespace follow_the_leader

@@ -10,6 +10,8 @@ multilink body motion.
 The launch file forces `/use_sim_time` to `false` so that it works in a
 no-Gazebo session without a `/clock` publisher.
 
+During short-history startup, the geometry-only planner appends the body shape from its most recently published nominal joint command behind the available root-tail trace and solves the next nominal shape from that combined geometry. The initial reference is the zero-joint straight shape, and nominal results suppressed by the root-motion publication gate do not replace the morphology reference.
+
 ## Run
 
 From the workspace root:

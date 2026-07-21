@@ -1,0 +1,19 @@
+<launch>
+    <param name="/use_sim_time" value="false" />
+
+    <group ns="geometry_only_warmup_test">
+        <node pkg="multilink_copilot" type="geometry_only_copilot_planner" name="geometry_only_copilot_planner" output="screen">
+            <param name="link_num" value="4" />
+            <param name="link_length" value="1.0" />
+            <param name="control_loop_rate" value="100.0" />
+            <param name="trajectory_sample_interval" value="0.01" />
+            <param name="trajectory_buffer_max_length" value="10.0" />
+            <param name="target_pose_frame_type" value="LINK" />
+            <param name="publish_only_on_significant_root_motion" value="true" />
+            <param name="publish_root_translation_threshold" value="0.5" />
+            <param name="publish_root_rotation_threshold" value="3.2" />
+        </node>
+
+        <test pkg="multilink_copilot" type="geometry_only_warmup_test" test-name="geometry_only_warmup_test" time-limit="20.0" />
+    </group>
+</launch>
