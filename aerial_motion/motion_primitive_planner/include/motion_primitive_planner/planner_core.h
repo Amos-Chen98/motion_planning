@@ -7,6 +7,7 @@
 #include <Eigen/Dense>
 
 #include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,23 @@ struct Candidate
   }
 };
 
+struct WholeBodyCandidateScore
+{
+  bool feasible = false;
+  double minimum_clearance = -std::numeric_limits<double>::infinity();
+  double duration = std::numeric_limits<double>::infinity();
+  double joint_motion = std::numeric_limits<double>::infinity();
+  double root_jerk = std::numeric_limits<double>::infinity();
+};
+
+struct RootCommandKinematics
+{
+  Eigen::Vector3d position = Eigen::Vector3d::Zero();
+  Eigen::Vector3d linear_velocity = Eigen::Vector3d::Zero();
+  double yaw = 0.0;
+  double yaw_rate = 0.0;
+};
+
 class PrimitiveGenerator
 {
 public:
@@ -76,6 +94,14 @@ private:
 
 int selectBestCandidate(const std::vector<Candidate>& candidates,
                         bool allow_stability_projection_fallback = false);
+
+int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& candidates);
+
+RootCommandKinematics tailFluToRootLinkCommand(const Eigen::Vector3d& tail_position,
+                                                const Eigen::Vector3d& tail_velocity,
+                                                double tail_yaw,
+                                                double tail_yaw_rate,
+                                                double link_length);
 
 std::vector<Eigen::Vector3d> linkEndpoints(const Eigen::Vector3d& link1_tail,
                                            const Eigen::Matrix3d& root_link_rotation,

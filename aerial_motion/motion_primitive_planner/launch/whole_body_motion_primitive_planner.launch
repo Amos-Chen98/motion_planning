@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+    <arg name="node_name" default="whole_body_motion_primitive_planner" />
+    <arg name="robot_ns" default="dragon" />
+    <arg name="world_frame_id" default="world" />
+    <arg name="root_child_frame_id" default="root" />
+    <arg name="pcl_topic" default="pcl_topic" />
+    <arg name="target_topic" default="/move_base_simple/goal" />
+    <arg name="odom_topic" default="root/flu_odom" />
+    <arg name="joint_states_topic" default="joint_states" />
+    <arg name="full_state_target_topic" default="full_state_target" />
+
+    <arg name="command_hz" default="40.0" />
+    <arg name="replan_hz" default="2.0" />
+    <arg name="activation_lead_time" default="0.75" />
+    <arg name="use_accumulated_map" default="true" />
+    <arg name="goal_tolerance" default="0.2" />
+    <arg name="planning_horizon" default="3.0" />
+    <arg name="candidate_count" default="9" />
+    <arg name="max_primitive_offset" default="0.8" />
+
+    <arg name="joint_planning_timeout" default="0.05" />
+    <arg name="joint_validity_resolution" default="0.025" />
+    <arg name="joint_planner_seed" default="1" />
+    <arg name="max_joint_velocity" default="4.0" />
+    <arg name="max_joint_command_step" default="0.10" />
+    <arg name="publish_yaw_command" default="true" />
+    <arg name="max_yaw_rate" default="1.5" />
+
+    <arg name="stability_check_fc_t" default="false" />
+    <arg name="fc_rp_min_threshold" default="3.2" />
+    <arg name="fc_t_min_threshold" default="0.01" />
+    <arg name="static_thrust_min" default="2.0" />
+    <arg name="static_thrust_max" default="30.0" />
+    <arg name="overlap_min_clearance" default="0.01" />
+    <arg name="max_baselink_tilt" default="1.20" />
+
+    <arg name="voxel_width" default="0.10" />
+    <arg name="dilate_radius" default="0.30" />
+    <arg name="whole_body_radius" default="0.30" />
+    <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
+    <arg name="use_fixed_target_height" default="false" />
+    <arg name="target_height" default="1.0" />
+    <arg name="use_target_z" default="true" />
+    <arg name="max_vel_mag" default="0.2" />
+
+    <group ns="$(arg robot_ns)">
+      <node pkg="motion_primitive_planner" type="whole_body_motion_primitive_planner_node"
+            name="$(arg node_name)" output="screen">
+        <rosparam file="$(find motion_primitive_planner)/config/whole_body_motion_primitive_planner.yaml" command="load" />
+        <remap from="pcl_topic" to="$(arg pcl_topic)" />
+        <remap from="target" to="$(arg target_topic)" />
+        <remap from="odom" to="$(arg odom_topic)" />
+        <remap from="joint_states" to="$(arg joint_states_topic)" />
+        <remap from="full_state_target" to="$(arg full_state_target_topic)" />
+        <param name="WorldFrameId" value="$(arg world_frame_id)" />
+        <param name="RootChildFrameId" value="$(arg root_child_frame_id)" />
+        <param name="VoxelWidth" value="$(arg voxel_width)" />
+        <param name="DilateRadius" value="$(arg dilate_radius)" />
+        <param name="WholeBodyRadius" value="$(arg whole_body_radius)" />
+        <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
+        <param name="MaxVelMag" value="$(arg max_vel_mag)" />
+        <param name="ReplanHz" value="$(arg replan_hz)" />
+        <param name="PlanActivationLeadTime" value="$(arg activation_lead_time)" />
+        <param name="UseAccumulatedMap" value="$(arg use_accumulated_map)" />
+        <param name="GoalTolerance" value="$(arg goal_tolerance)" />
+        <param name="PlanningHorizon" value="$(arg planning_horizon)" />
+        <param name="CandidateCount" value="$(arg candidate_count)" />
+        <param name="MaxPrimitiveOffset" value="$(arg max_primitive_offset)" />
+        <param name="JointPlanningTimeout" value="$(arg joint_planning_timeout)" />
+        <param name="JointValidityResolution" value="$(arg joint_validity_resolution)" />
+        <param name="JointPlannerSeed" value="$(arg joint_planner_seed)" />
+        <param name="MaxJointVelocity" value="$(arg max_joint_velocity)" />
+        <param name="MaxJointCommandStep" value="$(arg max_joint_command_step)" />
+        <param name="PublishYawCommand" value="$(arg publish_yaw_command)" />
+        <param name="MaxYawRate" value="$(arg max_yaw_rate)" />
+        <param name="CommandHz" value="$(arg command_hz)" />
+        <param name="StabilityCheckFcT" value="$(arg stability_check_fc_t)" />
+        <param name="FcRpMinThreshold" value="$(arg fc_rp_min_threshold)" />
+        <param name="FcTMinThreshold" value="$(arg fc_t_min_threshold)" />
+        <param name="StaticThrustMin" value="$(arg static_thrust_min)" />
+        <param name="StaticThrustMax" value="$(arg static_thrust_max)" />
+        <param name="OverlapMinClearance" value="$(arg overlap_min_clearance)" />
+        <param name="MaxBaselinkTilt" value="$(arg max_baselink_tilt)" />
+        <param name="UseFixedTargetHeight" value="$(arg use_fixed_target_height)" />
+        <param name="TargetHeight" value="$(arg target_height)" />
+        <param name="UseTargetZ" value="$(arg use_target_z)" />
+      </node>
+    </group>
+</launch>

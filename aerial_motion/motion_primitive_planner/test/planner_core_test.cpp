@@ -1,4 +1,5 @@
 #include <motion_primitive_planner/planner_core.h>
+#include <motion_primitive_planner/joint_trajectory_planner.h>
 
 #include <multilink_copilot/follow_the_leader.h>
 
@@ -141,12 +142,66 @@ TEST(FollowTheLeaderGeometry, CurvedHistoryProducesCurvedNominalShape)
   const auto joint_angles = [&](const std::deque<multilink_copilot::TrajectoryPoint>& history) {
     const Eigen::Vector3d tail = history.back().position;
     const auto targets = multilink_copilot::follow_the_leader::computeTargetPositions(
-        history, tail, root_rotation.col(0), 4, 1.0, false);
+        history, tail, 4, 1.0);
     return multilink_copilot::follow_the_leader::computeJointAngles(
         targets, tail, root_rotation, pitch, yaw, 6, 0.1, reference);
   };
   EXPECT_LT(joint_angles(straight).norm(), 1e-6);
   EXPECT_GT(joint_angles(curved).norm(), 0.2);
+}
+
+TEST(FollowTheLeaderGeometry, ShortHistoryContinuesAlongCurrentBodyMorphology)
+{
+  const std::vector<int> pitch = {0, 2, 4};
+  const std::vector<int> yaw = {1, 3, 5};
+  Eigen::VectorXd current_joints = Eigen::VectorXd::Zero(6);
+  current_joints(yaw[0]) = M_PI_2;
+  current_joints(yaw[1]) = M_PI_2;
+  current_joints(yaw[2]) = M_PI_2;
+  const Eigen::Vector3d root_tail = Eigen::Vector3d::Zero();
+  const Eigen::Matrix3d root_rotation = Eigen::Matrix3d::Identity();
+  const std::deque<multilink_copilot::TrajectoryPoint> history = {{root_tail}};
+
+  const auto combined = multilink_copilot::follow_the_leader::prependCurrentBodyMorphology(
+      history, root_tail, root_rotation, current_joints, pitch, yaw, 4, 1.0);
+  ASSERT_EQ(combined.size(), 4u);
+  EXPECT_TRUE(combined[0].position.isApprox(Eigen::Vector3d(-1.0, 0.0, 0.0), 1e-12));
+  EXPECT_TRUE(combined[1].position.isApprox(Eigen::Vector3d(-1.0, 1.0, 0.0), 1e-12));
+  EXPECT_TRUE(combined[2].position.isApprox(Eigen::Vector3d(0.0, 1.0, 0.0), 1e-12));
+  EXPECT_TRUE(combined[3].position.isApprox(root_tail, 1e-12));
+
+  const auto targets = multilink_copilot::follow_the_leader::computeTargetPositions(
+      combined, root_tail, 4, 1.0);
+  ASSERT_EQ(targets.size(), 3u);
+  EXPECT_TRUE(targets[0].isApprox(Eigen::Vector3d(0.0, 1.0, 0.0), 1e-12));
+  EXPECT_TRUE(targets[1].isApprox(Eigen::Vector3d(-1.0, 1.0, 0.0), 1e-12));
+  EXPECT_TRUE(targets[2].isApprox(Eigen::Vector3d(-1.0, 0.0, 0.0), 1e-12));
+
+  const Eigen::VectorXd recovered = multilink_copilot::follow_the_leader::computeJointAngles(
+      targets, root_tail, root_rotation, pitch, yaw, 6, 0.1, current_joints);
+  EXPECT_TRUE(recovered.isApprox(current_joints, 1e-12));
+}
+
+TEST(FollowTheLeaderGeometry, PartialRootHistoryTransitionsIntoCurrentBodyMorphology)
+{
+  const std::vector<int> pitch = {0, 2, 4};
+  const std::vector<int> yaw = {1, 3, 5};
+  Eigen::VectorXd current_joints = Eigen::VectorXd::Zero(6);
+  current_joints(yaw[0]) = M_PI_2;
+  current_joints(yaw[1]) = M_PI_2;
+  current_joints(yaw[2]) = M_PI_2;
+  const Eigen::Vector3d initial_root_tail = Eigen::Vector3d::Zero();
+  const std::deque<multilink_copilot::TrajectoryPoint> short_history = {
+      {initial_root_tail}, {Eigen::Vector3d(0.6, 0.0, 0.0)}};
+
+  const auto combined = multilink_copilot::follow_the_leader::prependCurrentBodyMorphology(
+      short_history, initial_root_tail, Eigen::Matrix3d::Identity(), current_joints,
+      pitch, yaw, 4, 1.0);
+  const auto targets = multilink_copilot::follow_the_leader::computeTargetPositions(
+      combined, short_history.back().position, 4, 1.0);
+  ASSERT_EQ(targets.size(), 3u);
+  EXPECT_TRUE(targets.front().isApprox(Eigen::Vector3d(0.0, 0.8, 0.0), 1e-12));
+  EXPECT_NEAR((targets.front() - short_history.back().position).norm(), 1.0, 1e-12);
 }
 
 TEST(CandidateSelector, RanksOnlyFeasibleCandidatesByLengthThenJerk)
@@ -220,6 +275,48 @@ TEST(CandidateSelector, RanksProjectionFallbackByLengthJointMotionMarginAndJerk)
 
   candidates[3].requires_stability_projection = false;
   EXPECT_EQ(selectBestCandidate(candidates, true), 2);
+}
+
+TEST(WholeBodyCandidateSelector, PrioritizesClearanceThenDurationJointMotionAndJerk)
+{
+  std::vector<WholeBodyCandidateScore> candidates(6);
+  candidates[0] = {false, 10.0, 1.0, 1.0, 1.0};
+  candidates[1] = {true, 0.30, 1.0, 1.0, 1.0};
+  candidates[2] = {true, 0.40, 5.0, 5.0, 5.0};
+  candidates[3] = {true, 0.40, 4.0, 5.0, 5.0};
+  candidates[4] = {true, 0.40, 4.0, 4.0, 5.0};
+  candidates[5] = {true, 0.40, 4.0, 4.0, 3.0};
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates), 5);
+
+  candidates[1].minimum_clearance = std::numeric_limits<double>::infinity();
+  candidates[2].minimum_clearance = std::numeric_limits<double>::infinity();
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates), 1);
+}
+
+TEST(FullStateConversion, ConvertsFluTailPoseAndTwistToRootLinkOrigin)
+{
+  const RootCommandKinematics command = tailFluToRootLinkCommand(
+      Eigen::Vector3d(1.0, 2.0, 3.0), Eigen::Vector3d(0.4, -0.2, 0.1), 0.0, 0.5, 2.0);
+  EXPECT_NEAR(command.yaw, M_PI, 1e-12);
+  EXPECT_NEAR(command.yaw_rate, 0.5, 1e-12);
+  EXPECT_TRUE(command.position.isApprox(Eigen::Vector3d(3.0, 2.0, 3.0), 1e-12));
+  EXPECT_TRUE(command.linear_velocity.isApprox(Eigen::Vector3d(0.4, 0.8, 0.1), 1e-12));
+}
+
+TEST(JointPlanResult, InterpolatesSynchronizedPositionVelocityAndYaw)
+{
+  JointPlanResult result;
+  result.success = true;
+  result.duration = 2.0;
+  result.joint_waypoints = {{0.0, Eigen::Vector2d(0.0, 0.0)},
+                            {2.0, Eigen::Vector2d(2.0, -4.0)}};
+  result.yaw_waypoints = {{0.0, -0.5}, {2.0, 0.5}};
+  EXPECT_TRUE(result.jointPositions(1.0).isApprox(Eigen::Vector2d(1.0, -2.0), 1e-12));
+  EXPECT_TRUE(result.jointVelocities(1.0).isApprox(Eigen::Vector2d(1.0, -2.0), 1e-12));
+  EXPECT_NEAR(result.yaw(1.0), 0.0, 1e-12);
+  EXPECT_NEAR(result.yawRate(1.0), 0.5, 1e-12);
+  EXPECT_TRUE(result.jointVelocities(2.0).isZero(1e-12));
+  EXPECT_NEAR(result.yawRate(2.0), 0.0, 1e-12);
 }
 }  // namespace
 }  // namespace motion_primitive_planner

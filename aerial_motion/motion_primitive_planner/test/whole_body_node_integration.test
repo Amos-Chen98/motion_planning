@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+    <include file="$(find geo_robot_model)/launch/geo_dragon_bringup.launch">
+        <arg name="RViz" value="false" />
+        <arg name="lidar" value="false" />
+    </include>
+    <include file="$(find motion_primitive_planner)/launch/whole_body_motion_primitive_planner.launch">
+        <arg name="pcl_topic" value="/unused_cloud" />
+        <arg name="max_vel_mag" value="0.4" />
+    </include>
+    <test test-name="whole_body_node_integration_test" pkg="motion_primitive_planner"
+          type="whole_body_node_integration_test" time-limit="60.0" />
+</launch>

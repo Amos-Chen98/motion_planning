@@ -436,6 +436,10 @@ private:
     double yaw = config_.publish_yaw_command && executed_command_received_
                      ? executed_yaw_
                      : yawFromQuaternion(ros_interface_.latestOrientation());
+    const Eigen::VectorXd initial_joints = predicted_joints;
+    const Eigen::Vector3d initial_root_tail = candidate.trajectory.getPos(0.0);
+    const Eigen::Matrix3d initial_root_rotation =
+        Eigen::AngleAxisd(yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
     candidate.min_fc_rp = std::numeric_limits<double>::infinity();
     candidate.joint_motion = 0.0;
     candidate.requires_stability_projection = false;
@@ -464,18 +468,19 @@ private:
                                                  config_.trajectory_buffer_max_length, history, arc_length);
       const Eigen::Matrix3d root_rotation =
           Eigen::AngleAxisd(yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+      const std::deque<multilink_copilot::TrajectoryPoint> nominal_history =
+          arc_length < required_history
+              ? multilink_copilot::follow_the_leader::prependCurrentBodyMorphology(
+                    history, initial_root_tail, initial_root_rotation, initial_joints,
+                    pitch_indices_, yaw_indices_, link_num_, link_length_)
+              : history;
       const std::vector<Eigen::Vector3d> targets = multilink_copilot::follow_the_leader::computeTargetPositions(
-          history, position, root_rotation.col(0), link_num_, link_length_, arc_length < required_history);
+          nominal_history, position, link_num_, link_length_);
       if (!targets.empty())
       {
-        const Eigen::VectorXd path_joints = multilink_copilot::follow_the_leader::computeJointAngles(
+        predicted_joints = multilink_copilot::follow_the_leader::computeJointAngles(
             targets, position, root_rotation, pitch_indices_, yaw_indices_, predicted_joints.size(),
             config_.ik_singularity_threshold, predicted_joints);
-        predicted_joints = arc_length < required_history
-                               ? multilink_copilot::follow_the_leader::computeWarmupJointPositions(
-                                     predicted_joints, path_joints, arc_length, link_length_, pitch_indices_,
-                                     yaw_indices_)
-                               : path_joints;
       }
       candidate.joint_motion += (predicted_joints - previous_predicted_joints).norm();
       previous_predicted_joints = predicted_joints;

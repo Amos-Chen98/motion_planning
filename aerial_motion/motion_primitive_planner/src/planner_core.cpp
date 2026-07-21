@@ -248,6 +248,58 @@ int selectBestCandidate(const std::vector<Candidate>& candidates,
   return best;
 }
 
+int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& candidates)
+{
+  const auto clearance_greater = [](double lhs, double rhs) {
+    return !(std::isinf(lhs) && std::isinf(rhs)) && lhs > rhs + kEpsilon;
+  };
+  const auto clearance_equal = [](double lhs, double rhs) {
+    return (std::isinf(lhs) && std::isinf(rhs)) || std::abs(lhs - rhs) <= kEpsilon;
+  };
+  int best = -1;
+  for (size_t index = 0; index < candidates.size(); ++index)
+  {
+    const WholeBodyCandidateScore& candidate = candidates[index];
+    if (!candidate.feasible || std::isnan(candidate.minimum_clearance))
+    {
+      continue;
+    }
+    if (best < 0)
+    {
+      best = static_cast<int>(index);
+      continue;
+    }
+    const WholeBodyCandidateScore& current = candidates[static_cast<size_t>(best)];
+    if (clearance_greater(candidate.minimum_clearance, current.minimum_clearance) ||
+        (clearance_equal(candidate.minimum_clearance, current.minimum_clearance) &&
+         (candidate.duration < current.duration - kEpsilon ||
+          (std::abs(candidate.duration - current.duration) <= kEpsilon &&
+           (candidate.joint_motion < current.joint_motion - kEpsilon ||
+            (std::abs(candidate.joint_motion - current.joint_motion) <= kEpsilon &&
+             candidate.root_jerk < current.root_jerk))))))
+    {
+      best = static_cast<int>(index);
+    }
+  }
+  return best;
+}
+
+RootCommandKinematics tailFluToRootLinkCommand(const Eigen::Vector3d& tail_position,
+                                                const Eigen::Vector3d& tail_velocity,
+                                                double tail_yaw,
+                                                double tail_yaw_rate,
+                                                double link_length)
+{
+  RootCommandKinematics command;
+  command.yaw = tail_yaw + M_PI;
+  command.yaw_rate = tail_yaw_rate;
+  const Eigen::Vector3d link_direction(std::cos(command.yaw), std::sin(command.yaw), 0.0);
+  const Eigen::Vector3d angular_velocity(0.0, 0.0, tail_yaw_rate);
+  command.position = tail_position - link_length * link_direction;
+  command.linear_velocity = tail_velocity - link_length * angular_velocity.cross(link_direction);
+  return command;
+}
+
 std::vector<Eigen::Vector3d> linkEndpoints(const Eigen::Vector3d& link1_tail,
                                            const Eigen::Matrix3d& root_link_rotation,
                                            const Eigen::VectorXd& joint_positions,

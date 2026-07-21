@@ -1,22 +1,34 @@
 # Motion Primitive Planner
 
-`motion_primitive_planner` is a ROS package for whole-body-aware local navigation of the DRAGON root link. It generates multiple motion primitives, rejects candidates that violate collision or stability constraints, and sends the best feasible trajectory to `gcopter/traj_server`.
+`motion_primitive_planner` provides two online local-planning chains for DRAGON: a root-link planner for `gcopter/traj_server` with an optional `multilink_copilot`, and a whole-body planner that publishes `aerial_robot_msgs/FullStateTarget` directly.
 
 ## Design
 
-The planner follows an online replanning architecture: it searches a route toward the global goal, extracts a local target, and generates a set of geometrically different polynomial motion primitives for that local segment. The default nine candidates contain a nominal path plus two four-direction offset rings, so both moderate and maximum detours are available. Each candidate is evaluated by predicting the follow-the-leader configuration of the complete DRAGON body, checking its swept links for collisions, and evaluating its feasible-control margin with the DRAGON robot model. The shortest nominally feasible candidate is executed, with trajectory smoothness used as a tie-breaker. When `AllowCopilotStabilityProjectionFallback` is enabled and every otherwise-valid candidate violates only the nominal `fc_rp_min` constraint, the planner instead selects the shortest recoverable candidate and uses nominal joint motion, margin, and smoothness as tie-breakers, then relies on downstream `multilink_copilot` to project its joint target to a stable configuration. This joint-motion term favors keeping the current fold instead of crossing a near-straight configuration. If every candidate has a hard failure, the currently active trajectory is preserved and planning is attempted again later.
+### Root-Link Planner
 
-The Copilot projection fallback is disabled by default because the projected whole-body shape can differ from the nominal shape used by the planner's collision check. Enable it only when a downstream Copilot is present and the environment is free space, or when collision checking of the projected shape is handled separately.
+The planner searches toward the global goal, selects a local target, and generates polynomial motion primitives for that segment. The default candidate set contains a nominal trajectory and two four-direction offset rings for moderate and large detours.
 
-## RViz Candidate Colors
+Each candidate predicts the full body with a follow-the-leader configuration, checks swept-body collisions and flight-feasibility margin, then selects the shortest and smoothest feasible trajectory. If no candidate is feasible, the active trajectory is retained and planning is retried later.
 
-The `/candidate_markers` `visualization_msgs/MarkerArray` displays every generated root-link trajectory using a common line width. The trajectory colors represent the candidate evaluation result:
+`AllowCopilotStabilityProjectionFallback` is disabled by default. When enabled, a candidate rejected only for insufficient nominal `fc_rp_min` may be projected to a stable configuration by Copilot. Because the projected body can differ from the collision-checked shape, use this option only in free space or when projected-shape collision checking is provided separately.
 
-- **Green:** the feasible candidate selected for execution.
-- **Cyan:** a feasible candidate that was not selected.
-- **Orange:** a candidate that needs downstream `fc_rp_min` projection or is rejected by another flight-feasibility check.
-- **Magenta:** a candidate rejected because its predicted nominal joint configuration violates a joint limit.
-- **Red:** a candidate rejected because of a predicted whole-body collision, trajectory-generation failure, or another non-feasible status.
+### Whole-Body Planner
+
+For every root primitive, the whole-body node plans and revalidates a continuous joint trajectory. It first uses nominal follow-the-leader motion, connects infeasible intervals with OMPL RRT-Connect, projects an infeasible terminal target to the nearest stable fold when necessary, and slows the root trajectory to meet joint-velocity and 40 Hz command-step limits.
+
+Only candidates with a fully feasible joint trajectory and collision-free swept body may execute. Candidates are ranked by maximum minimum clearance, minimum duration, minimum joint motion, and minimum root jerk. The node publishes root and joint commands at 40 Hz and holds the latest validated command at zero velocity after a planning failure.
+
+The whole-body planner exclusively owns `full_state_target`; do not run it with output from `traj_server` or `multilink_copilot`.
+
+## RViz Candidate Markers
+
+`/candidate_markers` publishes all root-link candidates as a `visualization_msgs/MarkerArray`. Colors indicate the evaluation result:
+
+- **Green:** selected feasible candidate.
+- **Cyan:** feasible but not selected.
+- **Orange:** requires downstream `fc_rp_min` projection or fails another flight-feasibility check.
+- **Magenta:** rejected because the nominal joint configuration violates a joint limit.
+- **Red:** rejected because of predicted whole-body collision, trajectory-generation failure, or another non-feasible status.
 
 ## Build
 
@@ -26,17 +38,28 @@ catkin build motion_primitive_planner
 source devel/setup.bash
 ```
 
-## Test
-
-```bash
-catkin run_tests motion_primitive_planner
-catkin_test_results build/motion_primitive_planner
-```
-
 ## Run
 
-Make sure the DRAGON robot description and required input topics are available, then run:
+Ensure that the DRAGON robot description and required input topics are available before launching either chain.
+
+### Root-Link Planner
 
 ```bash
 roslaunch motion_primitive_planner motion_primitive_planner.launch
 ```
+
+`gcopter/traj_server` executes the root-link trajectory. Add `multilink_copilot` only when stability projection is required.
+
+### Whole-Body Planner
+
+The whole-body planner requires FLU odometry on `/dragon/root/flu_odom`. Start `root_state_to_flu_odom.launch` first; it converts the root-tail pose from `/dragon/root/tail_pose` to the required odometry topic.
+
+```bash
+roslaunch naraha_center root_state_to_flu_odom.launch
+```
+
+```bash
+roslaunch motion_primitive_planner whole_body_motion_primitive_planner.launch
+```
+
+Do not start `gcopter/traj_server` or `multilink_copilot` full-state output with this chain.
