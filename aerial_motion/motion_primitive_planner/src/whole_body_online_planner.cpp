@@ -752,44 +752,6 @@ private:
       array.markers.push_back(marker);
     }
 
-    if (selected >= 0)
-    {
-      const WholeBodyCandidate& candidate = candidates[static_cast<size_t>(selected)];
-      visualization_msgs::Marker body;
-      body.header.frame_id = config_.common.worldFrameId;
-      body.header.stamp = stamp;
-      body.ns = "selected_whole_body_sweep";
-      body.id = 1000;
-      body.type = visualization_msgs::Marker::LINE_LIST;
-      body.action = visualization_msgs::Marker::ADD;
-      body.pose.orientation.w = 1.0;
-      body.scale.x = 0.01;
-      body.color.g = 1.0;
-      body.color.a = 0.3;
-      const double duration = candidate.scaled_root.getTotalDuration();
-      for (int sample = 0; sample <= 20; ++sample)
-      {
-        const double time = duration * sample / 20.0;
-        const double yaw = candidate.joints.yaw(time);
-        const Eigen::Matrix3d rotation =
-            Eigen::AngleAxisd(yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-        const auto endpoints = linkEndpoints(candidate.scaled_root.getPos(time), rotation,
-                                             candidate.joints.jointPositions(time), pitch_indices_, yaw_indices_,
-                                             link_num_, link_length_);
-        for (size_t endpoint = 1; endpoint < endpoints.size(); ++endpoint)
-        {
-          for (const Eigen::Vector3d& point : {endpoints[endpoint - 1], endpoints[endpoint]})
-          {
-            geometry_msgs::Point message;
-            message.x = point.x();
-            message.y = point.y();
-            message.z = point.z();
-            body.points.push_back(message);
-          }
-        }
-      }
-      array.markers.push_back(body);
-    }
     marker_pub_.publish(array);
 
     std_msgs::Int32 selected_message;
