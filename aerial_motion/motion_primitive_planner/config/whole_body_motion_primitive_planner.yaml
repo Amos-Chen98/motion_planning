@@ -1,52 +1,18 @@
-# Shared GCOPTER root-route configuration.
-TimeoutRRT: 0.1
-MaxBdrMag: 2.1
-MaxTiltAngle: 1.05
-GravAcc: 9.8
-WeightT: 20.0
-ChiVec: [1.0e+4, 1.0e+4, 1.0e+4, 1.0e+4]
-SmoothingEps: 1.0e-2
-IntegralIntervs: 16
-RelCostTol: 1.0e-5
-
-# Root motion primitives.
-CandidateCount: 9
-MaxPrimitiveOffset: 0.8
-PlanningHorizon: 3.0
-MinimumPieceDuration: 0.20
-
-# Per-candidate follow-the-leader and joint-space planning.
+# Per-candidate joint-space planning.
 JointReferenceDt: 0.10
 JointPlanningTimeout: 0.05
 JointValidityResolution: 0.025
 JointPlannerSeed: 1
 MaxJointVelocity: 4.0
 MaxJointCommandStep: 0.10
-CommandHz: 40.0
-TrajectorySampleInterval: 0.05
-TrajectoryBufferMaxLength: 10.0
-SnakeIkSingularityThreshold: 0.10
-PublishYawCommand: true
-MaxYawRate: 1.5
 
-# Shared stability evaluator and QP projection.
+# Joint-space stability projection.
 StabilityQpMaxIterations: 20
 StabilityQpJointStepLimit: 0.10
 StabilityQpRegularization: 0.001
 StabilityQpConvergenceTolerance: 0.001
-FeasibilityTolerance: 1.0e-4
-StabilityCheckFcT: false
-FcRpMinThreshold: 3.2
-FcTMinThreshold: 0.01
-StaticThrustMin: 2.0
-StaticThrustMax: 30.0
-OverlapMinClearance: 0.01
-MaxBaselinkTilt: 1.20
 
 # Whole-body swept-volume selection and direct execution.
 WholeBodyRadius: 0.30
 PlanActivationLeadTime: 0.75
 RootChildFrameId: root
-ReplanHz: 2.0
-UseAccumulatedMap: true
-GoalTolerance: 0.2

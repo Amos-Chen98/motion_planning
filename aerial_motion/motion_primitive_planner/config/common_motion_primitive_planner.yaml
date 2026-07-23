@@ -1,0 +1,37 @@
+# Shared GCOPTER map/path configuration.
+TimeoutRRT: 0.1
+MaxBdrMag: 2.1
+MaxTiltAngle: 1.05
+GravAcc: 9.8
+WeightT: 20.0
+ChiVec: [1.0e+4, 1.0e+4, 1.0e+4, 1.0e+4]
+SmoothingEps: 1.0e-2
+IntegralIntervs: 16
+RelCostTol: 1.0e-5
+
+# Shared online planning and root motion primitive configuration.
+ReplanHz: 2.0
+UseAccumulatedMap: true
+GoalTolerance: 0.2
+PlanningHorizon: 3.0
+CandidateCount: 9
+MaxPrimitiveOffset: 0.8
+MinimumPieceDuration: 0.20
+
+# Shared follow-the-leader prediction configuration.
+CommandHz: 40.0
+TrajectorySampleInterval: 0.05
+TrajectoryBufferMaxLength: 10.0
+SnakeIkSingularityThreshold: 0.10
+PublishYawCommand: true
+MaxYawRate: 1.5
+
+# Shared flight-feasibility constraints.
+FeasibilityTolerance: 1.0e-4
+StabilityCheckFcT: false
+FcRpMinThreshold: 3.2
+FcTMinThreshold: 0.01
+StaticThrustMin: 2.0
+StaticThrustMax: 30.0
+OverlapMinClearance: 0.01
+MaxBaselinkTilt: 1.20

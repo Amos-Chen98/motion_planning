@@ -120,12 +120,12 @@ double JointPlanResult::yawRate(double time) const
 JointTrajectoryPlanner::JointTrajectoryPlanner(
     const JointPlannerConfig& config,
     const std::shared_ptr<multilink_copilot::StabilityEvaluator>& stability_evaluator)
-  : config_(config), stability_evaluator_(stability_evaluator)
+  : config_(config), stability_evaluator_(stability_evaluator), nominal_predictor_(config.follower)
 {
-  if (!stability_evaluator_ || config_.reference_dt <= 0.0 || config_.command_hz <= 0.0 ||
+  if (!stability_evaluator_ || config_.reference_dt <= 0.0 ||
       config_.planning_timeout <= 0.0 || config_.validity_resolution <= 0.0 ||
       config_.max_joint_velocity <= 0.0 || config_.max_joint_command_step <= 0.0 ||
-      config_.trajectory_sample_interval <= 0.0 || config_.trajectory_buffer_max_length <= 0.0)
+      config_.follower.command_hz <= 0.0)
   {
     throw std::invalid_argument("Invalid joint trajectory planner configuration");
   }
@@ -218,9 +218,15 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
     result.joint_motion += delta.norm();
     const double maximum_delta = delta.size() > 0 ? delta.cwiseAbs().maxCoeff() : 0.0;
     const double available = result.joint_waypoints[index].time - result.joint_waypoints[index - 1].time;
-    const double required = std::max(maximum_delta / config_.max_joint_velocity,
-                                     maximum_delta /
-                                         (config_.max_joint_command_step * config_.command_hz));
+    // Leave a small scheduling margin because ROS timer callbacks are not
+    // perfectly periodic; an exactly saturated analytical step can otherwise
+    // exceed the command-step limit when two publications are slightly late.
+    constexpr double kCommandStepSchedulingMargin = 0.99;
+    const double required = std::max(
+        maximum_delta / config_.max_joint_velocity,
+        maximum_delta /
+            (kCommandStepSchedulingMargin * config_.max_joint_command_step *
+             config_.follower.command_hz));
     if (required > kEpsilon && available <= kEpsilon)
     {
       result.detail = "joint detour contains a zero-duration motion";
@@ -319,64 +325,14 @@ std::vector<JointTrajectoryPlanner::NominalSample> JointTrajectoryPlanner::build
     double start_yaw)
 {
   std::vector<NominalSample> samples;
-  std::deque<multilink_copilot::TrajectoryPoint> history = context.executed_history;
-  double arc_length = context.executed_arc_length;
-  Eigen::VectorXd predicted_joints = start_joints;
-  double yaw = start_yaw;
-  const double duration = root_trajectory.getTotalDuration();
-  const int sample_count = std::max(1, static_cast<int>(std::ceil(duration / config_.reference_dt)));
-  const double required_history = static_cast<double>(context.link_num - 1) * context.link_length;
-  const Eigen::Vector3d initial_root_tail = root_trajectory.getPos(0.0);
-  const Eigen::Matrix3d initial_root_rotation =
-      Eigen::AngleAxisd(start_yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-  samples.reserve(static_cast<size_t>(sample_count + 1));
-
-  for (int sample_index = 0; sample_index <= sample_count; ++sample_index)
+  const std::vector<NominalJointSample> nominal = nominal_predictor_.predict(
+      root_trajectory, context, start_joints, start_yaw, config_.reference_dt);
+  samples.reserve(nominal.size());
+  for (const NominalJointSample& sample : nominal)
   {
-    const double time = duration * static_cast<double>(sample_index) / sample_count;
-    const Eigen::Vector3d position = root_trajectory.getPos(time);
-    const Eigen::Vector3d velocity = root_trajectory.getVel(time);
-    const double dt = sample_index == 0 ? 0.0 :
-                      duration / static_cast<double>(sample_count);
-    if (sample_index > 0 && config_.publish_yaw_command && velocity.head<2>().squaredNorm() > 1e-6)
-    {
-      double difference = std::remainder(std::atan2(velocity.y(), velocity.x()) - yaw, 2.0 * M_PI);
-      if (config_.max_yaw_rate > 0.0)
-      {
-        difference = std::max(-config_.max_yaw_rate * dt,
-                              std::min(config_.max_yaw_rate * dt, difference));
-      }
-      yaw += difference;
-    }
-
-    appendHistory(position, config_.trajectory_sample_interval,
-                  config_.trajectory_buffer_max_length, history, arc_length);
-    if (sample_index > 0)
-    {
-      const Eigen::Matrix3d root_rotation =
-          Eigen::AngleAxisd(yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-      const std::deque<multilink_copilot::TrajectoryPoint> nominal_history =
-          arc_length < required_history
-              ? multilink_copilot::follow_the_leader::prependCurrentBodyMorphology(
-                    history, initial_root_tail, initial_root_rotation, start_joints,
-                    context.pitch_joint_indices, context.yaw_joint_indices,
-                    context.link_num, context.link_length)
-              : history;
-      const std::vector<Eigen::Vector3d> targets =
-          multilink_copilot::follow_the_leader::computeTargetPositions(
-              nominal_history, position, context.link_num, context.link_length);
-      if (!targets.empty())
-      {
-        const Eigen::VectorXd path_joints = multilink_copilot::follow_the_leader::computeJointAngles(
-            targets, position, root_rotation, context.pitch_joint_indices, context.yaw_joint_indices,
-            predicted_joints.size(), config_.ik_singularity_threshold, predicted_joints);
-        predicted_joints = path_joints;
-      }
-    }
-
     multilink_copilot::StabilityMetrics metrics;
-    const bool safe = configurationIsSafe(predicted_joints, yaw + M_PI, &metrics);
-    samples.push_back({time, yaw, predicted_joints, safe});
+    const bool safe = configurationIsSafe(sample.joints, sample.yaw + M_PI, &metrics);
+    samples.push_back({sample.time, sample.yaw, sample.joints, safe});
   }
   return samples;
 }
@@ -582,32 +538,6 @@ Eigen::VectorXd JointTrajectoryPlanner::projectedTerminal(const Eigen::VectorXd&
   success = stability_evaluator_->projectNearestSafe(
       desired, {current, start, positive_fold, negative_fold}, projected);
   return success ? projected : Eigen::VectorXd();
-}
-
-bool JointTrajectoryPlanner::appendHistory(const Eigen::Vector3d& position,
-                                           double sample_interval,
-                                           double maximum_length,
-                                           std::deque<multilink_copilot::TrajectoryPoint>& history,
-                                           double& arc_length)
-{
-  if (history.empty())
-  {
-    history.push_back({position});
-    return true;
-  }
-  const double distance = (position - history.back().position).norm();
-  if (distance < sample_interval)
-  {
-    return false;
-  }
-  history.push_back({position});
-  arc_length += distance;
-  while (history.size() > 1 && arc_length > maximum_length)
-  {
-    arc_length -= (history[1].position - history[0].position).norm();
-    history.pop_front();
-  }
-  return true;
 }
 
 }  // namespace motion_primitive_planner

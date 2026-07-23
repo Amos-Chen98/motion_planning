@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+    <include file="$(find geo_robot_model)/launch/geo_dragon_bringup.launch">
+        <arg name="RViz" value="false" />
+        <arg name="lidar" value="false" />
+    </include>
+    <include file="$(find motion_primitive_planner)/launch/motion_primitive_planner.launch">
+        <arg name="robot_ns" value="dragon" />
+        <arg name="pcl_topic" value="/root_planner_test/cloud" />
+        <arg name="target_topic" value="/move_base_simple/goal" />
+        <arg name="odom_topic" value="/dragon/root/flu_odom" />
+        <arg name="joint_states_topic" value="/dragon/joint_states" />
+        <arg name="command_topic" value="/dragon/root/target_pose" />
+        <arg name="trajectory_topic" value="/planning/trajectory" />
+        <arg name="max_vel_mag" value="0.4" />
+        <arg name="snake_ik_singularity_threshold" value="2.0" />
+        <arg name="allow_copilot_stability_projection_fallback" value="true" />
+    </include>
+    <test test-name="root_node_integration_test" pkg="motion_primitive_planner"
+          type="root_node_integration_test" time-limit="45.0" />
+</launch>

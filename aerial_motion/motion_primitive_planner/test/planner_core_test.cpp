@@ -1,5 +1,7 @@
 #include <motion_primitive_planner/planner_core.h>
 #include <motion_primitive_planner/joint_trajectory_planner.h>
+#include <motion_primitive_planner/planner_common.h>
+#include <motion_primitive_planner/root_candidate_evaluator.h>
 
 #include <multilink_copilot/follow_the_leader.h>
 
@@ -17,6 +19,45 @@ Eigen::Matrix3d endpointState(const Eigen::Vector3d& position)
   Eigen::Matrix3d state = Eigen::Matrix3d::Zero();
   state.col(0) = position;
   return state;
+}
+
+SharedPlannerConfig validSharedConfig(bool accumulated = true)
+{
+  SharedPlannerConfig config;
+  config.common.worldFrameId = "world";
+  config.common.dilateRadius = 0.0;
+  config.common.voxelWidth = 0.1;
+  config.common.mapBound = {-2.0, 2.0, -2.0, 2.0, 0.0, 3.0};
+  config.common.timeoutRRT = 0.1;
+  config.common.maxVelMag = 0.5;
+  config.common.maxBdrMag = 2.1;
+  config.common.maxTiltAngle = 1.05;
+  config.common.gravAcc = 9.8;
+  config.common.weightT = 20.0;
+  config.common.chiVec = {1.0e4, 1.0e4, 1.0e4, 1.0e4};
+  config.common.smoothingEps = 1.0e-2;
+  config.common.integralIntervs = 16;
+  config.common.relCostTol = 1.0e-5;
+  config.primitive.candidate_count = 3;
+  config.primitive.max_offset = 0.4;
+  config.primitive.max_velocity = 0.5;
+  config.primitive.cruise_velocity = 0.3;
+  config.primitive.minimum_piece_duration = 0.2;
+  config.use_accumulated_map = accumulated;
+  config.planning_horizon = 1.5;
+  config.validateOrThrow();
+  return config;
+}
+
+TEST(SharedPlannerConfig, RejectsInvalidSharedAndFollowerParameters)
+{
+  SharedPlannerConfig shared = validSharedConfig();
+  shared.goal_tolerance = 0.0;
+  EXPECT_THROW(shared.validateOrThrow(), std::invalid_argument);
+
+  FollowerConfig follower;
+  follower.command_hz = 0.0;
+  EXPECT_THROW(follower.validateOrThrow(), std::invalid_argument);
 }
 
 TEST(PrimitiveGenerator, ProducesConfiguredDistinctCandidatesWithSharedBoundaryState)
@@ -317,6 +358,163 @@ TEST(JointPlanResult, InterpolatesSynchronizedPositionVelocityAndYaw)
   EXPECT_NEAR(result.yawRate(1.0), 0.5, 1e-12);
   EXPECT_TRUE(result.jointVelocities(2.0).isZero(1e-12));
   EXPECT_NEAR(result.yawRate(2.0), 0.0, 1e-12);
+}
+
+TEST(TrajectoryHistory, SamplesAndTrimsByArcLength)
+{
+  FollowerConfig config;
+  config.trajectory_sample_interval = 0.1;
+  config.trajectory_buffer_max_length = 0.25;
+  TrajectoryHistory history(config);
+  EXPECT_TRUE(history.append(Eigen::Vector3d(0.0, 0.0, 0.0)));
+  EXPECT_FALSE(history.append(Eigen::Vector3d(0.05, 0.0, 0.0)));
+  EXPECT_TRUE(history.append(Eigen::Vector3d(0.15, 0.0, 0.0)));
+  EXPECT_TRUE(history.append(Eigen::Vector3d(0.30, 0.0, 0.0)));
+  ASSERT_EQ(history.points().size(), 2u);
+  EXPECT_TRUE(history.points().front().position.isApprox(Eigen::Vector3d(0.15, 0.0, 0.0)));
+  EXPECT_NEAR(history.arcLength(), 0.15, 1e-12);
+}
+
+TEST(FollowerYaw, RespectsRateLimitAndPublishSwitch)
+{
+  FollowerConfig config;
+  config.max_yaw_rate = 1.0;
+  EXPECT_NEAR(advanceYaw(0.0, Eigen::Vector3d(0.0, 1.0, 0.0), 0.1, config), 0.1, 1e-12);
+  config.publish_yaw_command = false;
+  EXPECT_NEAR(advanceYaw(0.4, Eigen::Vector3d(0.0, 1.0, 0.0), 1.0, config), 0.4, 1e-12);
+}
+
+TEST(NominalJointPredictor, PreservesHandoverStateAndUsesSharedFollowerGeometry)
+{
+  PrimitiveConfig primitive;
+  primitive.candidate_count = 1;
+  primitive.max_velocity = 0.5;
+  primitive.cruise_velocity = 0.3;
+  const std::vector<Eigen::Vector3d> route = {
+      Eigen::Vector3d(0.0, 0.0, 1.0), Eigen::Vector3d(0.5, 0.0, 1.0)};
+  const Candidate candidate = PrimitiveGenerator(primitive).generate(
+      route, endpointState(route.front()), endpointState(route.back())).front();
+
+  FollowerConfig follower;
+  TrajectoryHistory history(follower);
+  history.append(route.front());
+  NominalJointContext context;
+  context.executed_history = history;
+  context.link_num = 4;
+  context.link_length = 1.0;
+  context.pitch_joint_indices = {0, 2, 4};
+  context.yaw_joint_indices = {1, 3, 5};
+  Eigen::VectorXd start = Eigen::VectorXd::Zero(6);
+  start(1) = M_PI_2;
+  start(3) = M_PI_2;
+  start(5) = M_PI_2;
+
+  const std::vector<NominalJointSample> samples =
+      NominalJointPredictor(follower).predict(candidate.trajectory, context, start, 0.0, 0.05);
+  ASSERT_GT(samples.size(), 2u);
+  EXPECT_DOUBLE_EQ(samples.front().time, 0.0);
+  EXPECT_TRUE(samples.front().joints.isApprox(start, 1e-12));
+  EXPECT_TRUE(samples.back().joints.allFinite());
+}
+
+TEST(PlanningEnvironment, AccumulatesOrReplacesMapVoxels)
+{
+  PlanningEnvironment accumulated(validSharedConfig(true));
+  const Eigen::Vector3d first(-0.5, 0.0, 1.0);
+  const Eigen::Vector3d second(0.5, 0.0, 1.0);
+  accumulated.updateMap({first});
+  accumulated.updateMap({second});
+  EXPECT_TRUE(accumulated.occupied(first));
+  EXPECT_TRUE(accumulated.occupied(second));
+
+  PlanningEnvironment latest(validSharedConfig(false));
+  latest.updateMap({first});
+  latest.updateMap({second});
+  EXPECT_FALSE(latest.occupied(first));
+  EXPECT_TRUE(latest.occupied(second));
+}
+
+TEST(PlanningEnvironment, ClampsTargetsInsideTheConfiguredMap)
+{
+  PlanningEnvironment environment(validSharedConfig());
+  constexpr double clearance = 0.2;
+  const Eigen::Vector3d clamped =
+      environment.clampTarget(Eigen::Vector3d(20.0, -20.0, 20.0), clearance);
+  EXPECT_TRUE((clamped.array() >= (environment.mapOrigin().array() + clearance)).all());
+  EXPECT_TRUE((clamped.array() <= (environment.mapCorner().array() - clearance)).all());
+}
+
+TEST(PlanningEnvironment, TruncatesRoutesAndBuildsTerminalPrimitiveBatch)
+{
+  const std::vector<Eigen::Vector3d> route = {
+      Eigen::Vector3d(0.0, 0.0, 1.0), Eigen::Vector3d(1.0, 0.0, 1.0),
+      Eigen::Vector3d(2.0, 0.0, 1.0)};
+  std::vector<Eigen::Vector3d> local;
+  const Eigen::Vector3d local_target = PlanningEnvironment::truncateRoute(route, 1.5, local);
+  ASSERT_EQ(local.size(), 3u);
+  EXPECT_TRUE(local_target.isApprox(Eigen::Vector3d(1.5, 0.0, 1.0), 1e-12));
+
+  SharedPlannerConfig config = validSharedConfig();
+  config.planning_horizon = 3.0;
+  PlanningEnvironment environment(config);
+  RootState start;
+  start.position = Eigen::Vector3d(-0.5, 0.0, 1.0);
+  const PrimitiveBatch batch = environment.generate(start, Eigen::Vector3d(0.5, 0.0, 1.0));
+  ASSERT_TRUE(batch.success()) << batch.detail;
+  EXPECT_TRUE(batch.terminal);
+  ASSERT_EQ(batch.candidates.size(), 3u);
+  EXPECT_TRUE(batch.candidates.front().trajectory.getPos(0.0).isApprox(start.position, 1e-6));
+}
+
+TEST(CandidateDiagnostics, UsesOneSharedStatusColorMapping)
+{
+  const std_msgs::ColorRGBA selected = candidateColor(CandidateStatus::kCollision, true);
+  EXPECT_FLOAT_EQ(selected.r, 0.0f);
+  EXPECT_FLOAT_EQ(selected.g, 1.0f);
+  const std_msgs::ColorRGBA feasible = candidateColor(CandidateStatus::kFeasible, false);
+  EXPECT_FLOAT_EQ(feasible.g, 1.0f);
+  EXPECT_FLOAT_EQ(feasible.b, 1.0f);
+  const std_msgs::ColorRGBA joint_failure =
+      candidateColor(CandidateStatus::kJointPlanningFailed, false);
+  EXPECT_FLOAT_EQ(joint_failure.r, 1.0f);
+  EXPECT_FLOAT_EQ(joint_failure.g, 0.5f);
+  const std_msgs::ColorRGBA joint_limit = candidateColor(CandidateStatus::kJointLimit, false);
+  EXPECT_FLOAT_EQ(joint_limit.r, 1.0f);
+  EXPECT_FLOAT_EQ(joint_limit.b, 1.0f);
+}
+
+TEST(RootStabilityFallback, AcceptsOnlyAnIsolatedFcRpViolation)
+{
+  multilink_copilot::StabilityConfig config;
+  config.fc_rp_min_threshold = 3.5;
+  config.check_fc_t = true;
+  config.fc_t_min_threshold = 0.05;
+  config.static_thrust_min = 2.0;
+  config.static_thrust_max = 20.0;
+  config.overlap_min_clearance = 0.01;
+  config.max_baselink_tilt = 1.2;
+  config.feasibility_tolerance = 1.0e-6;
+
+  multilink_copilot::StabilityMetrics metrics;
+  metrics.fc_rp_min = 3.0;
+  metrics.fc_t_min = 0.10;
+  metrics.static_thrust_min = 5.0;
+  metrics.static_thrust_max = 10.0;
+  metrics.overlap_clearance = 0.10;
+  metrics.baselink_tilt = 0.5;
+  EXPECT_TRUE(isOnlyFcRpViolation(metrics, config));
+
+  metrics.baselink_tilt = 1.3;
+  EXPECT_FALSE(isOnlyFcRpViolation(metrics, config));
+  metrics.baselink_tilt = 0.5;
+  metrics.static_thrust_min = 1.0;
+  EXPECT_FALSE(isOnlyFcRpViolation(metrics, config));
+  metrics.static_thrust_min = 5.0;
+  metrics.fc_t_min = 0.01;
+  EXPECT_FALSE(isOnlyFcRpViolation(metrics, config));
+  metrics.fc_t_min = 0.10;
+  metrics.fc_rp_min = 4.0;
+  EXPECT_FALSE(isOnlyFcRpViolation(metrics, config));
 }
 }  // namespace
 }  // namespace motion_primitive_planner

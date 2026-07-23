@@ -4,7 +4,7 @@
     <arg name="robot_ns" default="dragon" />
     <arg name="world_frame_id" default="world" />
     <arg name="root_child_frame_id" default="root" />
-    <arg name="pcl_topic" default="pcl_topic" />
+    <arg name="pcl_topic" default="/$(arg robot_ns)/cloud_registered_body" />
     <arg name="target_topic" default="/move_base_simple/goal" />
     <arg name="odom_topic" default="root/flu_odom" />
     <arg name="joint_states_topic" default="joint_states" />
@@ -26,6 +26,7 @@
     <arg name="max_joint_command_step" default="0.10" />
     <arg name="publish_yaw_command" default="true" />
     <arg name="max_yaw_rate" default="1.5" />
+    <arg name="snake_ik_singularity_threshold" default="0.10" />
 
     <arg name="stability_check_fc_t" default="false" />
     <arg name="fc_rp_min_threshold" default="3.2" />
@@ -42,11 +43,12 @@
     <arg name="use_fixed_target_height" default="false" />
     <arg name="target_height" default="1.0" />
     <arg name="use_target_z" default="true" />
-    <arg name="max_vel_mag" default="0.2" />
+    <arg name="max_vel_mag" default="1.0" />
 
     <group ns="$(arg robot_ns)">
       <node pkg="motion_primitive_planner" type="whole_body_motion_primitive_planner_node"
             name="$(arg node_name)" output="screen">
+        <rosparam file="$(find motion_primitive_planner)/config/common_motion_primitive_planner.yaml" command="load" />
         <rosparam file="$(find motion_primitive_planner)/config/whole_body_motion_primitive_planner.yaml" command="load" />
         <remap from="pcl_topic" to="$(arg pcl_topic)" />
         <remap from="target" to="$(arg target_topic)" />
@@ -74,6 +76,7 @@
         <param name="MaxJointCommandStep" value="$(arg max_joint_command_step)" />
         <param name="PublishYawCommand" value="$(arg publish_yaw_command)" />
         <param name="MaxYawRate" value="$(arg max_yaw_rate)" />
+        <param name="SnakeIkSingularityThreshold" value="$(arg snake_ik_singularity_threshold)" />
         <param name="CommandHz" value="$(arg command_hz)" />
         <param name="StabilityCheckFcT" value="$(arg stability_check_fc_t)" />
         <param name="FcRpMinThreshold" value="$(arg fc_rp_min_threshold)" />

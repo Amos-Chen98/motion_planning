@@ -22,6 +22,7 @@ enum class CandidateStatus
   kJointLimit,
   kStability,
   kStabilityProjection,
+  kJointPlanningFailed,
   kFeasible,
   kSelected
 };

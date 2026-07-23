@@ -3,6 +3,7 @@
 #include <dragon/model/hydrus_like_robot_model.h>
 #include <pluginlib/class_loader.h>
 #include <ros/ros.h>
+#include <sensor_msgs/JointState.h>
 
 #include <gtest/gtest.h>
 
@@ -149,6 +150,44 @@ TEST_F(WholeBodyJointPlannerIntegration, MatchesLegacyMetricsAndProjectsToSafeCo
   EXPECT_TRUE(projected_metrics.safe);
   EXPECT_GE(projected_metrics.fc_rp_min + 1e-4, 3.2);
   EXPECT_LT((projected - desired).norm(), (reference - desired).norm());
+}
+
+TEST_F(WholeBodyJointPlannerIntegration, RejectsJointLimitViolationsInTheSharedEvaluator)
+{
+  Eigen::VectorXd outside_limits = Eigen::VectorXd::Zero(6);
+  outside_limits(0) = 10.0;
+  multilink_copilot::StabilityMetrics metrics;
+  EXPECT_FALSE(evaluator_->evaluate(outside_limits, metrics));
+}
+
+TEST_F(WholeBodyJointPlannerIntegration, ExtractsSharedDragonJointMetadataAndCompleteStates)
+{
+  const DragonModelInfo info(model_);
+  EXPECT_EQ(info.linkNum(), 4);
+  EXPECT_GT(info.linkLength(), 0.0);
+  ASSERT_EQ(info.jointNames().size(), 6u);
+  EXPECT_EQ(info.pitchJointIndices(), (std::vector<int>{0, 2, 4}));
+  EXPECT_EQ(info.yawJointIndices(), (std::vector<int>{1, 3, 5}));
+
+  sensor_msgs::JointState complete;
+  for (int index = info.jointCount() - 1; index >= 0; --index)
+  {
+    complete.name.push_back(info.jointNames()[static_cast<size_t>(index)]);
+    complete.position.push_back(0.1 * index);
+  }
+  Eigen::VectorXd joints = Eigen::VectorXd::Constant(info.jointCount(), -1.0);
+  ASSERT_TRUE(info.readCompleteJointState(complete, joints));
+  for (int index = 0; index < joints.size(); ++index)
+  {
+    EXPECT_NEAR(joints(index), 0.1 * index, 1e-12);
+  }
+
+  sensor_msgs::JointState incomplete = complete;
+  incomplete.name.pop_back();
+  incomplete.position.pop_back();
+  const Eigen::VectorXd previous = joints;
+  EXPECT_FALSE(info.readCompleteJointState(incomplete, joints));
+  EXPECT_TRUE(joints.isApprox(previous, 1e-12));
 }
 }  // namespace
 }  // namespace motion_primitive_planner

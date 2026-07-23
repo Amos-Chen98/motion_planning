@@ -1,4 +1,5 @@
 #include <motion_primitive_planner/joint_trajectory_planner.h>
+#include <motion_primitive_planner/planner_config.h>
 #include <motion_primitive_planner/planner_core.h>
 
 #include <aerial_robot_msgs/FullStateTarget.h>
@@ -11,9 +12,6 @@
 #include <ros/master.h>
 #include <sensor_msgs/JointState.h>
 #include <sensor_msgs/PointCloud2.h>
-#include <std_msgs/Float64.h>
-#include <std_msgs/Int32.h>
-#include <visualization_msgs/MarkerArray.h>
 
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_cloud.h>
@@ -25,14 +23,11 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace motion_primitive_planner
@@ -41,112 +36,6 @@ namespace
 {
 constexpr char kRobotModelPlugin[] = "dragon/hydrus_like_robot_model";
 constexpr double kEpsilon = 1e-6;
-
-double yawFromQuaternion(const geometry_msgs::Quaternion& quaternion)
-{
-  const double norm = std::sqrt(quaternion.x * quaternion.x + quaternion.y * quaternion.y +
-                                quaternion.z * quaternion.z + quaternion.w * quaternion.w);
-  if (norm < kEpsilon)
-  {
-    return 0.0;
-  }
-  return std::atan2(2.0 * (quaternion.w * quaternion.z + quaternion.x * quaternion.y) / (norm * norm),
-                    1.0 - 2.0 * (quaternion.y * quaternion.y + quaternion.z * quaternion.z) / (norm * norm));
-}
-
-bool extractSegmentIndex(const std::string& name, const std::string& suffix, int& segment)
-{
-  constexpr char prefix[] = "joint";
-  const size_t suffix_position = name.rfind(suffix);
-  if (name.compare(0, sizeof(prefix) - 1, prefix) != 0 || suffix_position == std::string::npos ||
-      suffix_position + suffix.size() != name.size())
-  {
-    return false;
-  }
-  try
-  {
-    segment = std::stoi(name.substr(sizeof(prefix) - 1, suffix_position - (sizeof(prefix) - 1))) - 1;
-  }
-  catch (const std::exception&)
-  {
-    return false;
-  }
-  return segment >= 0;
-}
-
-struct WholeBodyPlannerConfig
-{
-  gcopter_planner::CommonPlannerConfig common;
-  PrimitiveConfig primitive;
-  JointPlannerConfig joint;
-  multilink_copilot::StabilityConfig stability;
-  double replan_hz = 2.0;
-  bool use_accumulated_map = true;
-  double goal_tolerance = 0.2;
-  double planning_horizon = 3.0;
-  double whole_body_radius = 0.30;
-  double activation_lead_time = 0.75;
-  std::string root_child_frame_id = "root";
-
-  explicit WholeBodyPlannerConfig(const ros::NodeHandle& private_nh) : common(private_nh)
-  {
-    private_nh.param("ReplanHz", replan_hz, replan_hz);
-    private_nh.param("UseAccumulatedMap", use_accumulated_map, use_accumulated_map);
-    private_nh.param("GoalTolerance", goal_tolerance, goal_tolerance);
-    private_nh.param("PlanningHorizon", planning_horizon, planning_horizon);
-    private_nh.param("CandidateCount", primitive.candidate_count, primitive.candidate_count);
-    private_nh.param("MaxPrimitiveOffset", primitive.max_offset, primitive.max_offset);
-    private_nh.param("PrimitiveCruiseVelocity", primitive.cruise_velocity, 0.8 * common.maxVelMag);
-    private_nh.param("MinimumPieceDuration", primitive.minimum_piece_duration, primitive.minimum_piece_duration);
-    primitive.max_velocity = common.maxVelMag;
-
-    private_nh.param("JointReferenceDt", joint.reference_dt, joint.reference_dt);
-    private_nh.param("CommandHz", joint.command_hz, joint.command_hz);
-    private_nh.param("JointPlanningTimeout", joint.planning_timeout, joint.planning_timeout);
-    private_nh.param("JointValidityResolution", joint.validity_resolution, joint.validity_resolution);
-    private_nh.param("MaxJointVelocity", joint.max_joint_velocity, joint.max_joint_velocity);
-    private_nh.param("MaxJointCommandStep", joint.max_joint_command_step, joint.max_joint_command_step);
-    private_nh.param("TrajectorySampleInterval", joint.trajectory_sample_interval,
-                     joint.trajectory_sample_interval);
-    private_nh.param("TrajectoryBufferMaxLength", joint.trajectory_buffer_max_length,
-                     joint.trajectory_buffer_max_length);
-    private_nh.param("SnakeIkSingularityThreshold", joint.ik_singularity_threshold,
-                     joint.ik_singularity_threshold);
-    private_nh.param("MaxYawRate", joint.max_yaw_rate, joint.max_yaw_rate);
-    private_nh.param("PublishYawCommand", joint.publish_yaw_command, joint.publish_yaw_command);
-    int random_seed = static_cast<int>(joint.random_seed);
-    private_nh.param("JointPlannerSeed", random_seed, random_seed);
-    joint.random_seed = static_cast<unsigned int>(std::max(0, random_seed));
-
-    private_nh.param("StabilityQpMaxIterations", stability.qp_max_iterations, stability.qp_max_iterations);
-    private_nh.param("StabilityQpJointStepLimit", stability.qp_joint_step_limit,
-                     stability.qp_joint_step_limit);
-    private_nh.param("StabilityQpRegularization", stability.qp_regularization,
-                     stability.qp_regularization);
-    private_nh.param("StabilityQpConvergenceTolerance", stability.qp_convergence_tolerance,
-                     stability.qp_convergence_tolerance);
-    private_nh.param("FeasibilityTolerance", stability.feasibility_tolerance,
-                     stability.feasibility_tolerance);
-    private_nh.param("StabilityCheckFcT", stability.check_fc_t, stability.check_fc_t);
-    private_nh.param("FcRpMinThreshold", stability.fc_rp_min_threshold, stability.fc_rp_min_threshold);
-    private_nh.param("FcTMinThreshold", stability.fc_t_min_threshold, stability.fc_t_min_threshold);
-    private_nh.param("StaticThrustMin", stability.static_thrust_min, stability.static_thrust_min);
-    private_nh.param("StaticThrustMax", stability.static_thrust_max, stability.static_thrust_max);
-    private_nh.param("OverlapMinClearance", stability.overlap_min_clearance,
-                     stability.overlap_min_clearance);
-    private_nh.param("MaxBaselinkTilt", stability.max_baselink_tilt, stability.max_baselink_tilt);
-    private_nh.param("WholeBodyRadius", whole_body_radius, whole_body_radius);
-    private_nh.param("PlanActivationLeadTime", activation_lead_time, activation_lead_time);
-    private_nh.param("RootChildFrameId", root_child_frame_id, root_child_frame_id);
-
-    common.validateOrThrow();
-    if (replan_hz <= 0.0 || goal_tolerance <= 0.0 || planning_horizon <= 0.0 ||
-        whole_body_radius < 0.0 || activation_lead_time <= 0.0 || root_child_frame_id.empty())
-    {
-      throw std::invalid_argument("Invalid whole-body motion primitive planner configuration");
-    }
-  }
-};
 
 class ClearanceMap
 {
@@ -271,21 +160,12 @@ struct ActivePlan
   }
 };
 
-enum class WholeBodyCandidateStatus
-{
-  kGenerationFailed,
-  kJointPlanningFailed,
-  kCollision,
-  kFeasible,
-  kSelected
-};
-
 struct WholeBodyCandidate
 {
   Candidate root;
   Trajectory<5> scaled_root;
   JointPlanResult joints;
-  WholeBodyCandidateStatus status = WholeBodyCandidateStatus::kGenerationFailed;
+  CandidateStatus status = CandidateStatus::kGenerationFailed;
   double minimum_clearance = -std::numeric_limits<double>::infinity();
   std::string detail;
 };
@@ -297,15 +177,17 @@ public:
   WholeBodyOnlinePlanner(const WholeBodyPlannerConfig& config, ros::NodeHandle& nh)
     : config_(config)
     , nh_(nh)
-    , backend_(config.common)
-    , ros_interface_(config.common, nh_)
-    , generator_(config.primitive)
+    , environment_(config.shared)
+    , ros_interface_(config.shared.common, nh_)
     , robot_model_loader_("aerial_robot_model", "aerial_robot_model::RobotModel")
+    , executed_history_(config.joint.follower)
+    , diagnostics_(nh_, config.shared.common.worldFrameId,
+                   "whole_body_root_candidates", 0.015)
   {
     initializeRobotModels();
     {
       std::lock_guard<std::mutex> lock(map_mutex_);
-      rebuildMapLocked();
+      rebuildClearanceMapLocked();
     }
     map_sub_ = nh_.subscribe("pcl_topic", 1, &WholeBodyOnlinePlanner::mapCallback, this,
                              ros::TransportHints().tcpNoDelay());
@@ -321,19 +203,14 @@ public:
       throw std::runtime_error("Another node already publishes " + full_state_topic_);
     }
     full_state_pub_ = nh_.advertise<aerial_robot_msgs::FullStateTarget>("full_state_target", 10);
-    marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("candidate_markers", 1, true);
-    selected_candidate_pub_ = nh_.advertise<std_msgs::Int32>("selected_candidate", 1, true);
-    selected_min_fc_pub_ = nh_.advertise<std_msgs::Float64>("selected_min_fc_rp", 1, true);
-    selected_min_clearance_pub_ = nh_.advertise<std_msgs::Float64>("selected_min_clearance", 1, true);
-    selected_joint_motion_pub_ = nh_.advertise<std_msgs::Float64>("selected_joint_motion", 1, true);
-    command_timer_ = nh_.createTimer(ros::Duration(1.0 / config_.joint.command_hz),
+    command_timer_ = nh_.createTimer(ros::Duration(1.0 / config_.joint.follower.command_hz),
                                      &WholeBodyOnlinePlanner::commandTimerCallback, this);
-    planning_timer_ = nh_.createTimer(ros::Duration(1.0 / config_.replan_hz),
+    planning_timer_ = nh_.createTimer(ros::Duration(1.0 / config_.shared.replan_hz),
                                       &WholeBodyOnlinePlanner::planningTimerCallback, this);
     publisher_guard_timer_ = nh_.createTimer(ros::Duration(1.0),
                                              &WholeBodyOnlinePlanner::publisherGuardTimerCallback, this);
     ROS_INFO("Whole-body motion primitive planner ready: candidates=%d, fc_rp_min>=%.2f, radius=%.2f m.",
-             config_.primitive.candidate_count, config_.stability.fc_rp_min_threshold,
+             config_.shared.primitive.candidate_count, config_.stability.fc_rp_min_threshold,
              config_.whole_body_radius);
   }
 
@@ -390,7 +267,8 @@ private:
 
   void initializeRobotModels()
   {
-    for (int candidate_index = 0; candidate_index < config_.primitive.candidate_count; ++candidate_index)
+    for (int candidate_index = 0;
+         candidate_index < config_.shared.primitive.candidate_count; ++candidate_index)
     {
       const auto base_model = robot_model_loader_.createInstance(kRobotModelPlugin);
       const auto model = boost::dynamic_pointer_cast<Dragon::HydrusLikeRobotModel>(base_model);
@@ -406,48 +284,15 @@ private:
       joint_planners_.emplace_back(new JointTrajectoryPlanner(joint_config, evaluator));
     }
 
-    const auto& model = robot_models_.front();
-    link_num_ = model->getRotorNum();
-    link_length_ = model->getLinkLength();
-    link_joint_names_ = model->getLinkJointNames();
-    link_joint_indices_ = model->getLinkJointIndices();
-    current_joints_ = Eigen::VectorXd::Zero(static_cast<int>(link_joint_indices_.size()));
-    pitch_indices_.assign(static_cast<size_t>(std::max(0, link_num_ - 1)), -1);
-    yaw_indices_.assign(static_cast<size_t>(std::max(0, link_num_ - 1)), -1);
-    for (size_t index = 0; index < link_joint_names_.size(); ++index)
-    {
-      joint_name_to_index_[link_joint_names_[index]] = static_cast<int>(index);
-      int segment = -1;
-      if (extractSegmentIndex(link_joint_names_[index], "_pitch", segment) &&
-          segment < static_cast<int>(pitch_indices_.size()))
-      {
-        pitch_indices_[static_cast<size_t>(segment)] = static_cast<int>(index);
-      }
-      else if (extractSegmentIndex(link_joint_names_[index], "_yaw", segment) &&
-               segment < static_cast<int>(yaw_indices_.size()))
-      {
-        yaw_indices_[static_cast<size_t>(segment)] = static_cast<int>(index);
-      }
-    }
-    if (link_num_ <= 0 || link_length_ <= 0.0 ||
-        std::find(pitch_indices_.begin(), pitch_indices_.end(), -1) != pitch_indices_.end() ||
-        std::find(yaw_indices_.begin(), yaw_indices_.end(), -1) != yaw_indices_.end())
-    {
-      throw std::runtime_error("Incomplete DRAGON link geometry or joint mapping");
-    }
+    model_info_.reset(new DragonModelInfo(robot_models_.front()));
+    current_joints_ = Eigen::VectorXd::Zero(model_info_->jointCount());
   }
 
-  void rebuildMapLocked()
+  void rebuildClearanceMapLocked()
   {
-    std::vector<Eigen::Vector3i> occupied;
-    occupied.reserve(occupied_voxel_keys_.size());
-    for (const long key : occupied_voxel_keys_)
-    {
-      occupied.push_back(backend_.voxelIdFromKey(key));
-    }
-    backend_.setMapVoxels(occupied);
-    clearance_map_ = std::make_shared<ClearanceMap>(backend_.mapOrigin(), backend_.mapCorner(),
-                                                    backend_.voxelScale(), occupied);
+    const std::vector<Eigen::Vector3i> occupied = environment_.occupiedVoxels();
+    clearance_map_ = std::make_shared<ClearanceMap>(
+        environment_.mapOrigin(), environment_.mapCorner(), environment_.voxelScale(), occupied);
   }
 
   void mapCallback(const sensor_msgs::PointCloud2::ConstPtr& message)
@@ -463,29 +308,19 @@ private:
       return;
     }
     std::lock_guard<std::mutex> lock(map_mutex_);
-    if (!config_.use_accumulated_map)
-    {
-      occupied_voxel_keys_.clear();
-    }
-    for (const Eigen::Vector3d& point : points)
-    {
-      const long key = backend_.voxelKey(point);
-      if (key >= 0)
-      {
-        occupied_voxel_keys_.insert(key);
-      }
-    }
-    rebuildMapLocked();
+    environment_.updateMap(points);
+    rebuildClearanceMapLocked();
   }
 
   void targetCallback(const geometry_msgs::PoseStamped::ConstPtr& message)
   {
     const Eigen::Vector3d requested(message->pose.position.x, message->pose.position.y,
-                                    config_.common.resolveTargetHeight(*message));
+                                    config_.shared.common.resolveTargetHeight(*message));
     Eigen::Vector3d target;
     {
       std::lock_guard<std::mutex> lock(map_mutex_);
-      target = backend_.clampInsideMap(requested, config_.whole_body_radius + backend_.voxelScale());
+      target = environment_.clampTarget(
+          requested, config_.whole_body_radius + environment_.voxelScale());
     }
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
@@ -519,68 +354,10 @@ private:
   void jointStateCallback(const sensor_msgs::JointState::ConstPtr& message)
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    Eigen::VectorXd measured = current_joints_;
-    std::vector<bool> seen(link_joint_names_.size(), false);
-    const size_t count = std::min(message->name.size(), message->position.size());
-    for (size_t index = 0; index < count; ++index)
+    if (model_info_->readCompleteJointState(*message, current_joints_))
     {
-      const auto found = joint_name_to_index_.find(message->name[index]);
-      if (found == joint_name_to_index_.end() || !std::isfinite(message->position[index]))
-      {
-        continue;
-      }
-      measured(found->second) = message->position[index];
-      seen[static_cast<size_t>(found->second)] = true;
-    }
-    if (std::find(seen.begin(), seen.end(), false) == seen.end())
-    {
-      current_joints_ = measured;
       joints_received_ = true;
     }
-  }
-
-  static bool appendHistory(const Eigen::Vector3d& position, double sample_interval, double maximum_length,
-                            std::deque<multilink_copilot::TrajectoryPoint>& history, double& arc_length)
-  {
-    if (history.empty())
-    {
-      history.push_back({position});
-      return true;
-    }
-    const double distance = (position - history.back().position).norm();
-    if (distance < sample_interval)
-    {
-      return false;
-    }
-    history.push_back({position});
-    arc_length += distance;
-    while (history.size() > 1 && arc_length > maximum_length)
-    {
-      arc_length -= (history[1].position - history[0].position).norm();
-      history.pop_front();
-    }
-    return true;
-  }
-
-  Eigen::Vector3d truncateRoute(const std::vector<Eigen::Vector3d>& full_route,
-                                std::vector<Eigen::Vector3d>& local_route) const
-  {
-    local_route.clear();
-    local_route.push_back(full_route.front());
-    double length = 0.0;
-    for (size_t index = 1; index < full_route.size(); ++index)
-    {
-      const double segment = (full_route[index] - full_route[index - 1]).norm();
-      if (length + segment >= config_.planning_horizon)
-      {
-        const double ratio = segment > kEpsilon ? (config_.planning_horizon - length) / segment : 0.0;
-        local_route.push_back(full_route[index - 1] + ratio * (full_route[index] - full_route[index - 1]));
-        return local_route.back();
-      }
-      length += segment;
-      local_route.push_back(full_route[index]);
-    }
-    return local_route.back();
   }
 
   double minimumWholeBodyClearance(const Trajectory<5>& root,
@@ -588,9 +365,9 @@ private:
                                    const std::shared_ptr<const ClearanceMap>& map) const
   {
     const double duration = root.getTotalDuration();
-    const double command_dt = 1.0 / config_.joint.command_hz;
+    const double command_dt = 1.0 / config_.joint.follower.command_hz;
     const double spatial_resolution = 0.5 * map->voxelWidth();
-    const double body_length = static_cast<double>(link_num_) * link_length_;
+    const double body_length = static_cast<double>(model_info_->linkNum()) * model_info_->linkLength();
     double minimum = std::numeric_limits<double>::infinity();
 
     const auto evaluate_time = [&](double time, double& current_minimum) {
@@ -600,7 +377,9 @@ private:
       const Eigen::Matrix3d rotation =
           Eigen::AngleAxisd(yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
       const std::vector<Eigen::Vector3d> endpoints =
-          linkEndpoints(tail, rotation, q, pitch_indices_, yaw_indices_, link_num_, link_length_);
+          linkEndpoints(tail, rotation, q, model_info_->pitchJointIndices(),
+                        model_info_->yawJointIndices(), model_info_->linkNum(),
+                        model_info_->linkLength());
       for (size_t segment = 1; segment < endpoints.size(); ++segment)
       {
         const Eigen::Vector3d delta = endpoints[segment] - endpoints[segment - 1];
@@ -660,7 +439,7 @@ private:
       // The root path can curve between command samples, so the endpoint chord is not a
       // conservative swept-distance bound. Primitive generation enforces max_velocity.
       const double root_displacement_bound =
-          config_.primitive.max_velocity * (end_time - start_time);
+          config_.shared.primitive.max_velocity * (end_time - start_time);
       const double yaw_delta = std::abs(joints.yaw(end_time) - joints.yaw(start_time));
       const Eigen::VectorXd q_delta = joints.jointPositions(end_time) - joints.jointPositions(start_time);
       const double angular_delta = q_delta.size() > 0 ? q_delta.cwiseAbs().sum() : 0.0;
@@ -686,7 +465,7 @@ private:
     scores.reserve(candidates.size());
     for (const WholeBodyCandidate& candidate : candidates)
     {
-      scores.push_back({candidate.status == WholeBodyCandidateStatus::kFeasible,
+      scores.push_back({candidate.status == CandidateStatus::kFeasible,
                         candidate.minimum_clearance,
                         candidate.joints.duration,
                         candidate.joints.joint_motion,
@@ -697,76 +476,23 @@ private:
 
   void publishDiagnostics(const std::vector<WholeBodyCandidate>& candidates, int selected)
   {
-    visualization_msgs::MarkerArray array;
-    visualization_msgs::Marker clear;
-    clear.action = visualization_msgs::Marker::DELETEALL;
-    array.markers.push_back(clear);
-    const ros::Time stamp = ros::Time::now();
-    for (size_t index = 0; index < candidates.size(); ++index)
+    std::vector<CandidateVisualization> visualizations;
+    visualizations.reserve(candidates.size());
+    for (const WholeBodyCandidate& candidate : candidates)
     {
-      const WholeBodyCandidate& candidate = candidates[index];
       const Trajectory<5>& root = candidate.scaled_root.getPieceNum() > 0 ? candidate.scaled_root :
                                                                               candidate.root.trajectory;
-      if (root.getPieceNum() <= 0)
-      {
-        continue;
-      }
-      visualization_msgs::Marker marker;
-      marker.header.frame_id = config_.common.worldFrameId;
-      marker.header.stamp = stamp;
-      marker.ns = "whole_body_root_candidates";
-      marker.id = static_cast<int>(index);
-      marker.type = visualization_msgs::Marker::LINE_STRIP;
-      marker.action = visualization_msgs::Marker::ADD;
-      marker.pose.orientation.w = 1.0;
-      marker.scale.x = 0.015;
-      marker.color.a = 0.9;
-      if (static_cast<int>(index) == selected)
-      {
-        marker.color.g = 1.0;
-      }
-      else if (candidate.status == WholeBodyCandidateStatus::kFeasible)
-      {
-        marker.color.g = 1.0;
-        marker.color.b = 1.0;
-      }
-      else if (candidate.status == WholeBodyCandidateStatus::kJointPlanningFailed)
-      {
-        marker.color.r = 1.0;
-        marker.color.g = 0.5;
-      }
-      else
-      {
-        marker.color.r = 1.0;
-      }
-      const double duration = root.getTotalDuration();
-      for (int sample = 0; sample <= 80; ++sample)
-      {
-        const Eigen::Vector3d point = root.getPos(duration * sample / 80.0);
-        geometry_msgs::Point message;
-        message.x = point.x();
-        message.y = point.y();
-        message.z = point.z();
-        marker.points.push_back(message);
-      }
-      array.markers.push_back(marker);
+      visualizations.push_back({&root, candidate.status});
     }
-
-    marker_pub_.publish(array);
-
-    std_msgs::Int32 selected_message;
-    selected_message.data = selected;
-    selected_candidate_pub_.publish(selected_message);
-    std_msgs::Float64 value;
-    value.data = selected >= 0 ? candidates[static_cast<size_t>(selected)].joints.minimum_fc_rp :
-                                 std::numeric_limits<double>::quiet_NaN();
-    selected_min_fc_pub_.publish(value);
-    value.data = selected >= 0 ? candidates[static_cast<size_t>(selected)].minimum_clearance :
-                                 std::numeric_limits<double>::quiet_NaN();
-    selected_min_clearance_pub_.publish(value);
-    value.data = selected >= 0 ? candidates[static_cast<size_t>(selected)].joints.joint_motion :
-                                 std::numeric_limits<double>::quiet_NaN();
-    selected_joint_motion_pub_.publish(value);
+    SelectedCandidateMetrics metrics;
+    if (selected >= 0)
+    {
+      const WholeBodyCandidate& candidate = candidates[static_cast<size_t>(selected)];
+      metrics.minimum_fc_rp = candidate.joints.minimum_fc_rp;
+      metrics.minimum_clearance = candidate.minimum_clearance;
+      metrics.joint_motion = candidate.joints.joint_motion;
+    }
+    diagnostics_.publish(visualizations, selected, metrics);
   }
 
   void planningTimerCallback(const ros::TimerEvent&)
@@ -797,8 +523,7 @@ private:
     Eigen::Vector3d target;
     uint64_t target_sequence = 0;
     CommandState measured;
-    std::deque<multilink_copilot::TrajectoryPoint> history;
-    double history_length = 0.0;
+    TrajectoryHistory history;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (!target_received_ || !odom_received_ || !joints_received_)
@@ -811,7 +536,6 @@ private:
       measured.joint_positions = current_joints_;
       measured.joint_velocities = Eigen::VectorXd::Zero(current_joints_.size());
       history = executed_history_;
-      history_length = executed_arc_length_;
     }
 
     const ros::Time planning_time = ros::Time::now();
@@ -825,7 +549,8 @@ private:
     if (active_snapshot)
     {
       const int future_samples = std::max(
-          1, static_cast<int>(std::ceil(config_.activation_lead_time * config_.joint.command_hz)));
+          1, static_cast<int>(std::ceil(
+                 config_.activation_lead_time * config_.joint.follower.command_hz)));
       for (int sample = 1; sample <= future_samples; ++sample)
       {
         const ros::Time sample_time = planning_time +
@@ -834,15 +559,13 @@ private:
         if (predicted.valid)
         {
           start = predicted;
-          appendHistory(predicted.tail_position, config_.joint.trajectory_sample_interval,
-                        config_.joint.trajectory_buffer_max_length, history, history_length);
+          history.append(predicted.tail_position);
         }
       }
     }
-    appendHistory(start.tail_position, config_.joint.trajectory_sample_interval,
-                  config_.joint.trajectory_buffer_max_length, history, history_length);
+    history.append(start.tail_position);
 
-    if ((start.tail_position - target).norm() <= config_.goal_tolerance)
+    if ((start.tail_position - target).norm() <= config_.shared.goal_tolerance)
     {
       if (active_snapshot && !active_snapshot->hold)
       {
@@ -870,55 +593,29 @@ private:
       return;
     }
 
-    std::vector<Eigen::Vector3d> full_route;
     std::shared_ptr<const ClearanceMap> clearance_map;
+    PrimitiveBatch batch;
     {
       std::lock_guard<std::mutex> lock(map_mutex_);
       clearance_map = clearance_map_;
-      if (backend_.query(start.tail_position) || !backend_.searchPath(start.tail_position, target, full_route))
-      {
-        enterHold(currentCommandOr(start), target_sequence, "root route search failed");
-        return;
-      }
+      RootState root_start;
+      root_start.position = start.tail_position;
+      root_start.velocity = start.tail_velocity;
+      root_start.acceleration = start.tail_acceleration;
+      batch = environment_.generate(root_start, target);
     }
-
-    std::vector<Eigen::Vector3d> local_route;
-    const Eigen::Vector3d local_target = truncateRoute(full_route, local_route);
-    if (local_route.size() < 2)
+    if (!batch.success())
     {
-      enterHold(currentCommandOr(start), target_sequence, "local route is empty");
+      enterHold(currentCommandOr(start), target_sequence, batch.detail);
       return;
     }
-    const bool terminal = (local_target - full_route.back()).norm() <= kEpsilon;
-    Eigen::Vector3d final_velocity = Eigen::Vector3d::Zero();
-    const Eigen::Vector3d tangent = local_route.back() - local_route[local_route.size() - 2];
-    if (!terminal && tangent.norm() > kEpsilon)
-    {
-      final_velocity = config_.primitive.cruise_velocity * tangent.normalized();
-    }
-    Eigen::Matrix3d initial_state;
-    initial_state.col(0) = start.tail_position;
-    initial_state.col(1) = start.tail_velocity;
-    initial_state.col(2) = start.tail_acceleration;
-    Eigen::Matrix3d final_state;
-    final_state.col(0) = local_target;
-    final_state.col(1) = final_velocity;
-    final_state.col(2).setZero();
+    std::vector<WholeBodyCandidate> candidates(batch.candidates.size());
+    const NominalJointContext nominal_context = makeNominalJointContext(history, *model_info_);
 
-    std::vector<Candidate> root_candidates = generator_.generate(local_route, initial_state, final_state);
-    std::vector<WholeBodyCandidate> candidates(root_candidates.size());
-    NominalJointContext nominal_context;
-    nominal_context.executed_history = history;
-    nominal_context.executed_arc_length = history_length;
-    nominal_context.link_num = link_num_;
-    nominal_context.link_length = link_length_;
-    nominal_context.pitch_joint_indices = pitch_indices_;
-    nominal_context.yaw_joint_indices = yaw_indices_;
-
-    for (size_t index = 0; index < root_candidates.size(); ++index)
+    for (size_t index = 0; index < batch.candidates.size(); ++index)
     {
       WholeBodyCandidate& candidate = candidates[index];
-      candidate.root = root_candidates[index];
+      candidate.root = batch.candidates[index];
       if (candidate.root.status == CandidateStatus::kGenerationFailed)
       {
         candidate.detail = candidate.root.detail;
@@ -928,7 +625,7 @@ private:
                                                       start.joint_positions, start.yaw);
       if (!candidate.joints.success)
       {
-        candidate.status = WholeBodyCandidateStatus::kJointPlanningFailed;
+        candidate.status = CandidateStatus::kJointPlanningFailed;
         candidate.detail = candidate.joints.detail;
         continue;
       }
@@ -938,17 +635,17 @@ private:
                                                               clearance_map);
       if (candidate.minimum_clearance < 0.0)
       {
-        candidate.status = WholeBodyCandidateStatus::kCollision;
+        candidate.status = CandidateStatus::kCollision;
         candidate.detail = "whole-body swept clearance is negative";
         continue;
       }
-      candidate.status = WholeBodyCandidateStatus::kFeasible;
+      candidate.status = CandidateStatus::kFeasible;
     }
 
     const int selected = selectBest(candidates);
     if (selected >= 0)
     {
-      candidates[static_cast<size_t>(selected)].status = WholeBodyCandidateStatus::kSelected;
+      candidates[static_cast<size_t>(selected)].status = CandidateStatus::kSelected;
     }
     publishDiagnostics(candidates, selected);
     if (selected < 0)
@@ -967,7 +664,7 @@ private:
     plan->target_sequence = target_sequence;
     plan->root_trajectory = selected_candidate.scaled_root;
     plan->joint_plan = selected_candidate.joints;
-    plan->terminal = terminal;
+    plan->terminal = batch.terminal;
     {
       std::lock_guard<std::mutex> plan_lock(plan_mutex_);
       std::lock_guard<std::mutex> state_lock(state_mutex_);
@@ -1004,7 +701,7 @@ private:
 
   void enterHold(CommandState state, uint64_t target_sequence, const std::string& reason)
   {
-    if (!state.valid || state.joint_positions.size() != static_cast<int>(link_joint_names_.size()))
+    if (!state.valid || state.joint_positions.size() != model_info_->jointCount())
     {
       ROS_ERROR_THROTTLE(1.0, "Cannot enter whole-body hold: no complete state is available.");
       return;
@@ -1083,12 +780,18 @@ private:
     {
       return;
     }
+    if (terminal_complete)
+    {
+      state.tail_velocity.setZero();
+      state.tail_acceleration.setZero();
+      state.yaw_rate = 0.0;
+      state.joint_velocities = Eigen::VectorXd::Zero(state.joint_positions.size());
+    }
     publishFullStateTarget(state, now);
     bool completed_current_target = false;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      appendHistory(state.tail_position, config_.joint.trajectory_sample_interval,
-                    config_.joint.trajectory_buffer_max_length, executed_history_, executed_arc_length_);
+      executed_history_.append(state.tail_position);
       if (terminal_complete && target_received_ && completed_target_sequence == target_sequence_)
       {
         goal_latched_.store(true);
@@ -1104,11 +807,12 @@ private:
   void publishFullStateTarget(const CommandState& state, const ros::Time& stamp)
   {
     const RootCommandKinematics root = tailFluToRootLinkCommand(
-        state.tail_position, state.tail_velocity, state.yaw, state.yaw_rate, link_length_);
+        state.tail_position, state.tail_velocity, state.yaw, state.yaw_rate,
+        model_info_->linkLength());
 
     aerial_robot_msgs::FullStateTarget message;
     message.header.stamp = stamp;
-    message.header.frame_id = config_.common.worldFrameId;
+    message.header.frame_id = config_.shared.common.worldFrameId;
     message.root_state.header = message.header;
     message.root_state.child_frame_id = config_.root_child_frame_id;
     message.root_state.pose.pose.position.x = root.position.x();
@@ -1121,7 +825,7 @@ private:
     message.root_state.twist.twist.linear.z = root.linear_velocity.z();
     message.root_state.twist.twist.angular.z = root.yaw_rate;
     message.joint_state.header = message.header;
-    message.joint_state.name = link_joint_names_;
+    message.joint_state.name = model_info_->jointNames();
     message.joint_state.position.resize(static_cast<size_t>(state.joint_positions.size()));
     message.joint_state.velocity.resize(static_cast<size_t>(state.joint_velocities.size()));
     for (int index = 0; index < state.joint_positions.size(); ++index)
@@ -1134,31 +838,27 @@ private:
 
   WholeBodyPlannerConfig config_;
   ros::NodeHandle nh_;
-  gcopter_planner::PlannerBackend backend_;
+  PlanningEnvironment environment_;
   gcopter_planner::PlannerRosInterface ros_interface_;
-  PrimitiveGenerator generator_;
   pluginlib::ClassLoader<aerial_robot_model::RobotModel> robot_model_loader_;
   std::vector<boost::shared_ptr<Dragon::HydrusLikeRobotModel>> robot_models_;
+  std::unique_ptr<DragonModelInfo> model_info_;
   std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>> stability_evaluators_;
   std::vector<std::unique_ptr<JointTrajectoryPlanner>> joint_planners_;
+  TrajectoryHistory executed_history_;
+  CandidateDiagnosticsPublisher diagnostics_;
 
   ros::Subscriber map_sub_;
   ros::Subscriber target_sub_;
   ros::Subscriber odom_sub_;
   ros::Subscriber joint_state_sub_;
   ros::Publisher full_state_pub_;
-  ros::Publisher marker_pub_;
-  ros::Publisher selected_candidate_pub_;
-  ros::Publisher selected_min_fc_pub_;
-  ros::Publisher selected_min_clearance_pub_;
-  ros::Publisher selected_joint_motion_pub_;
   ros::Timer command_timer_;
   ros::Timer planning_timer_;
   ros::Timer publisher_guard_timer_;
   std::string full_state_topic_;
 
   std::mutex map_mutex_;
-  std::unordered_set<long> occupied_voxel_keys_;
   std::shared_ptr<const ClearanceMap> clearance_map_;
 
   std::mutex state_mutex_;
@@ -1169,8 +869,6 @@ private:
   uint64_t target_sequence_ = 0;
   Eigen::Vector3d target_ = Eigen::Vector3d::Zero();
   Eigen::VectorXd current_joints_;
-  std::deque<multilink_copilot::TrajectoryPoint> executed_history_;
-  double executed_arc_length_ = 0.0;
 
   std::mutex plan_mutex_;
   std::shared_ptr<const ActivePlan> active_plan_;
@@ -1178,14 +876,6 @@ private:
   CommandState last_command_;
   std::atomic<bool> planning_in_progress_{false};
   std::atomic<bool> goal_latched_{false};
-
-  int link_num_ = 0;
-  double link_length_ = 0.0;
-  std::vector<std::string> link_joint_names_;
-  std::vector<int> link_joint_indices_;
-  std::vector<int> pitch_indices_;
-  std::vector<int> yaw_indices_;
-  std::unordered_map<std::string, int> joint_name_to_index_;
 };
 
 }  // namespace motion_primitive_planner

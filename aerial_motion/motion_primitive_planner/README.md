@@ -4,13 +4,17 @@
 
 ## Design
 
+Both nodes use the same `PlanningEnvironment` for accumulated-map maintenance, goal clamping, route search, horizon truncation, and root primitive generation. They also share DRAGON joint metadata, bounded trajectory history, nominal follow-the-leader prediction, stability configuration, and candidate diagnostics. The root node retains GCOPTER trajectory handover and publication, while the whole-body node retains joint-space planning, activation/hold state, publisher ownership checks, and direct full-state output.
+
 ### Root-Link Planner
 
 The planner searches toward the global goal, selects a local target, and generates polynomial motion primitives for that segment. The default candidate set contains a nominal trajectory and two four-direction offset rings for moderate and large detours.
 
-Each candidate predicts the full body with a follow-the-leader configuration, checks swept-body collisions and flight-feasibility margin, then selects the shortest and smoothest feasible trajectory. If no candidate is feasible, the active trajectory is retained and planning is retried later.
+Each candidate predicts the full body with the shared follow-the-leader predictor, checks swept-body collisions and the same joint-limit, feasible-control, thrust, rotor-clearance, and baselink-tilt constraints used by the whole-body planner, then selects the shortest and smoothest feasible trajectory. If no candidate is feasible, the active trajectory is retained and planning is retried later.
 
 `AllowCopilotStabilityProjectionFallback` is disabled by default. When enabled, a candidate rejected only for insufficient nominal `fc_rp_min` may be projected to a stable configuration by Copilot. Because the projected body can differ from the collision-checked shape, use this option only in free space or when projected-shape collision checking is provided separately.
+
+Both launch files first load `config/common_motion_primitive_planner.yaml`, then their mode-specific configuration. Shared parameter names and ROS topics remain identical between the two nodes; `MaxBaselinkTilt` defaults to `1.20 rad` in both modes.
 
 ### Whole-Body Planner
 
@@ -29,6 +33,8 @@ The whole-body planner exclusively owns `full_state_target`; do not run it with 
 - **Orange:** requires downstream `fc_rp_min` projection or fails another flight-feasibility check.
 - **Magenta:** rejected because the nominal joint configuration violates a joint limit.
 - **Red:** rejected because of predicted whole-body collision, trajectory-generation failure, or another non-feasible status.
+
+Both nodes publish `/selected_candidate`, `/selected_min_fc_rp`, `/selected_min_clearance`, and `/selected_joint_motion`. The root-link planner publishes `NaN` for minimum clearance because it performs binary occupancy checks rather than clearance ranking.
 
 ## Build
 

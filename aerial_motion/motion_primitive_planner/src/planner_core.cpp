@@ -367,6 +367,7 @@ const char* candidateStatusName(CandidateStatus status)
     case CandidateStatus::kJointLimit: return "joint_limit";
     case CandidateStatus::kStability: return "stability";
     case CandidateStatus::kStabilityProjection: return "stability_projection";
+    case CandidateStatus::kJointPlanningFailed: return "joint_planning_failed";
     case CandidateStatus::kFeasible: return "feasible";
     case CandidateStatus::kSelected: return "selected";
   }

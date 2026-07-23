@@ -35,7 +35,13 @@ catkin_package(
 include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${OMPL_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
-add_library(motion_primitive_planner_core src/planner_core.cpp src/joint_trajectory_planner.cpp)
+add_library(motion_primitive_planner_core
+  src/planner_core.cpp
+  src/planner_common.cpp
+  src/planner_config.cpp
+  src/root_candidate_evaluator.cpp
+  src/joint_trajectory_planner.cpp
+)
 if(TARGET ompl::ompl)
   set(MOTION_PRIMITIVE_OMPL_TARGET ompl::ompl)
 else()
@@ -77,6 +83,14 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET whole_body_node_integration_test)
     target_link_libraries(whole_body_node_integration_test ${catkin_LIBRARIES})
     add_dependencies(whole_body_node_integration_test ${catkin_EXPORTED_TARGETS})
+  endif()
+  add_rostest_gtest(root_node_integration_test
+    test/root_node_integration.test
+    test/root_node_integration_test.cpp
+  )
+  if(TARGET root_node_integration_test)
+    target_link_libraries(root_node_integration_test ${catkin_LIBRARIES})
+    add_dependencies(root_node_integration_test ${catkin_EXPORTED_TARGETS})
   endif()
 endif()
 
