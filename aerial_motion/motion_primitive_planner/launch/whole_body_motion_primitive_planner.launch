@@ -12,6 +12,7 @@
 
     <arg name="command_hz" default="40.0" />
     <arg name="replan_hz" default="2.0" />
+    <arg name="verbose" default="true" />
     <arg name="activation_lead_time" default="0.75" />
     <arg name="use_accumulated_map" default="true" />
     <arg name="goal_tolerance" default="0.2" />
@@ -38,7 +39,8 @@
 
     <arg name="voxel_width" default="0.10" />
     <arg name="dilate_radius" default="0.30" />
-    <arg name="whole_body_radius" default="0.30" />
+    <!-- Each link capsule encloses the approximately 0.40 m-wide gimbal projection. -->
+    <arg name="whole_body_radius" default="0.20" />
     <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
     <arg name="use_fixed_target_height" default="false" />
     <arg name="target_height" default="1.0" />
@@ -63,6 +65,7 @@
         <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
         <param name="MaxVelMag" value="$(arg max_vel_mag)" />
         <param name="ReplanHz" value="$(arg replan_hz)" />
+        <param name="Verbose" value="$(arg verbose)" />
         <param name="PlanActivationLeadTime" value="$(arg activation_lead_time)" />
         <param name="UseAccumulatedMap" value="$(arg use_accumulated_map)" />
         <param name="GoalTolerance" value="$(arg goal_tolerance)" />

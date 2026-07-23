@@ -15,6 +15,7 @@ struct RootPlannerConfig
   multilink_copilot::StabilityConfig stability;
   double prediction_dt = 0.10;
   bool allow_copilot_stability_projection_fallback = false;
+  bool verbose = true;
 
   explicit RootPlannerConfig(const ros::NodeHandle& private_nh);
 };
@@ -24,9 +25,11 @@ struct WholeBodyPlannerConfig
   SharedPlannerConfig shared;
   JointPlannerConfig joint;
   multilink_copilot::StabilityConfig stability;
-  double whole_body_radius = 0.30;
+  // Each link capsule encloses the approximately 0.40 m-wide gimbal projection.
+  double whole_body_radius = 0.20;
   double activation_lead_time = 0.75;
   std::string root_child_frame_id = "root";
+  bool verbose = true;
 
   explicit WholeBodyPlannerConfig(const ros::NodeHandle& private_nh);
 };

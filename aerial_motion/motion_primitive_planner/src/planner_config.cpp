@@ -16,6 +16,7 @@ RootPlannerConfig::RootPlannerConfig(const ros::NodeHandle& private_nh)
   private_nh.param("AllowCopilotStabilityProjectionFallback",
                    allow_copilot_stability_projection_fallback,
                    allow_copilot_stability_projection_fallback);
+  private_nh.param("Verbose", verbose, verbose);
   if (!std::isfinite(prediction_dt) || prediction_dt <= 0.0)
   {
     throw std::invalid_argument("Invalid root motion primitive planner configuration");
@@ -38,6 +39,7 @@ WholeBodyPlannerConfig::WholeBodyPlannerConfig(const ros::NodeHandle& private_nh
   private_nh.param("WholeBodyRadius", whole_body_radius, whole_body_radius);
   private_nh.param("PlanActivationLeadTime", activation_lead_time, activation_lead_time);
   private_nh.param("RootChildFrameId", root_child_frame_id, root_child_frame_id);
+  private_nh.param("Verbose", verbose, verbose);
 
   if (!std::isfinite(whole_body_radius) || whole_body_radius < 0.0 ||
       !std::isfinite(activation_lead_time) || activation_lead_time <= 0.0 ||

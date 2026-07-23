@@ -170,7 +170,27 @@ private:
       return;
     }
 
-    const auto planning_start = std::chrono::steady_clock::now();
+    struct PlanningTimingLogger
+    {
+      explicit PlanningTimingLogger(bool enabled)
+        : enabled_(enabled), start_(std::chrono::steady_clock::now())
+      {
+      }
+
+      ~PlanningTimingLogger()
+      {
+        if (enabled_)
+        {
+          const double elapsed_ms = std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - start_).count();
+          ROS_INFO("Root-link local planning completed in %.1f ms.", elapsed_ms);
+        }
+      }
+
+      bool enabled_;
+      std::chrono::steady_clock::time_point start_;
+    } timing_logger(config_.verbose);
+
     PrimitiveBatch batch = environment_.generate(start, target_);
     if (!batch.success())
     {
@@ -206,12 +226,10 @@ private:
       batch.candidates[static_cast<size_t>(selected)].status = CandidateStatus::kSelected;
     }
     publishDiagnostics(batch.candidates, selected);
-    const double elapsed = std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - planning_start).count();
     if (selected < 0)
     {
-      ROS_WARN("All %zu primitives rejected in %.1f ms; keeping the previous trajectory.",
-               batch.candidates.size(), elapsed);
+      ROS_WARN("All %zu primitives rejected; keeping the previous trajectory.",
+               batch.candidates.size());
       return;
     }
     const Candidate& selected_candidate = batch.candidates[static_cast<size_t>(selected)];
@@ -226,9 +244,9 @@ private:
     trajectory_stamp_ = handover;
     ros_interface_.publishTrajectory(trajectory_, handover);
     goal_latched_ = batch.terminal;
-    ROS_INFO("Selected primitive %d/%zu (length %.2f m, min fc_rp %.3f) in %.1f ms.",
+    ROS_INFO("Selected primitive %d/%zu (length %.2f m, min fc_rp %.3f).",
              selected, batch.candidates.size(), selected_candidate.path_length,
-             selected_candidate.min_fc_rp, elapsed);
+             selected_candidate.min_fc_rp);
     ros_interface_.visualizer().visualizeStartGoal(start.position, 0.05, 0);
     ros_interface_.visualizer().visualizeStartGoal(target_, 0.05, 1);
   }

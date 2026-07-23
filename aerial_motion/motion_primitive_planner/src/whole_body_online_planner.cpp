@@ -593,6 +593,27 @@ private:
       return;
     }
 
+    struct PlanningTimingLogger
+    {
+      explicit PlanningTimingLogger(bool enabled)
+        : enabled_(enabled), start_(std::chrono::steady_clock::now())
+      {
+      }
+
+      ~PlanningTimingLogger()
+      {
+        if (enabled_)
+        {
+          const double elapsed_ms = std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - start_).count();
+          ROS_INFO("Whole-body local planning completed in %.1f ms.", elapsed_ms);
+        }
+      }
+
+      bool enabled_;
+      std::chrono::steady_clock::time_point start_;
+    } timing_logger(config_.verbose);
+
     std::shared_ptr<const ClearanceMap> clearance_map;
     PrimitiveBatch batch;
     {
