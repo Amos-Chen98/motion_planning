@@ -8,13 +8,15 @@ Both nodes use the same `PlanningEnvironment` for accumulated-map maintenance, g
 
 ### Shared Collision Model
 
-For each instantaneous DRAGON configuration, the shared checker reconstructs the four link centerlines, samples each at intervals no greater than `VoxelWidth / 2`, and returns `true` on the first sample inside the binary obstacle map dilated by `DilateRadius`. The default `VoxelWidth=0.10 m` and `DilateRadius=0.20 m` approximate each link as a radius-`0.20 m` voxelized capsule. The root-link planner checks nominal configurations, while the whole-body planner checks its final joint trajectory.
+For each instantaneous DRAGON configuration, the shared checker reconstructs the four link centerlines, samples each at intervals no greater than `VoxelWidth / 2`, and returns `true` on the first sample inside the binary obstacle map dilated by `DilateRadius`. The default `VoxelWidth=0.10 m` and `DilateRadius=0.20 m` approximate each link as a radius-`0.20 m` voxelized capsule. Both planners adaptively subdivide time until the conservative maximum whole-body displacement between collision checks is no greater than `VoxelWidth / 2`; the root-link planner checks interpolated nominal configurations, while the whole-body planner checks its final joint trajectory.
 
 ### Root-Link Planner
 
 The planner searches toward the global goal, selects a local target, and generates polynomial motion primitives for that segment. The default candidate set contains a nominal trajectory and two four-direction offset rings for moderate and large detours.
 
 Each candidate predicts the full body with the shared follow-the-leader predictor, checks swept-body collisions and the same joint-limit, feasible-control, thrust, rotor-clearance, and baselink-tilt constraints used by the whole-body planner, then selects the shortest and smoothest feasible trajectory. If no candidate is feasible, the active trajectory is retained and planning is retried later.
+
+`PredictionDt` controls only nominal stability evaluation; collision sampling is independently determined from command-rate nominal intervals and the adaptive whole-body displacement bound.
 
 `AllowCopilotStabilityProjectionFallback` is disabled by default. When enabled, a candidate rejected only for insufficient nominal `fc_rp_min` may be projected to a stable configuration by Copilot. Because the projected body can differ from the collision-checked shape, use this option only in free space or when projected-shape collision checking is provided separately.
 

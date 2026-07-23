@@ -335,14 +335,12 @@ private:
       const double end_time = breakpoints[interval];
       // The root path can curve between command samples, so the endpoint chord is not a
       // conservative swept-distance bound. Primitive generation enforces max_velocity.
-      const double root_displacement_bound =
-          config_.shared.primitive.max_velocity * (end_time - start_time);
-      const double yaw_delta = std::abs(joints.yaw(end_time) - joints.yaw(start_time));
-      const Eigen::VectorXd q_delta = joints.jointPositions(end_time) - joints.jointPositions(start_time);
-      const double angular_delta = q_delta.size() > 0 ? q_delta.cwiseAbs().sum() : 0.0;
-      const double displacement_bound =
-          root_displacement_bound + body_length * (yaw_delta + angular_delta);
-      const int subdivisions = std::max(1, static_cast<int>(std::ceil(displacement_bound / spatial_resolution)));
+      const double yaw_delta = joints.yaw(end_time) - joints.yaw(start_time);
+      const Eigen::VectorXd q_delta =
+          joints.jointPositions(end_time) - joints.jointPositions(start_time);
+      const int subdivisions = wholeBodyMotionSubdivisionCount(
+          end_time - start_time, config_.shared.primitive.max_velocity,
+          body_length, yaw_delta, q_delta, spatial_resolution);
       for (int subdivision = 1; subdivision <= subdivisions; ++subdivision)
       {
         const double time = start_time + static_cast<double>(subdivision) / subdivisions *

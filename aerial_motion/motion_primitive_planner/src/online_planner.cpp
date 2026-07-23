@@ -71,7 +71,7 @@ private:
     stability_evaluator_ =
         std::make_shared<multilink_copilot::StabilityEvaluator>(robot_model_, config_.stability);
     candidate_evaluator_.reset(new RootCandidateEvaluator(
-        config_.follower, config_.prediction_dt,
+        config_.follower, config_.prediction_dt, config_.shared.primitive.max_velocity,
         config_.allow_copilot_stability_projection_fallback, *model_info_,
         stability_evaluator_, environment_));
   }

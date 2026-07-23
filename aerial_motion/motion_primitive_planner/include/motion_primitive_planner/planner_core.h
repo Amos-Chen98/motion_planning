@@ -135,6 +135,15 @@ bool wholeBodyCollides(const WholeBodyConfiguration& configuration,
                        double sample_spacing,
                        const std::function<bool(const Eigen::Vector3d&)>& occupied);
 
+double shortestYawDelta(double start_yaw, double end_yaw);
+
+int wholeBodyMotionSubdivisionCount(double interval_duration,
+                                    double maximum_root_velocity,
+                                    double body_length,
+                                    double yaw_delta,
+                                    const Eigen::VectorXd& joint_delta,
+                                    double spatial_resolution);
+
 const char* candidateStatusName(CandidateStatus status);
 
 }  // namespace motion_primitive_planner

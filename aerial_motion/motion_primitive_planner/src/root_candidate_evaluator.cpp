@@ -17,18 +17,21 @@ constexpr double kEpsilon = 1e-6;
 
 RootCandidateEvaluator::RootCandidateEvaluator(
     const FollowerConfig& follower_config, double prediction_dt,
+    double maximum_root_velocity,
     bool allow_stability_projection_fallback, const DragonModelInfo& model,
     const std::shared_ptr<multilink_copilot::StabilityEvaluator>& stability_evaluator,
     const PlanningEnvironment& environment)
   : follower_config_(follower_config)
   , prediction_dt_(prediction_dt)
+  , maximum_root_velocity_(maximum_root_velocity)
   , allow_stability_projection_fallback_(allow_stability_projection_fallback)
   , collision_geometry_(model.collisionGeometry())
   , stability_evaluator_(stability_evaluator)
   , environment_(environment)
   , predictor_(follower_config)
 {
-  if (!stability_evaluator_ || !std::isfinite(prediction_dt_) || prediction_dt_ <= 0.0)
+  if (!stability_evaluator_ || !std::isfinite(prediction_dt_) || prediction_dt_ <= 0.0 ||
+      !std::isfinite(maximum_root_velocity_) || maximum_root_velocity_ <= 0.0)
   {
     throw std::invalid_argument("Invalid root candidate evaluator configuration");
   }
@@ -52,6 +55,52 @@ bool isOnlyFcRpViolation(const multilink_copilot::StabilityMetrics& metrics,
          metrics.overlap_clearance + tolerance >= config.overlap_min_clearance &&
          (config.max_baselink_tilt <= 0.0 ||
           metrics.baselink_tilt <= config.max_baselink_tilt + tolerance);
+}
+
+bool nominalWholeBodyIntervalCollides(
+    const Trajectory<5>& root_trajectory,
+    const NominalJointSample& start,
+    const NominalJointSample& end,
+    double maximum_root_velocity,
+    const DragonCollisionGeometry& geometry,
+    double sample_spacing,
+    const std::function<bool(const Eigen::Vector3d&)>& occupied)
+{
+  const double interval_duration = end.time - start.time;
+  if (root_trajectory.getPieceNum() <= 0 || !std::isfinite(start.time) ||
+      !std::isfinite(end.time) || interval_duration < 0.0 ||
+      !std::isfinite(start.yaw) || !std::isfinite(end.yaw) ||
+      start.joints.size() != end.joints.size() || !start.joints.allFinite() ||
+      !end.joints.allFinite() || !std::isfinite(maximum_root_velocity) ||
+      maximum_root_velocity < 0.0 || geometry.link_num <= 0 ||
+      !std::isfinite(geometry.link_length) || geometry.link_length <= 0.0 ||
+      !std::isfinite(sample_spacing) || sample_spacing <= 0.0 || !occupied)
+  {
+    return true;
+  }
+
+  const double yaw_delta = shortestYawDelta(start.yaw, end.yaw);
+  const Eigen::VectorXd joint_delta = end.joints - start.joints;
+  const double body_length = static_cast<double>(geometry.link_num) * geometry.link_length;
+  const int subdivisions = wholeBodyMotionSubdivisionCount(
+      interval_duration, maximum_root_velocity, body_length, yaw_delta,
+      joint_delta, sample_spacing);
+  for (int subdivision = 1; subdivision <= subdivisions; ++subdivision)
+  {
+    const double ratio = static_cast<double>(subdivision) / subdivisions;
+    const double time = start.time + ratio * interval_duration;
+    WholeBodyConfiguration configuration;
+    configuration.link1_tail = root_trajectory.getPos(time);
+    configuration.root_link_rotation =
+        Eigen::AngleAxisd(start.yaw + ratio * yaw_delta + M_PI,
+                          Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    configuration.joint_positions = start.joints + ratio * joint_delta;
+    if (wholeBodyCollides(configuration, geometry, sample_spacing, occupied))
+    {
+      return true;
+    }
+  }
+  return false;
 }
 
 void RootCandidateEvaluator::evaluate(Candidate& candidate,
@@ -91,6 +140,33 @@ void RootCandidateEvaluator::evaluate(Candidate& candidate,
       candidate.joint_motion += (sample.joints - previous_joints).norm();
       previous_joints = sample.joints;
     }
+
+    if (index == 0)
+    {
+      WholeBodyConfiguration configuration;
+      configuration.link1_tail = sample.root_position;
+      configuration.root_link_rotation =
+          Eigen::AngleAxisd(sample.yaw + M_PI,
+                            Eigen::Vector3d::UnitZ()).toRotationMatrix();
+      configuration.joint_positions = sample.joints;
+      if (wholeBodyCollides(configuration, collision_geometry_,
+                            0.5 * occupancy->voxelScale(), occupied))
+      {
+        candidate.status = CandidateStatus::kCollision;
+        candidate.detail = "whole-body swept collision";
+        return;
+      }
+    }
+    else if (nominalWholeBodyIntervalCollides(
+                 candidate.trajectory, samples[index - 1], sample,
+                 maximum_root_velocity_, collision_geometry_,
+                 0.5 * occupancy->voxelScale(), occupied))
+    {
+      candidate.status = CandidateStatus::kCollision;
+      candidate.detail = "whole-body swept collision";
+      return;
+    }
+
     const bool final_sample = index + 1 == samples.size();
     if (!sample.history_changed && sample.time + kEpsilon < next_evaluation_time && !final_sample)
     {
@@ -99,20 +175,6 @@ void RootCandidateEvaluator::evaluate(Candidate& candidate,
     while (next_evaluation_time <= sample.time + kEpsilon)
     {
       next_evaluation_time += prediction_dt_;
-    }
-
-    const Eigen::Matrix3d root_rotation =
-        Eigen::AngleAxisd(sample.yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-    WholeBodyConfiguration configuration;
-    configuration.link1_tail = sample.root_position;
-    configuration.root_link_rotation = root_rotation;
-    configuration.joint_positions = sample.joints;
-    if (wholeBodyCollides(configuration, collision_geometry_, 0.5 * occupancy->voxelScale(),
-                          occupied))
-    {
-      candidate.status = CandidateStatus::kCollision;
-      candidate.detail = "whole-body swept collision";
-      return;
     }
 
     stability_evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(sample.yaw + M_PI));

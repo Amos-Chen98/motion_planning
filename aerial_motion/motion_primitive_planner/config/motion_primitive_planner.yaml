@@ -1,4 +1,4 @@
-# Root-link candidate evaluation.
+# Nominal stability evaluation period. Collision checks use adaptive temporal subdivision.
 PredictionDt: 0.10
 
 # Keep false unless a downstream multilink_copilot performs the joint-space
