@@ -4,7 +4,11 @@
 
 ## Design
 
-Both nodes use the same `PlanningEnvironment` for accumulated-map maintenance, goal clamping, route search, horizon truncation, and root primitive generation. They also share DRAGON joint metadata, bounded trajectory history, nominal follow-the-leader prediction, stability configuration, and candidate diagnostics. The root node retains GCOPTER trajectory handover and publication, while the whole-body node retains joint-space planning, activation/hold state, publisher ownership checks, and direct full-state output.
+Both nodes use the same `PlanningEnvironment` for accumulated-map maintenance, goal clamping, route search, horizon truncation, root primitive generation, and immutable binary occupancy snapshots. They also share DRAGON joint metadata, bounded trajectory history, nominal follow-the-leader prediction, stability configuration, candidate diagnostics, and one instantaneous whole-body collision checker. The root node retains GCOPTER trajectory handover and publication, while the whole-body node retains joint-space planning, activation/hold state, publisher ownership checks, and direct full-state output.
+
+### Shared Collision Model
+
+For each instantaneous DRAGON configuration, the shared checker reconstructs the four link centerlines, samples each at intervals no greater than `VoxelWidth / 2`, and returns `true` on the first sample inside the binary obstacle map dilated by `DilateRadius`. The default `VoxelWidth=0.10 m` and `DilateRadius=0.20 m` approximate each link as a radius-`0.20 m` voxelized capsule. The root-link planner checks nominal configurations, while the whole-body planner checks its final joint trajectory.
 
 ### Root-Link Planner
 
@@ -20,7 +24,7 @@ Both launch files first load `config/common_motion_primitive_planner.yaml`, then
 
 For every root primitive, the whole-body node plans and revalidates a continuous joint trajectory. It first uses nominal follow-the-leader motion, connects infeasible intervals with OMPL RRT-Connect, projects an infeasible terminal target to the nearest stable fold when necessary, and slows the root trajectory to meet joint-velocity and 40 Hz command-step limits.
 
-Only candidates with a fully feasible joint trajectory and collision-free swept body may execute. Candidates are ranked by maximum minimum clearance, minimum duration, minimum joint motion, and minimum root jerk. The node publishes root and joint commands at 40 Hz and holds the latest validated command at zero velocity after a planning failure.
+Only candidates with a fully feasible joint trajectory and collision-free swept body may execute. Candidates are ranked by minimum duration, minimum joint motion, and minimum root jerk. The node publishes root and joint commands at 40 Hz and holds the latest validated command at zero velocity after a planning failure.
 
 The whole-body planner exclusively owns `full_state_target`; do not run it with output from `traj_server` or `multilink_copilot`.
 
@@ -34,7 +38,7 @@ The whole-body planner exclusively owns `full_state_target`; do not run it with 
 - **Magenta:** rejected because the nominal joint configuration violates a joint limit.
 - **Red:** rejected because of predicted whole-body collision, trajectory-generation failure, or another non-feasible status.
 
-Both nodes publish `/selected_candidate`, `/selected_min_fc_rp`, `/selected_min_clearance`, and `/selected_joint_motion`. The root-link planner publishes `NaN` for minimum clearance because it performs binary occupancy checks rather than clearance ranking.
+Both nodes publish `/selected_candidate`, `/selected_min_fc_rp`, and `/selected_joint_motion`. Collision results are binary and no clearance diagnostic is published.
 
 ## Build
 

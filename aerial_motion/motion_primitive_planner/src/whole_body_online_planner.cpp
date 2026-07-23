@@ -13,10 +13,6 @@
 #include <sensor_msgs/JointState.h>
 #include <sensor_msgs/PointCloud2.h>
 
-#include <pcl/kdtree/kdtree_flann.h>
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
-
 #include <Eigen/Geometry>
 
 #include <algorithm>
@@ -36,78 +32,6 @@ namespace
 {
 constexpr char kRobotModelPlugin[] = "dragon/hydrus_like_robot_model";
 constexpr double kEpsilon = 1e-6;
-
-class ClearanceMap
-{
-public:
-  ClearanceMap(const Eigen::Vector3d& origin, const Eigen::Vector3d& corner, double voxel_width,
-               const std::vector<Eigen::Vector3i>& occupied)
-    : origin_(origin), corner_(corner), voxel_width_(voxel_width), cloud_(new pcl::PointCloud<pcl::PointXYZ>)
-  {
-    cloud_->reserve(occupied.size());
-    for (const Eigen::Vector3i& voxel : occupied)
-    {
-      const Eigen::Vector3d center = origin_ + (voxel.cast<double>().array() + 0.5).matrix() * voxel_width_;
-      cloud_->push_back(pcl::PointXYZ(center.x(), center.y(), center.z()));
-    }
-    if (!cloud_->empty())
-    {
-      kdtree_.setInputCloud(cloud_);
-    }
-  }
-
-  double voxelWidth() const
-  {
-    return voxel_width_;
-  }
-
-  double clearance(const Eigen::Vector3d& point, double body_radius) const
-  {
-    const Eigen::Vector3d lower_margin = point - origin_;
-    const Eigen::Vector3d upper_margin = corner_ - point;
-    if (lower_margin.minCoeff() < body_radius || upper_margin.minCoeff() < body_radius)
-    {
-      return -std::max(body_radius, voxel_width_);
-    }
-    if (cloud_->empty())
-    {
-      return std::numeric_limits<double>::infinity();
-    }
-    pcl::PointXYZ query(point.x(), point.y(), point.z());
-    std::vector<int> nearest_indices(1);
-    std::vector<float> nearest_squared_distances(1);
-    if (kdtree_.nearestKSearch(query, 1, nearest_indices, nearest_squared_distances) <= 0)
-    {
-      return -std::numeric_limits<double>::infinity();
-    }
-    const double half_width = 0.5 * voxel_width_;
-    const auto distance_to_voxel = [&](int index) {
-      const pcl::PointXYZ& center = cloud_->points[static_cast<size_t>(index)];
-      const Eigen::Vector3d delta =
-          (point - Eigen::Vector3d(center.x, center.y, center.z)).cwiseAbs() -
-          Eigen::Vector3d::Constant(half_width);
-      return delta.cwiseMax(0.0).norm();
-    };
-    double minimum_distance = distance_to_voxel(nearest_indices.front());
-    const double voxel_radius = std::sqrt(3.0) * half_width;
-    std::vector<int> candidate_indices;
-    std::vector<float> candidate_squared_distances;
-    kdtree_.radiusSearch(query, minimum_distance + voxel_radius + kEpsilon,
-                         candidate_indices, candidate_squared_distances);
-    for (const int index : candidate_indices)
-    {
-      minimum_distance = std::min(minimum_distance, distance_to_voxel(index));
-    }
-    return minimum_distance - body_radius;
-  }
-
-private:
-  Eigen::Vector3d origin_;
-  Eigen::Vector3d corner_;
-  double voxel_width_ = 0.0;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_;
-  mutable pcl::KdTreeFLANN<pcl::PointXYZ> kdtree_;
-};
 
 struct CommandState
 {
@@ -166,7 +90,6 @@ struct WholeBodyCandidate
   Trajectory<5> scaled_root;
   JointPlanResult joints;
   CandidateStatus status = CandidateStatus::kGenerationFailed;
-  double minimum_clearance = -std::numeric_limits<double>::infinity();
   std::string detail;
 };
 }  // namespace
@@ -185,10 +108,6 @@ public:
                    "whole_body_root_candidates", 0.015)
   {
     initializeRobotModels();
-    {
-      std::lock_guard<std::mutex> lock(map_mutex_);
-      rebuildClearanceMapLocked();
-    }
     map_sub_ = nh_.subscribe("pcl_topic", 1, &WholeBodyOnlinePlanner::mapCallback, this,
                              ros::TransportHints().tcpNoDelay());
     target_sub_ = nh_.subscribe("target", 1, &WholeBodyOnlinePlanner::targetCallback, this,
@@ -209,9 +128,10 @@ public:
                                       &WholeBodyOnlinePlanner::planningTimerCallback, this);
     publisher_guard_timer_ = nh_.createTimer(ros::Duration(1.0),
                                              &WholeBodyOnlinePlanner::publisherGuardTimerCallback, this);
-    ROS_INFO("Whole-body motion primitive planner ready: candidates=%d, fc_rp_min>=%.2f, radius=%.2f m.",
+    ROS_INFO("Whole-body motion primitive planner ready: candidates=%d, fc_rp_min>=%.2f, "
+             "collision radius=%.2f m.",
              config_.shared.primitive.candidate_count, config_.stability.fc_rp_min_threshold,
-             config_.whole_body_radius);
+             config_.shared.common.dilateRadius);
   }
 
 private:
@@ -285,14 +205,8 @@ private:
     }
 
     model_info_.reset(new DragonModelInfo(robot_models_.front()));
+    collision_geometry_ = model_info_->collisionGeometry();
     current_joints_ = Eigen::VectorXd::Zero(model_info_->jointCount());
-  }
-
-  void rebuildClearanceMapLocked()
-  {
-    const std::vector<Eigen::Vector3i> occupied = environment_.occupiedVoxels();
-    clearance_map_ = std::make_shared<ClearanceMap>(
-        environment_.mapOrigin(), environment_.mapCorner(), environment_.voxelScale(), occupied);
   }
 
   void mapCallback(const sensor_msgs::PointCloud2::ConstPtr& message)
@@ -309,7 +223,6 @@ private:
     }
     std::lock_guard<std::mutex> lock(map_mutex_);
     environment_.updateMap(points);
-    rebuildClearanceMapLocked();
   }
 
   void targetCallback(const geometry_msgs::PoseStamped::ConstPtr& message)
@@ -320,7 +233,7 @@ private:
     {
       std::lock_guard<std::mutex> lock(map_mutex_);
       target = environment_.clampTarget(
-          requested, config_.whole_body_radius + environment_.voxelScale());
+          requested, config_.shared.common.dilateRadius + environment_.voxelScale());
     }
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
@@ -360,47 +273,31 @@ private:
     }
   }
 
-  double minimumWholeBodyClearance(const Trajectory<5>& root,
-                                   const JointPlanResult& joints,
-                                   const std::shared_ptr<const ClearanceMap>& map) const
+  bool wholeBodyTrajectoryCollides(
+      const Trajectory<5>& root, const JointPlanResult& joints,
+      const std::shared_ptr<const gcopter_planner::PlannerBackend>& occupancy) const
   {
     const double duration = root.getTotalDuration();
     const double command_dt = 1.0 / config_.joint.follower.command_hz;
-    const double spatial_resolution = 0.5 * map->voxelWidth();
+    const double spatial_resolution = 0.5 * occupancy->voxelScale();
     const double body_length = static_cast<double>(model_info_->linkNum()) * model_info_->linkLength();
-    double minimum = std::numeric_limits<double>::infinity();
-
-    const auto evaluate_time = [&](double time, double& current_minimum) {
-      const Eigen::Vector3d tail = root.getPos(time);
-      const double yaw = joints.yaw(time);
-      const Eigen::VectorXd q = joints.jointPositions(time);
-      const Eigen::Matrix3d rotation =
-          Eigen::AngleAxisd(yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-      const std::vector<Eigen::Vector3d> endpoints =
-          linkEndpoints(tail, rotation, q, model_info_->pitchJointIndices(),
-                        model_info_->yawJointIndices(), model_info_->linkNum(),
-                        model_info_->linkLength());
-      for (size_t segment = 1; segment < endpoints.size(); ++segment)
-      {
-        const Eigen::Vector3d delta = endpoints[segment] - endpoints[segment - 1];
-        const int samples = std::max(1, static_cast<int>(std::ceil(delta.norm() / spatial_resolution)));
-        for (int sample = 0; sample <= samples; ++sample)
-        {
-          const Eigen::Vector3d point = endpoints[segment - 1] +
-                                        static_cast<double>(sample) / samples * delta;
-          current_minimum = std::min(current_minimum, map->clearance(point, config_.whole_body_radius));
-          if (current_minimum < 0.0)
-          {
-            return false;
-          }
-        }
-      }
-      return true;
+    const auto occupied = [&occupancy](const Eigen::Vector3d& point) {
+      return occupancy->query(point);
     };
 
-    if (!evaluate_time(0.0, minimum))
+    const auto collides_at_time = [&](double time) {
+      WholeBodyConfiguration configuration;
+      configuration.link1_tail = root.getPos(time);
+      const double yaw = joints.yaw(time);
+      configuration.root_link_rotation =
+          Eigen::AngleAxisd(yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+      configuration.joint_positions = joints.jointPositions(time);
+      return wholeBodyCollides(configuration, collision_geometry_, spatial_resolution, occupied);
+    };
+
+    if (collides_at_time(0.0))
     {
-      return minimum;
+      return true;
     }
     std::vector<double> breakpoints;
     breakpoints.reserve(static_cast<size_t>(std::ceil(duration / command_dt)) +
@@ -450,13 +347,13 @@ private:
       {
         const double time = start_time + static_cast<double>(subdivision) / subdivisions *
                                              (end_time - start_time);
-        if (!evaluate_time(time, minimum))
+        if (collides_at_time(time))
         {
-          return minimum;
+          return true;
         }
       }
     }
-    return minimum;
+    return false;
   }
 
   int selectBest(const std::vector<WholeBodyCandidate>& candidates) const
@@ -466,7 +363,6 @@ private:
     for (const WholeBodyCandidate& candidate : candidates)
     {
       scores.push_back({candidate.status == CandidateStatus::kFeasible,
-                        candidate.minimum_clearance,
                         candidate.joints.duration,
                         candidate.joints.joint_motion,
                         candidate.root.jerk_energy});
@@ -489,7 +385,6 @@ private:
     {
       const WholeBodyCandidate& candidate = candidates[static_cast<size_t>(selected)];
       metrics.minimum_fc_rp = candidate.joints.minimum_fc_rp;
-      metrics.minimum_clearance = candidate.minimum_clearance;
       metrics.joint_motion = candidate.joints.joint_motion;
     }
     diagnostics_.publish(visualizations, selected, metrics);
@@ -614,16 +509,16 @@ private:
       std::chrono::steady_clock::time_point start_;
     } timing_logger(config_.verbose);
 
-    std::shared_ptr<const ClearanceMap> clearance_map;
+    std::shared_ptr<const gcopter_planner::PlannerBackend> occupancy;
     PrimitiveBatch batch;
     {
       std::lock_guard<std::mutex> lock(map_mutex_);
-      clearance_map = clearance_map_;
       RootState root_start;
       root_start.position = start.tail_position;
       root_start.velocity = start.tail_velocity;
       root_start.acceleration = start.tail_acceleration;
       batch = environment_.generate(root_start, target);
+      occupancy = environment_.occupancySnapshot();
     }
     if (!batch.success())
     {
@@ -652,12 +547,10 @@ private:
       }
       candidate.scaled_root = gcopter_planner::PlannerBackend::timeScaledTrajectory(
           candidate.root.trajectory, candidate.joints.time_scale);
-      candidate.minimum_clearance = minimumWholeBodyClearance(candidate.scaled_root, candidate.joints,
-                                                              clearance_map);
-      if (candidate.minimum_clearance < 0.0)
+      if (wholeBodyTrajectoryCollides(candidate.scaled_root, candidate.joints, occupancy))
       {
         candidate.status = CandidateStatus::kCollision;
-        candidate.detail = "whole-body swept clearance is negative";
+        candidate.detail = "whole-body swept collision";
         continue;
       }
       candidate.status = CandidateStatus::kFeasible;
@@ -695,9 +588,9 @@ private:
       }
       pending_plan_ = plan;
     }
-    ROS_INFO("Selected whole-body primitive %d/%zu: clearance=%.3f m, min_fc_rp=%.3f, "
+    ROS_INFO("Selected whole-body primitive %d/%zu: duration=%.3f s, min_fc_rp=%.3f, "
              "joint_motion=%.3f rad, scale=%.2f.",
-             selected, candidates.size(), selected_candidate.minimum_clearance,
+             selected, candidates.size(), selected_candidate.joints.duration,
              selected_candidate.joints.minimum_fc_rp, selected_candidate.joints.joint_motion,
              selected_candidate.joints.time_scale);
   }
@@ -867,6 +760,7 @@ private:
   std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>> stability_evaluators_;
   std::vector<std::unique_ptr<JointTrajectoryPlanner>> joint_planners_;
   TrajectoryHistory executed_history_;
+  DragonCollisionGeometry collision_geometry_;
   CandidateDiagnosticsPublisher diagnostics_;
 
   ros::Subscriber map_sub_;
@@ -880,7 +774,6 @@ private:
   std::string full_state_topic_;
 
   std::mutex map_mutex_;
-  std::shared_ptr<const ClearanceMap> clearance_map_;
 
   std::mutex state_mutex_;
   CommandState latest_odom_state_;

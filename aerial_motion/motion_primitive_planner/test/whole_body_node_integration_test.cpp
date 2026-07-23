@@ -60,11 +60,6 @@ protected:
     }
   }
 
-  void minimumClearanceCallback(const std_msgs::Float64::ConstPtr& message)
-  {
-    selected_minimum_clearance_ = message->data;
-  }
-
   static std::vector<std::string> fullStatePublishers()
   {
     XmlRpc::XmlRpcValue request;
@@ -94,7 +89,6 @@ protected:
   std::vector<aerial_robot_msgs::FullStateTarget> commands_;
   double maximum_joint_step_ = 0.0;
   double selected_minimum_fc_rp_ = 0.0;
-  double selected_minimum_clearance_ = 0.0;
   ros::WallTime last_command_wall_time_;
   int selection_count_ = 0;
   bool received_selection_ = false;
@@ -110,9 +104,6 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
   const ros::Subscriber fc_subscriber = nh.subscribe<std_msgs::Float64>(
       "/dragon/selected_min_fc_rp", 10,
       [this](const std_msgs::Float64::ConstPtr& message) { minimumFcCallback(message); });
-  const ros::Subscriber clearance_subscriber = nh.subscribe<std_msgs::Float64>(
-      "/dragon/selected_min_clearance", 10,
-      [this](const std_msgs::Float64::ConstPtr& message) { minimumClearanceCallback(message); });
   const ros::Publisher odom_publisher = nh.advertise<nav_msgs::Odometry>("/dragon/root/flu_odom", 10);
   const ros::Subscriber root_tail_subscriber = nh.subscribe<geometry_msgs::PoseStamped>(
       "/dragon/root/tail_pose", 10,
@@ -195,7 +186,6 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
   ASSERT_TRUE(received_selection_);
   ASSERT_GT(commands_.size(), commands_after_first_goal);
   EXPECT_GE(selected_minimum_fc_rp_ + 1e-4, 3.2);
-  EXPECT_TRUE(std::isinf(selected_minimum_clearance_));
   EXPECT_LE(maximum_joint_step_, 0.1001);
   const size_t rate_window = std::min<size_t>(40, commands_.size() - commands_after_first_goal - 1);
   ASSERT_GT(rate_window, 10u);

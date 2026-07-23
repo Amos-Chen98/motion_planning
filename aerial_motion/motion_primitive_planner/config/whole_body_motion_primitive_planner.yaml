@@ -13,7 +13,5 @@ StabilityQpRegularization: 0.001
 StabilityQpConvergenceTolerance: 0.001
 
 # Whole-body swept-volume selection and direct execution.
-# Each link capsule encloses the approximately 0.40 m-wide gimbal projection.
-WholeBodyRadius: 0.20
 PlanActivationLeadTime: 0.75
 RootChildFrameId: root

@@ -10,7 +10,6 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DNDEBUG")
 
 find_package(Eigen3 REQUIRED)
 find_package(ompl REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common kdtree)
 find_package(catkin REQUIRED COMPONENTS
   aerial_robot_msgs
   roscpp
@@ -23,17 +22,15 @@ find_package(catkin REQUIRED COMPONENTS
   multilink_copilot
   dragon
   pluginlib
-  pcl_ros
 )
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES motion_primitive_planner_core
-  CATKIN_DEPENDS aerial_robot_msgs roscpp std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs gcopter multilink_copilot dragon pluginlib pcl_ros
+  CATKIN_DEPENDS aerial_robot_msgs roscpp std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs gcopter multilink_copilot dragon pluginlib
 )
 
-include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${OMPL_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS})
-add_definitions(${PCL_DEFINITIONS})
+include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${OMPL_INCLUDE_DIRS})
 
 add_library(motion_primitive_planner_core
   src/planner_core.cpp
@@ -58,7 +55,6 @@ add_executable(whole_body_motion_primitive_planner_node src/whole_body_online_pl
 target_link_libraries(whole_body_motion_primitive_planner_node
   motion_primitive_planner_core
   ${catkin_LIBRARIES}
-  ${PCL_LIBRARIES}
 )
 add_dependencies(whole_body_motion_primitive_planner_node ${catkin_EXPORTED_TARGETS})
 

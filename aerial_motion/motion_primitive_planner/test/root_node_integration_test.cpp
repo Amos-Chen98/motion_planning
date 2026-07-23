@@ -36,11 +36,6 @@ protected:
     received_selection_ = std::isfinite(message->data);
   }
 
-  void minimumClearanceCallback(const std_msgs::Float64::ConstPtr& message)
-  {
-    root_clearance_is_nan_ = std::isnan(message->data);
-  }
-
   static sensor_msgs::PointCloud2 blockingCloud()
   {
     std::vector<Eigen::Vector3d> points;
@@ -79,7 +74,6 @@ protected:
   std::vector<geometry_msgs::PoseStamped> commands_;
   double selected_minimum_fc_rp_ = 0.0;
   bool received_selection_ = false;
-  bool root_clearance_is_nan_ = false;
 };
 
 TEST_F(RootNodeIntegration, PublishesTrajectoryAndKeepsItWhenReplanningFails)
@@ -94,9 +88,6 @@ TEST_F(RootNodeIntegration, PublishesTrajectoryAndKeepsItWhenReplanningFails)
   const ros::Subscriber fc_subscriber = nh.subscribe<std_msgs::Float64>(
       "/dragon/selected_min_fc_rp", 10,
       [this](const std_msgs::Float64::ConstPtr& message) { minimumFcCallback(message); });
-  const ros::Subscriber clearance_subscriber = nh.subscribe<std_msgs::Float64>(
-      "/dragon/selected_min_clearance", 10,
-      [this](const std_msgs::Float64::ConstPtr& message) { minimumClearanceCallback(message); });
   const ros::Publisher odom_publisher = nh.advertise<nav_msgs::Odometry>("/dragon/root/flu_odom", 10);
   const ros::Subscriber root_tail_subscriber = nh.subscribe<geometry_msgs::PoseStamped>(
       "/dragon/root/tail_pose", 10,
@@ -141,7 +132,6 @@ TEST_F(RootNodeIntegration, PublishesTrajectoryAndKeepsItWhenReplanningFails)
   ASSERT_FALSE(trajectories_.empty());
   ASSERT_TRUE(received_selection_);
   EXPECT_GT(trajectories_.front().durations.size(), 0u);
-  EXPECT_TRUE(root_clearance_is_nan_);
 
   const size_t trajectory_count = trajectories_.size();
   const size_t command_count = commands_.size();

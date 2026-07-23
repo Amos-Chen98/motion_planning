@@ -56,10 +56,24 @@ struct Candidate
 struct WholeBodyCandidateScore
 {
   bool feasible = false;
-  double minimum_clearance = -std::numeric_limits<double>::infinity();
   double duration = std::numeric_limits<double>::infinity();
   double joint_motion = std::numeric_limits<double>::infinity();
   double root_jerk = std::numeric_limits<double>::infinity();
+};
+
+struct WholeBodyConfiguration
+{
+  Eigen::Vector3d link1_tail = Eigen::Vector3d::Zero();
+  Eigen::Matrix3d root_link_rotation = Eigen::Matrix3d::Identity();
+  Eigen::VectorXd joint_positions;
+};
+
+struct DragonCollisionGeometry
+{
+  int link_num = 0;
+  double link_length = 0.0;
+  std::vector<int> pitch_joint_indices;
+  std::vector<int> yaw_joint_indices;
 };
 
 struct RootCommandKinematics
@@ -115,6 +129,11 @@ std::vector<Eigen::Vector3d> linkEndpoints(const Eigen::Vector3d& link1_tail,
 bool bodyCollides(const std::vector<Eigen::Vector3d>& endpoints,
                   double sample_spacing,
                   const std::function<bool(const Eigen::Vector3d&)>& occupied);
+
+bool wholeBodyCollides(const WholeBodyConfiguration& configuration,
+                       const DragonCollisionGeometry& geometry,
+                       double sample_spacing,
+                       const std::function<bool(const Eigen::Vector3d&)>& occupied);
 
 const char* candidateStatusName(CandidateStatus status);
 

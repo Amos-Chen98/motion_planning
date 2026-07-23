@@ -38,9 +38,8 @@
     <arg name="max_baselink_tilt" default="1.20" />
 
     <arg name="voxel_width" default="0.10" />
-    <arg name="dilate_radius" default="0.30" />
-    <!-- Each link capsule encloses the approximately 0.40 m-wide gimbal projection. -->
-    <arg name="whole_body_radius" default="0.20" />
+    <!-- The dilated binary map represents each approximately 0.40 m-wide link capsule. -->
+    <arg name="dilate_radius" default="0.20" />
     <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
     <arg name="use_fixed_target_height" default="false" />
     <arg name="target_height" default="1.0" />
@@ -61,7 +60,6 @@
         <param name="RootChildFrameId" value="$(arg root_child_frame_id)" />
         <param name="VoxelWidth" value="$(arg voxel_width)" />
         <param name="DilateRadius" value="$(arg dilate_radius)" />
-        <param name="WholeBodyRadius" value="$(arg whole_body_radius)" />
         <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
         <param name="MaxVelMag" value="$(arg max_vel_mag)" />
         <param name="ReplanHz" value="$(arg replan_hz)" />

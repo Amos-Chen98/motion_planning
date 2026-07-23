@@ -20,6 +20,7 @@
 
 #include <deque>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -77,6 +78,7 @@ public:
   const std::vector<int>& linkJointIndices() const { return link_joint_indices_; }
   const std::vector<int>& pitchJointIndices() const { return pitch_joint_indices_; }
   const std::vector<int>& yawJointIndices() const { return yaw_joint_indices_; }
+  DragonCollisionGeometry collisionGeometry() const;
 
 private:
   int link_num_ = 0;
@@ -184,11 +186,11 @@ public:
   Eigen::Vector3d clampTarget(const Eigen::Vector3d& requested, double clearance) const;
   PrimitiveBatch generate(const RootState& start, const Eigen::Vector3d& target);
 
-  bool occupied(const Eigen::Vector3d& point) const { return backend_.query(point); }
-  double voxelScale() const { return backend_.voxelScale(); }
-  Eigen::Vector3d mapOrigin() const { return backend_.mapOrigin(); }
-  Eigen::Vector3d mapCorner() const { return backend_.mapCorner(); }
-  std::vector<Eigen::Vector3i> occupiedVoxels() const;
+  bool occupied(const Eigen::Vector3d& point) const;
+  double voxelScale() const;
+  Eigen::Vector3d mapOrigin() const;
+  Eigen::Vector3d mapCorner() const;
+  std::shared_ptr<const gcopter_planner::PlannerBackend> occupancySnapshot() const;
 
   static Eigen::Vector3d truncateRoute(const std::vector<Eigen::Vector3d>& full_route,
                                        double horizon,
@@ -196,9 +198,11 @@ public:
 
 private:
   void rebuildMap();
+  std::vector<Eigen::Vector3i> occupiedVoxels(
+      const gcopter_planner::PlannerBackend& backend) const;
 
   SharedPlannerConfig config_;
-  gcopter_planner::PlannerBackend backend_;
+  std::shared_ptr<gcopter_planner::PlannerBackend> backend_;
   PrimitiveGenerator generator_;
   std::unordered_set<long> occupied_voxel_keys_;
 };
@@ -212,7 +216,6 @@ struct CandidateVisualization
 struct SelectedCandidateMetrics
 {
   double minimum_fc_rp = std::numeric_limits<double>::quiet_NaN();
-  double minimum_clearance = std::numeric_limits<double>::quiet_NaN();
   double joint_motion = std::numeric_limits<double>::quiet_NaN();
 };
 
@@ -234,7 +237,6 @@ private:
   ros::Publisher marker_pub_;
   ros::Publisher selected_candidate_pub_;
   ros::Publisher selected_min_fc_pub_;
-  ros::Publisher selected_min_clearance_pub_;
   ros::Publisher selected_joint_motion_pub_;
 };
 

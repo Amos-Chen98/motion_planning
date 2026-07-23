@@ -23,7 +23,7 @@ RootCandidateEvaluator::RootCandidateEvaluator(
   : follower_config_(follower_config)
   , prediction_dt_(prediction_dt)
   , allow_stability_projection_fallback_(allow_stability_projection_fallback)
-  , model_(model)
+  , collision_geometry_(model.collisionGeometry())
   , stability_evaluator_(stability_evaluator)
   , environment_(environment)
   , predictor_(follower_config)
@@ -76,6 +76,11 @@ void RootCandidateEvaluator::evaluate(Candidate& candidate,
   candidate.min_fc_rp = std::numeric_limits<double>::infinity();
   candidate.joint_motion = 0.0;
   candidate.requires_stability_projection = false;
+  const std::shared_ptr<const gcopter_planner::PlannerBackend> occupancy =
+      environment_.occupancySnapshot();
+  const auto occupied = [&occupancy](const Eigen::Vector3d& point) {
+    return occupancy->query(point);
+  };
   double next_evaluation_time = 0.0;
   Eigen::VectorXd previous_joints = samples.front().joints;
   for (size_t index = 0; index < samples.size(); ++index)
@@ -98,12 +103,12 @@ void RootCandidateEvaluator::evaluate(Candidate& candidate,
 
     const Eigen::Matrix3d root_rotation =
         Eigen::AngleAxisd(sample.yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-    const std::vector<Eigen::Vector3d> endpoints = linkEndpoints(
-        sample.root_position, root_rotation, sample.joints,
-        model_.pitchJointIndices(), model_.yawJointIndices(),
-        model_.linkNum(), model_.linkLength());
-    if (bodyCollides(endpoints, 0.5 * environment_.voxelScale(),
-                     [this](const Eigen::Vector3d& point) { return environment_.occupied(point); }))
+    WholeBodyConfiguration configuration;
+    configuration.link1_tail = sample.root_position;
+    configuration.root_link_rotation = root_rotation;
+    configuration.joint_positions = sample.joints;
+    if (wholeBodyCollides(configuration, collision_geometry_, 0.5 * occupancy->voxelScale(),
+                          occupied))
     {
       candidate.status = CandidateStatus::kCollision;
       candidate.detail = "whole-body swept collision";

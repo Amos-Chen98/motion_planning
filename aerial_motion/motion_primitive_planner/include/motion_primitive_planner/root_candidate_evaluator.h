@@ -31,7 +31,7 @@ private:
   FollowerConfig follower_config_;
   double prediction_dt_ = 0.10;
   bool allow_stability_projection_fallback_ = false;
-  const DragonModelInfo& model_;
+  DragonCollisionGeometry collision_geometry_;
   std::shared_ptr<multilink_copilot::StabilityEvaluator> stability_evaluator_;
   const PlanningEnvironment& environment_;
   NominalJointPredictor predictor_;

@@ -36,13 +36,11 @@ WholeBodyPlannerConfig::WholeBodyPlannerConfig(const ros::NodeHandle& private_nh
   int random_seed = static_cast<int>(joint.random_seed);
   private_nh.param("JointPlannerSeed", random_seed, random_seed);
   joint.random_seed = static_cast<unsigned int>(std::max(0, random_seed));
-  private_nh.param("WholeBodyRadius", whole_body_radius, whole_body_radius);
   private_nh.param("PlanActivationLeadTime", activation_lead_time, activation_lead_time);
   private_nh.param("RootChildFrameId", root_child_frame_id, root_child_frame_id);
   private_nh.param("Verbose", verbose, verbose);
 
-  if (!std::isfinite(whole_body_radius) || whole_body_radius < 0.0 ||
-      !std::isfinite(activation_lead_time) || activation_lead_time <= 0.0 ||
+  if (!std::isfinite(activation_lead_time) || activation_lead_time <= 0.0 ||
       root_child_frame_id.empty())
   {
     throw std::invalid_argument("Invalid whole-body motion primitive planner configuration");

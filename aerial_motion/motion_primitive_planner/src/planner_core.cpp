@@ -250,17 +250,11 @@ int selectBestCandidate(const std::vector<Candidate>& candidates,
 
 int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& candidates)
 {
-  const auto clearance_greater = [](double lhs, double rhs) {
-    return !(std::isinf(lhs) && std::isinf(rhs)) && lhs > rhs + kEpsilon;
-  };
-  const auto clearance_equal = [](double lhs, double rhs) {
-    return (std::isinf(lhs) && std::isinf(rhs)) || std::abs(lhs - rhs) <= kEpsilon;
-  };
   int best = -1;
   for (size_t index = 0; index < candidates.size(); ++index)
   {
     const WholeBodyCandidateScore& candidate = candidates[index];
-    if (!candidate.feasible || std::isnan(candidate.minimum_clearance))
+    if (!candidate.feasible)
     {
       continue;
     }
@@ -270,13 +264,11 @@ int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& can
       continue;
     }
     const WholeBodyCandidateScore& current = candidates[static_cast<size_t>(best)];
-    if (clearance_greater(candidate.minimum_clearance, current.minimum_clearance) ||
-        (clearance_equal(candidate.minimum_clearance, current.minimum_clearance) &&
-         (candidate.duration < current.duration - kEpsilon ||
-          (std::abs(candidate.duration - current.duration) <= kEpsilon &&
-           (candidate.joint_motion < current.joint_motion - kEpsilon ||
-            (std::abs(candidate.joint_motion - current.joint_motion) <= kEpsilon &&
-             candidate.root_jerk < current.root_jerk))))))
+    if (candidate.duration < current.duration - kEpsilon ||
+        (std::abs(candidate.duration - current.duration) <= kEpsilon &&
+         (candidate.joint_motion < current.joint_motion - kEpsilon ||
+          (std::abs(candidate.joint_motion - current.joint_motion) <= kEpsilon &&
+           candidate.root_jerk < current.root_jerk))))
     {
       best = static_cast<int>(index);
     }
@@ -355,6 +347,18 @@ bool bodyCollides(const std::vector<Eigen::Vector3d>& endpoints,
     }
   }
   return false;
+}
+
+bool wholeBodyCollides(const WholeBodyConfiguration& configuration,
+                       const DragonCollisionGeometry& geometry,
+                       double sample_spacing,
+                       const std::function<bool(const Eigen::Vector3d&)>& occupied)
+{
+  const std::vector<Eigen::Vector3d> endpoints =
+      linkEndpoints(configuration.link1_tail, configuration.root_link_rotation,
+                    configuration.joint_positions, geometry.pitch_joint_indices,
+                    geometry.yaw_joint_indices, geometry.link_num, geometry.link_length);
+  return bodyCollides(endpoints, sample_spacing, occupied);
 }
 
 const char* candidateStatusName(CandidateStatus status)

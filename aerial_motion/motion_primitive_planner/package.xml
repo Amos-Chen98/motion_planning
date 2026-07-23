@@ -19,7 +19,6 @@
   <depend>dragon</depend>
   <depend>pluginlib</depend>
   <depend>ompl</depend>
-  <depend>pcl_ros</depend>
   <test_depend>rostest</test_depend>
   <test_depend>geo_robot_model</test_depend>
 </package>

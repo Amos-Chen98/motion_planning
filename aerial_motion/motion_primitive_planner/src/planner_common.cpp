@@ -208,6 +208,16 @@ bool DragonModelInfo::readCompleteJointState(const sensor_msgs::JointState& mess
   return true;
 }
 
+DragonCollisionGeometry DragonModelInfo::collisionGeometry() const
+{
+  DragonCollisionGeometry geometry;
+  geometry.link_num = link_num_;
+  geometry.link_length = link_length_;
+  geometry.pitch_joint_indices = pitch_joint_indices_;
+  geometry.yaw_joint_indices = yaw_joint_indices_;
+  return geometry;
+}
+
 TrajectoryHistory::TrajectoryHistory(const FollowerConfig& config)
   : sample_interval_(config.trajectory_sample_interval)
   , maximum_length_(config.trajectory_buffer_max_length)
@@ -324,14 +334,17 @@ std::vector<NominalJointSample> NominalJointPredictor::predict(
 }
 
 PlanningEnvironment::PlanningEnvironment(const SharedPlannerConfig& config)
-  : config_(config), backend_(config.common), generator_(config.primitive)
+  : config_(config), generator_(config.primitive)
 {
   rebuildMap();
 }
 
 void PlanningEnvironment::rebuildMap()
 {
-  backend_.setMapVoxels(occupiedVoxels());
+  std::shared_ptr<gcopter_planner::PlannerBackend> backend(
+      new gcopter_planner::PlannerBackend(config_.common));
+  backend->setMapVoxels(occupiedVoxels(*backend));
+  std::atomic_store(&backend_, backend);
 }
 
 void PlanningEnvironment::updateMap(const std::vector<Eigen::Vector3d>& points)
@@ -340,9 +353,10 @@ void PlanningEnvironment::updateMap(const std::vector<Eigen::Vector3d>& points)
   {
     occupied_voxel_keys_.clear();
   }
+  const std::shared_ptr<const gcopter_planner::PlannerBackend> backend = occupancySnapshot();
   for (const Eigen::Vector3d& point : points)
   {
-    const long key = backend_.voxelKey(point);
+    const long key = backend->voxelKey(point);
     if (key >= 0)
     {
       occupied_voxel_keys_.insert(key);
@@ -351,21 +365,48 @@ void PlanningEnvironment::updateMap(const std::vector<Eigen::Vector3d>& points)
   rebuildMap();
 }
 
-std::vector<Eigen::Vector3i> PlanningEnvironment::occupiedVoxels() const
+std::vector<Eigen::Vector3i> PlanningEnvironment::occupiedVoxels(
+    const gcopter_planner::PlannerBackend& backend) const
 {
   std::vector<Eigen::Vector3i> occupied;
   occupied.reserve(occupied_voxel_keys_.size());
   for (const long key : occupied_voxel_keys_)
   {
-    occupied.push_back(backend_.voxelIdFromKey(key));
+    occupied.push_back(backend.voxelIdFromKey(key));
   }
   return occupied;
+}
+
+std::shared_ptr<const gcopter_planner::PlannerBackend>
+PlanningEnvironment::occupancySnapshot() const
+{
+  return std::atomic_load(&backend_);
+}
+
+bool PlanningEnvironment::occupied(const Eigen::Vector3d& point) const
+{
+  return occupancySnapshot()->query(point);
+}
+
+double PlanningEnvironment::voxelScale() const
+{
+  return occupancySnapshot()->voxelScale();
+}
+
+Eigen::Vector3d PlanningEnvironment::mapOrigin() const
+{
+  return occupancySnapshot()->mapOrigin();
+}
+
+Eigen::Vector3d PlanningEnvironment::mapCorner() const
+{
+  return occupancySnapshot()->mapCorner();
 }
 
 Eigen::Vector3d PlanningEnvironment::clampTarget(const Eigen::Vector3d& requested,
                                                  double clearance) const
 {
-  return backend_.clampInsideMap(requested, clearance);
+  return occupancySnapshot()->clampInsideMap(requested, clearance);
 }
 
 Eigen::Vector3d PlanningEnvironment::truncateRoute(const std::vector<Eigen::Vector3d>& full_route,
@@ -397,14 +438,15 @@ Eigen::Vector3d PlanningEnvironment::truncateRoute(const std::vector<Eigen::Vect
 PrimitiveBatch PlanningEnvironment::generate(const RootState& start, const Eigen::Vector3d& target)
 {
   PrimitiveBatch result;
-  if (backend_.query(start.position))
+  const std::shared_ptr<gcopter_planner::PlannerBackend> backend = std::atomic_load(&backend_);
+  if (backend->query(start.position))
   {
     result.failure = PrimitiveBatchFailure::kStartCollision;
     result.detail = "root start is in collision";
     return result;
   }
   std::vector<Eigen::Vector3d> full_route;
-  if (!backend_.searchPath(start.position, target, full_route))
+  if (!backend->searchPath(start.position, target, full_route))
   {
     result.failure = PrimitiveBatchFailure::kRouteSearchFailed;
     result.detail = "root route search failed";
@@ -479,7 +521,6 @@ CandidateDiagnosticsPublisher::CandidateDiagnosticsPublisher(
   marker_pub_ = nh.advertise<visualization_msgs::MarkerArray>("candidate_markers", 1, true);
   selected_candidate_pub_ = nh.advertise<std_msgs::Int32>("selected_candidate", 1, true);
   selected_min_fc_pub_ = nh.advertise<std_msgs::Float64>("selected_min_fc_rp", 1, true);
-  selected_min_clearance_pub_ = nh.advertise<std_msgs::Float64>("selected_min_clearance", 1, true);
   selected_joint_motion_pub_ = nh.advertise<std_msgs::Float64>("selected_joint_motion", 1, true);
 }
 
@@ -529,8 +570,6 @@ void CandidateDiagnosticsPublisher::publish(
   std_msgs::Float64 value;
   value.data = metrics.minimum_fc_rp;
   selected_min_fc_pub_.publish(value);
-  value.data = metrics.minimum_clearance;
-  selected_min_clearance_pub_.publish(value);
   value.data = metrics.joint_motion;
   selected_joint_motion_pub_.publish(value);
 }

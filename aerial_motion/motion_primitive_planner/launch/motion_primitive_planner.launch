@@ -26,7 +26,7 @@
     <arg name="allow_copilot_stability_projection_fallback" default="false" />
 
     <arg name="voxel_width" default="0.10" />
-    <arg name="dilate_radius" default="0.30" />
+    <arg name="dilate_radius" default="0.20" />
     <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
     <arg name="use_fixed_target_height" default="false" />
     <arg name="target_height" default="1.0" />

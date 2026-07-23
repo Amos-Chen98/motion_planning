@@ -149,19 +149,93 @@ TEST(PrimitiveGenerator, UsesTwoOffsetScalesForTheDefaultNineCandidates)
 
 TEST(WholeBodyCollision, DetectsTrailingLinkWhenRootTailIsClear)
 {
-  const Eigen::VectorXd joints = Eigen::VectorXd::Zero(6);
-  const std::vector<int> pitch = {0, 2, 4};
-  const std::vector<int> yaw = {1, 3, 5};
-  const Eigen::Matrix3d root_rotation =
+  WholeBodyConfiguration configuration;
+  configuration.root_link_rotation =
       multilink_copilot::follow_the_leader::rotationAroundZ(M_PI);
-  const std::vector<Eigen::Vector3d> endpoints =
-      linkEndpoints(Eigen::Vector3d::Zero(), root_rotation, joints, pitch, yaw, 4, 1.0);
-  ASSERT_EQ(endpoints.size(), 5u);
+  configuration.joint_positions = Eigen::VectorXd::Zero(6);
+  DragonCollisionGeometry geometry;
+  geometry.link_num = 4;
+  geometry.link_length = 1.0;
+  geometry.pitch_joint_indices = {0, 2, 4};
+  geometry.yaw_joint_indices = {1, 3, 5};
   const auto occupied = [](const Eigen::Vector3d& point) {
     return (point - Eigen::Vector3d(-2.5, 0.0, 0.0)).norm() < 0.08;
   };
   EXPECT_FALSE(occupied(Eigen::Vector3d::Zero()));
-  EXPECT_TRUE(bodyCollides(endpoints, 0.05, occupied));
+  EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
+}
+
+TEST(WholeBodyCollision, UsesOneInstantaneousConfigurationCheckerForEveryLink)
+{
+  WholeBodyConfiguration configuration;
+  configuration.root_link_rotation =
+      multilink_copilot::follow_the_leader::rotationAroundZ(M_PI);
+  configuration.joint_positions = Eigen::VectorXd::Zero(6);
+  DragonCollisionGeometry geometry;
+  geometry.link_num = 4;
+  geometry.link_length = 1.0;
+  geometry.pitch_joint_indices = {0, 2, 4};
+  geometry.yaw_joint_indices = {1, 3, 5};
+
+  const auto free = [](const Eigen::Vector3d&) { return false; };
+  EXPECT_FALSE(wholeBodyCollides(configuration, geometry, 0.05, free));
+  for (const double link_midpoint : {0.5, -0.5, -1.5, -2.5})
+  {
+    const auto occupied = [link_midpoint](const Eigen::Vector3d& point) {
+      return (point - Eigen::Vector3d(link_midpoint, 0.0, 0.0)).norm() < 0.01;
+    };
+    EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
+  }
+  for (const double endpoint : {1.0, -3.0})
+  {
+    const auto occupied = [endpoint](const Eigen::Vector3d& point) {
+      return (point - Eigen::Vector3d(endpoint, 0.0, 0.0)).norm() < 0.01;
+    };
+    EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
+  }
+}
+
+TEST(WholeBodyCollision, TreatsInvalidGeometryAsCollisionAndStopsAtFirstHit)
+{
+  WholeBodyConfiguration configuration;
+  configuration.joint_positions = Eigen::VectorXd::Zero(6);
+  DragonCollisionGeometry invalid_geometry;
+  int query_count = 0;
+  const auto occupied = [&query_count](const Eigen::Vector3d&) {
+    ++query_count;
+    return true;
+  };
+  EXPECT_TRUE(wholeBodyCollides(configuration, invalid_geometry, 0.05, occupied));
+  EXPECT_EQ(query_count, 0);
+
+  DragonCollisionGeometry geometry;
+  geometry.link_num = 4;
+  geometry.link_length = 1.0;
+  geometry.pitch_joint_indices = {0, 2, 4};
+  geometry.yaw_joint_indices = {1, 3, 5};
+  EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
+  EXPECT_EQ(query_count, 1);
+}
+
+TEST(WholeBodyCollision, TreatsAConfigurationOutsideTheMapAsCollision)
+{
+  PlanningEnvironment environment(validSharedConfig());
+  const std::shared_ptr<const gcopter_planner::PlannerBackend> occupancy =
+      environment.occupancySnapshot();
+  WholeBodyConfiguration configuration;
+  configuration.link1_tail = Eigen::Vector3d(-1.0, 0.0, 1.0);
+  configuration.root_link_rotation =
+      multilink_copilot::follow_the_leader::rotationAroundZ(M_PI);
+  configuration.joint_positions = Eigen::VectorXd::Zero(6);
+  DragonCollisionGeometry geometry;
+  geometry.link_num = 4;
+  geometry.link_length = 1.0;
+  geometry.pitch_joint_indices = {0, 2, 4};
+  geometry.yaw_joint_indices = {1, 3, 5};
+  const auto occupied = [&occupancy](const Eigen::Vector3d& point) {
+    return occupancy->query(point);
+  };
+  EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
 }
 
 TEST(FollowTheLeaderGeometry, CurvedHistoryProducesCurvedNominalShape)
@@ -318,20 +392,25 @@ TEST(CandidateSelector, RanksProjectionFallbackByLengthJointMotionMarginAndJerk)
   EXPECT_EQ(selectBestCandidate(candidates, true), 2);
 }
 
-TEST(WholeBodyCandidateSelector, PrioritizesClearanceThenDurationJointMotionAndJerk)
+TEST(WholeBodyCandidateSelector, PrioritizesDurationThenJointMotionAndJerk)
 {
   std::vector<WholeBodyCandidateScore> candidates(6);
-  candidates[0] = {false, 10.0, 1.0, 1.0, 1.0};
-  candidates[1] = {true, 0.30, 1.0, 1.0, 1.0};
-  candidates[2] = {true, 0.40, 5.0, 5.0, 5.0};
-  candidates[3] = {true, 0.40, 4.0, 5.0, 5.0};
-  candidates[4] = {true, 0.40, 4.0, 4.0, 5.0};
-  candidates[5] = {true, 0.40, 4.0, 4.0, 3.0};
+  candidates[0] = {false, 0.5, 1.0, 1.0};
+  candidates[1] = {true, 3.0, 1.0, 1.0};
+  candidates[2] = {true, 2.0, 5.0, 5.0};
+  candidates[3] = {true, 2.0, 4.0, 5.0};
+  candidates[4] = {true, 2.0, 4.0, 3.0};
+  candidates[5] = {true, 1.5, 10.0, 10.0};
   EXPECT_EQ(selectBestWholeBodyCandidate(candidates), 5);
 
-  candidates[1].minimum_clearance = std::numeric_limits<double>::infinity();
-  candidates[2].minimum_clearance = std::numeric_limits<double>::infinity();
-  EXPECT_EQ(selectBestWholeBodyCandidate(candidates), 1);
+  candidates[5].duration = 2.0;
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates), 4);
+
+  for (WholeBodyCandidateScore& candidate : candidates)
+  {
+    candidate.feasible = false;
+  }
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates), -1);
 }
 
 TEST(FullStateConversion, ConvertsFluTailPoseAndTwistToRootLinkOrigin)
@@ -432,6 +511,24 @@ TEST(PlanningEnvironment, AccumulatesOrReplacesMapVoxels)
   latest.updateMap({second});
   EXPECT_FALSE(latest.occupied(first));
   EXPECT_TRUE(latest.occupied(second));
+}
+
+TEST(PlanningEnvironment, PreservesImmutableOccupancySnapshotsAcrossMapUpdates)
+{
+  PlanningEnvironment environment(validSharedConfig(false));
+  const Eigen::Vector3d first(-0.5, 0.0, 1.0);
+  const Eigen::Vector3d second(0.5, 0.0, 1.0);
+  environment.updateMap({first});
+  const std::shared_ptr<const gcopter_planner::PlannerBackend> first_snapshot =
+      environment.occupancySnapshot();
+  environment.updateMap({second});
+  const std::shared_ptr<const gcopter_planner::PlannerBackend> second_snapshot =
+      environment.occupancySnapshot();
+
+  EXPECT_TRUE(first_snapshot->query(first));
+  EXPECT_FALSE(first_snapshot->query(second));
+  EXPECT_FALSE(second_snapshot->query(first));
+  EXPECT_TRUE(second_snapshot->query(second));
 }
 
 TEST(PlanningEnvironment, ClampsTargetsInsideTheConfiguredMap)
