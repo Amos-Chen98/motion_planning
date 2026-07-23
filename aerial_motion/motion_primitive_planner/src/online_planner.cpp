@@ -93,6 +93,13 @@ private:
 
   void targetCallback(const geometry_msgs::PoseStamped::ConstPtr& message)
   {
+    if (!ros_interface_.odomReceived())
+    {
+      ROS_ERROR("No valid root-link odometry has been received from %s; "
+                "discarding motion-primitive target.",
+                ros_interface_.resolvedOdomTopic().c_str());
+      return;
+    }
     const Eigen::Vector3d requested(message->pose.position.x, message->pose.position.y,
                                     config_.shared.common.resolveTargetHeight(*message));
     target_ = environment_.clampTarget(
