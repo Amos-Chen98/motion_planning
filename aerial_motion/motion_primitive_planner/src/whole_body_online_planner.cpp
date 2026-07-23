@@ -347,7 +347,8 @@ private:
       const double end_time = breakpoints[interval];
       // The root path can curve between command samples, so the endpoint chord is not a
       // conservative swept-distance bound. Primitive generation enforces max_velocity.
-      const double yaw_delta = joints.yaw(end_time) - joints.yaw(start_time);
+      const double yaw_delta =
+          shortestYawDelta(joints.yaw(start_time), joints.yaw(end_time));
       const Eigen::VectorXd q_delta =
           joints.jointPositions(end_time) - joints.jointPositions(start_time);
       const int subdivisions = wholeBodyMotionSubdivisionCount(

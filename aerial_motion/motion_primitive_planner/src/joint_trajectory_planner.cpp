@@ -1,4 +1,5 @@
 #include <motion_primitive_planner/joint_trajectory_planner.h>
+#include <motion_primitive_planner/planner_core.h>
 
 #include <ompl/base/ScopedState.h>
 #include <ompl/base/spaces/RealVectorStateSpace.h>
@@ -31,7 +32,7 @@ size_t upperWaypointIndex(const std::vector<Waypoint>& waypoints, double time)
 
 double interpolateYaw(double start, double goal, double ratio)
 {
-  return start + ratio * (goal - start);
+  return start + ratio * shortestYawDelta(start, goal);
 }
 }  // namespace
 
@@ -114,7 +115,7 @@ double JointPlanResult::yawRate(double time) const
   const TimedYawWaypoint& before = yaw_waypoints[upper - 1];
   const TimedYawWaypoint& after = yaw_waypoints[upper];
   const double duration = after.time - before.time;
-  return duration > kEpsilon ? (after.yaw - before.yaw) / duration : 0.0;
+  return duration > kEpsilon ? shortestYawDelta(before.yaw, after.yaw) / duration : 0.0;
 }
 
 JointTrajectoryPlanner::JointTrajectoryPlanner(

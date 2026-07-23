@@ -636,6 +636,21 @@ TEST(JointPlanResult, InterpolatesSynchronizedPositionVelocityAndYaw)
   EXPECT_NEAR(result.yawRate(2.0), 0.0, 1e-12);
 }
 
+TEST(JointPlanResult, InterpolatesYawAcrossWrapBoundaryOnShortestArc)
+{
+  JointPlanResult result;
+  result.success = true;
+  result.duration = 2.0;
+  result.yaw_waypoints = {{0.0, M_PI - 0.1}, {2.0, -M_PI + 0.1}};
+
+  EXPECT_NEAR(result.yaw(1.0), M_PI, 1e-12);
+  EXPECT_NEAR(result.yawRate(1.0), 0.1, 1e-12);
+
+  result.yaw_waypoints = {{0.0, -M_PI + 0.1}, {2.0, M_PI - 0.1}};
+  EXPECT_NEAR(result.yaw(1.0), -M_PI, 1e-12);
+  EXPECT_NEAR(result.yawRate(1.0), -0.1, 1e-12);
+}
+
 TEST(TrajectoryHistory, SamplesAndTrimsByArcLength)
 {
   FollowerConfig config;
