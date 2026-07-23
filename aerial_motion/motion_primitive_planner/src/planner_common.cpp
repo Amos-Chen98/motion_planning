@@ -475,7 +475,7 @@ PrimitiveBatch PlanningEnvironment::generate(const RootState& start, const Eigen
   final_state.col(0) = result.local_target;
   final_state.col(1) = final_velocity;
   final_state.col(2).setZero();
-  result.candidates = generator_.generate(result.local_route, initial_state, final_state);
+  result.candidates = generator_.generate(initial_state, final_state);
   return result;
 }
 

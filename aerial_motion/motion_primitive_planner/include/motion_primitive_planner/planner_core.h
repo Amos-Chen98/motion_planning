@@ -89,16 +89,15 @@ class PrimitiveGenerator
 public:
   explicit PrimitiveGenerator(const PrimitiveConfig& config);
 
-  std::vector<Candidate> generate(const std::vector<Eigen::Vector3d>& route,
-                                  const Eigen::Matrix3d& initial_state,
+  std::vector<Candidate> generate(const Eigen::Matrix3d& initial_state,
                                   const Eigen::Matrix3d& final_state) const;
 
-  static std::vector<Eigen::Vector3d> prepareRoute(const std::vector<Eigen::Vector3d>& route);
   static double sampledLength(const Trajectory<5>& trajectory);
 
 private:
-  std::vector<Eigen::Vector3d> offsetRoute(const std::vector<Eigen::Vector3d>& route,
-                                           int candidate_index) const;
+  std::vector<Eigen::Vector3d> candidateRoute(const Eigen::Vector3d& start,
+                                              const Eigen::Vector3d& target,
+                                              int candidate_index) const;
   bool buildTrajectory(const std::vector<Eigen::Vector3d>& route,
                        const Eigen::Matrix3d& initial_state,
                        const Eigen::Matrix3d& final_state,

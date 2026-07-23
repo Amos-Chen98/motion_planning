@@ -13,17 +13,8 @@ namespace motion_primitive_planner
 namespace
 {
 constexpr double kEpsilon = 1e-6;
+constexpr double kMinimumChordLength = 1e-3;
 constexpr double kShortRouteOffsetRatio = 0.4;
-
-double routeLength(const std::vector<Eigen::Vector3d>& route)
-{
-  double length = 0.0;
-  for (size_t index = 1; index < route.size(); ++index)
-  {
-    length += (route[index] - route[index - 1]).norm();
-  }
-  return length;
-}
 
 Eigen::Vector3d safeNormal(const Eigen::Vector3d& direction)
 {
@@ -47,37 +38,17 @@ PrimitiveGenerator::PrimitiveGenerator(const PrimitiveConfig& config) : config_(
   }
 }
 
-std::vector<Eigen::Vector3d> PrimitiveGenerator::prepareRoute(const std::vector<Eigen::Vector3d>& route)
+std::vector<Eigen::Vector3d> PrimitiveGenerator::candidateRoute(
+    const Eigen::Vector3d& start, const Eigen::Vector3d& target,
+    int candidate_index) const
 {
-  std::vector<Eigen::Vector3d> prepared;
-  prepared.reserve(route.size() + 1);
-  for (const Eigen::Vector3d& point : route)
+  if (candidate_index == 0 || config_.candidate_count == 1)
   {
-    if (point.allFinite() && (prepared.empty() || (point - prepared.back()).norm() > 1e-3))
-    {
-      prepared.push_back(point);
-    }
-  }
-  if (prepared.size() == 2)
-  {
-    prepared.insert(prepared.begin() + 1, 0.5 * (prepared.front() + prepared.back()));
-  }
-  return prepared;
-}
-
-std::vector<Eigen::Vector3d> PrimitiveGenerator::offsetRoute(const std::vector<Eigen::Vector3d>& route,
-                                                             int candidate_index) const
-{
-  if (candidate_index == 0 || route.size() <= 2 || config_.candidate_count == 1)
-  {
-    return route;
+    return {start, target};
   }
 
-  const Eigen::Vector3d chord = route.back() - route.front();
-  if (chord.norm() < kEpsilon)
-  {
-    return route;
-  }
+  const Eigen::Vector3d chord = target - start;
+  const double chord_length = chord.norm();
   const Eigen::Vector3d forward = chord.normalized();
   const Eigen::Vector3d normal = safeNormal(forward);
   const Eigen::Vector3d binormal = forward.cross(normal).normalized();
@@ -88,21 +59,12 @@ std::vector<Eigen::Vector3d> PrimitiveGenerator::offsetRoute(const std::vector<E
   const int direction_index = (candidate_index - 1) % direction_count;
   const double angle = 2.0 * M_PI * static_cast<double>(direction_index) /
                        static_cast<double>(direction_count);
-  const double maximum_amplitude = std::min(config_.max_offset, kShortRouteOffsetRatio * routeLength(route));
+  const double maximum_amplitude =
+      std::min(config_.max_offset, kShortRouteOffsetRatio * chord_length);
   const double amplitude = maximum_amplitude * static_cast<double>(radial_level) /
                            static_cast<double>(radial_level_count);
   const Eigen::Vector3d offset_direction = std::cos(angle) * normal + std::sin(angle) * binormal;
-
-  std::vector<Eigen::Vector3d> result = route;
-  const double total_length = routeLength(route);
-  double accumulated = 0.0;
-  for (size_t index = 1; index + 1 < result.size(); ++index)
-  {
-    accumulated += (route[index] - route[index - 1]).norm();
-    const double phase = total_length > kEpsilon ? accumulated / total_length : 0.0;
-    result[index] += amplitude * std::sin(M_PI * phase) * offset_direction;
-  }
-  return result;
+  return {start, 0.5 * (start + target) + amplitude * offset_direction, target};
 }
 
 bool PrimitiveGenerator::buildTrajectory(const std::vector<Eigen::Vector3d>& route,
@@ -150,18 +112,19 @@ bool PrimitiveGenerator::buildTrajectory(const std::vector<Eigen::Vector3d>& rou
   return false;
 }
 
-std::vector<Candidate> PrimitiveGenerator::generate(const std::vector<Eigen::Vector3d>& raw_route,
-                                                    const Eigen::Matrix3d& initial_state,
+std::vector<Candidate> PrimitiveGenerator::generate(const Eigen::Matrix3d& initial_state,
                                                     const Eigen::Matrix3d& final_state) const
 {
-  const std::vector<Eigen::Vector3d> route = prepareRoute(raw_route);
   std::vector<Candidate> candidates(static_cast<size_t>(config_.candidate_count));
-  if (route.size() < 3 || !initial_state.allFinite() || !final_state.allFinite())
+  const Eigen::Vector3d start = initial_state.col(0);
+  const Eigen::Vector3d target = final_state.col(0);
+  if (!initial_state.allFinite() || !final_state.allFinite() ||
+      (target - start).norm() <= kMinimumChordLength)
   {
     for (Candidate& candidate : candidates)
     {
       candidate.status = CandidateStatus::kGenerationFailed;
-      candidate.detail = "invalid route or endpoint state";
+      candidate.detail = "invalid endpoint state or near-zero chord";
     }
     return candidates;
   }
@@ -169,7 +132,8 @@ std::vector<Candidate> PrimitiveGenerator::generate(const std::vector<Eigen::Vec
   for (int index = 0; index < config_.candidate_count; ++index)
   {
     Candidate& candidate = candidates[static_cast<size_t>(index)];
-    if (!buildTrajectory(offsetRoute(route, index), initial_state, final_state, candidate))
+    if (!buildTrajectory(candidateRoute(start, target, index),
+                         initial_state, final_state, candidate))
     {
       candidate.status = CandidateStatus::kGenerationFailed;
       candidate.detail = "MINCO generation or velocity enforcement failed";

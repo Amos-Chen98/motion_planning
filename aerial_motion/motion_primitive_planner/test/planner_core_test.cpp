@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <deque>
+#include <limits>
 
 namespace motion_primitive_planner
 {
@@ -72,10 +73,10 @@ TEST(SharedPlannerConfig, RejectsInvalidSharedAndFollowerParameters)
   EXPECT_THROW(follower.validateOrThrow(), std::invalid_argument);
 }
 
-TEST(PrimitiveGenerator, ProducesConfiguredDistinctCandidatesWithSharedBoundaryState)
+TEST(PrimitiveGenerator, ProducesSinglePieceNominalAndOffsetCandidatesWithSharedBoundaryState)
 {
-  const std::vector<Eigen::Vector3d> route = {
-      Eigen::Vector3d(0.0, 0.0, 1.0), Eigen::Vector3d(1.0, 0.0, 1.0), Eigen::Vector3d(2.0, 0.0, 1.0)};
+  const Eigen::Vector3d start(0.0, 0.0, 1.0);
+  const Eigen::Vector3d target(2.0, 0.0, 1.0);
   for (const int count : {1, 2, 9})
   {
     PrimitiveConfig config;
@@ -85,14 +86,15 @@ TEST(PrimitiveGenerator, ProducesConfiguredDistinctCandidatesWithSharedBoundaryS
     config.cruise_velocity = 0.3;
     const PrimitiveGenerator generator(config);
     const std::vector<Candidate> candidates =
-        generator.generate(route, endpointState(route.front()), endpointState(route.back()));
+        generator.generate(endpointState(start), endpointState(target));
     ASSERT_EQ(candidates.size(), static_cast<size_t>(count));
+    EXPECT_EQ(candidates.front().trajectory.getPieceNum(), 1);
     for (const Candidate& candidate : candidates)
     {
       ASSERT_GT(candidate.trajectory.getPieceNum(), 0);
       const double duration = candidate.trajectory.getTotalDuration();
-      EXPECT_TRUE(candidate.trajectory.getPos(0.0).isApprox(route.front(), 1e-6));
-      EXPECT_TRUE(candidate.trajectory.getPos(duration).isApprox(route.back(), 1e-6));
+      EXPECT_TRUE(candidate.trajectory.getPos(0.0).isApprox(start, 1e-6));
+      EXPECT_TRUE(candidate.trajectory.getPos(duration).isApprox(target, 1e-6));
       EXPECT_LT(candidate.trajectory.getVel(0.0).norm(), 1e-6);
       EXPECT_LT(candidate.trajectory.getVel(duration).norm(), 1e-6);
       EXPECT_LT(candidate.trajectory.getAcc(0.0).norm(), 1e-6);
@@ -110,33 +112,61 @@ TEST(PrimitiveGenerator, ProducesConfiguredDistinctCandidatesWithSharedBoundaryS
   }
 }
 
-TEST(PrimitiveGenerator, InsertsAnInteriorPointForShortRoutes)
+TEST(PrimitiveGenerator, PreservesNonzeroEndpointPvaOnTheDirectCandidate)
 {
-  const std::vector<Eigen::Vector3d> route = {
-      Eigen::Vector3d(0.0, 0.0, 0.5), Eigen::Vector3d(0.3, 0.0, 0.5)};
-  const std::vector<Eigen::Vector3d> prepared = PrimitiveGenerator::prepareRoute(route);
-  ASSERT_EQ(prepared.size(), 3u);
-  EXPECT_TRUE(prepared[1].isApprox(0.5 * (route[0] + route[1])));
+  PrimitiveConfig config;
+  config.candidate_count = 1;
+  config.max_velocity = 0.5;
+  config.cruise_velocity = 0.3;
+  const PrimitiveGenerator generator(config);
+  Eigen::Matrix3d initial_state = Eigen::Matrix3d::Zero();
+  initial_state.col(0) = Eigen::Vector3d(0.0, 0.0, 1.0);
+  initial_state.col(1) = Eigen::Vector3d(0.05, 0.04, 0.0);
+  initial_state.col(2) = Eigen::Vector3d(0.01, -0.01, 0.0);
+  Eigen::Matrix3d final_state = Eigen::Matrix3d::Zero();
+  final_state.col(0) = Eigen::Vector3d(1.0, 0.0, 1.0);
+  final_state.col(1) = Eigen::Vector3d(0.0, 0.10, 0.0);
 
+  const Candidate candidate = generator.generate(initial_state, final_state).front();
+  ASSERT_EQ(candidate.trajectory.getPieceNum(), 1);
+  const double duration = candidate.trajectory.getTotalDuration();
+  EXPECT_TRUE(candidate.trajectory.getPos(0.0).isApprox(initial_state.col(0), 1e-9));
+  EXPECT_TRUE(candidate.trajectory.getVel(0.0).isApprox(initial_state.col(1), 1e-9));
+  EXPECT_TRUE(candidate.trajectory.getAcc(0.0).isApprox(initial_state.col(2), 1e-9));
+  EXPECT_TRUE(candidate.trajectory.getPos(duration).isApprox(final_state.col(0), 1e-9));
+  EXPECT_TRUE(candidate.trajectory.getVel(duration).isApprox(final_state.col(1), 1e-9));
+  EXPECT_LT(candidate.trajectory.getAcc(duration).norm(), 1e-6);
+  EXPECT_GT(std::abs(candidate.trajectory.getPos(0.1 * duration).y()), 1e-4);
+  EXPECT_LE(candidate.trajectory.getMaxVelRate(), config.max_velocity * (1.0 + 1e-6));
+}
+
+TEST(PrimitiveGenerator, LimitsOffsetsForShortChords)
+{
+  const Eigen::Vector3d start(0.0, 0.0, 0.5);
+  const Eigen::Vector3d target(0.3, 0.0, 0.5);
   PrimitiveConfig config;
   config.candidate_count = 3;
+  config.max_offset = 0.8;
   config.max_velocity = 0.2;
   config.cruise_velocity = 0.15;
-  const PrimitiveGenerator generator(config);
   const std::vector<Candidate> candidates =
-      generator.generate(route, endpointState(route.front()), endpointState(route.back()));
+      PrimitiveGenerator(config).generate(endpointState(start), endpointState(target));
   ASSERT_EQ(candidates.size(), 3u);
-  for (const Candidate& candidate : candidates)
+  const Eigen::Vector3d nominal_mid =
+      candidates[0].trajectory.getPos(0.5 * candidates[0].trajectory.getTotalDuration());
+  for (size_t index = 1; index < candidates.size(); ++index)
   {
-    EXPECT_GT(candidate.trajectory.getPieceNum(), 0);
-    EXPECT_LE(candidate.trajectory.getMaxVelRate(), config.max_velocity * (1.0 + 1e-6));
+    ASSERT_EQ(candidates[index].trajectory.getPieceNum(), 2);
+    const Eigen::Vector3d offset_mid =
+        candidates[index].trajectory.getPos(0.5 * candidates[index].trajectory.getTotalDuration());
+    EXPECT_NEAR((offset_mid - nominal_mid).norm(), 0.12, 1e-6);
   }
 }
 
 TEST(PrimitiveGenerator, UsesTwoOffsetScalesForTheDefaultNineCandidates)
 {
-  const std::vector<Eigen::Vector3d> route = {
-      Eigen::Vector3d(0.0, 0.0, 1.0), Eigen::Vector3d(1.0, 0.0, 1.0), Eigen::Vector3d(2.0, 0.0, 1.0)};
+  const Eigen::Vector3d start(0.0, 0.0, 1.0);
+  const Eigen::Vector3d target(2.0, 0.0, 1.0);
   PrimitiveConfig config;
   config.candidate_count = 9;
   config.max_offset = 0.8;
@@ -144,7 +174,7 @@ TEST(PrimitiveGenerator, UsesTwoOffsetScalesForTheDefaultNineCandidates)
   config.cruise_velocity = 0.3;
   const PrimitiveGenerator generator(config);
   const std::vector<Candidate> candidates =
-      generator.generate(route, endpointState(route.front()), endpointState(route.back()));
+      generator.generate(endpointState(start), endpointState(target));
   ASSERT_EQ(candidates.size(), 9u);
 
   const Eigen::Vector3d nominal_mid =
@@ -157,6 +187,49 @@ TEST(PrimitiveGenerator, UsesTwoOffsetScalesForTheDefaultNineCandidates)
   const double outer_offset = (outer_mid - nominal_mid).norm();
   EXPECT_GT(inner_offset, 0.1);
   EXPECT_GT(outer_offset, 1.5 * inner_offset);
+}
+
+TEST(PrimitiveGenerator, UsesDeterministicOffsetsForVerticalChords)
+{
+  const Eigen::Vector3d start(0.0, 0.0, 0.5);
+  const Eigen::Vector3d target(0.0, 0.0, 1.5);
+  PrimitiveConfig config;
+  config.candidate_count = 2;
+  config.max_offset = 0.2;
+  config.max_velocity = 0.5;
+  config.cruise_velocity = 0.3;
+  const std::vector<Candidate> candidates =
+      PrimitiveGenerator(config).generate(endpointState(start), endpointState(target));
+  ASSERT_EQ(candidates.size(), 2u);
+  ASSERT_EQ(candidates[1].trajectory.getPieceNum(), 2);
+  const Eigen::Vector3d offset_mid =
+      candidates[1].trajectory.getPos(0.5 * candidates[1].trajectory.getTotalDuration());
+  EXPECT_NEAR(offset_mid.x(), 0.0, 1e-9);
+  EXPECT_NEAR(offset_mid.y(), -config.max_offset, 1e-9);
+  EXPECT_NEAR(offset_mid.z(), 1.0, 1e-9);
+}
+
+TEST(PrimitiveGenerator, RejectsNonfiniteStatesAndNearZeroChords)
+{
+  PrimitiveConfig config;
+  config.candidate_count = 2;
+  config.max_velocity = 0.5;
+  config.cruise_velocity = 0.3;
+  const PrimitiveGenerator generator(config);
+
+  Eigen::Matrix3d invalid = endpointState(Eigen::Vector3d::Zero());
+  invalid(0, 1) = std::numeric_limits<double>::quiet_NaN();
+  for (const Candidate& candidate :
+       generator.generate(invalid, endpointState(Eigen::Vector3d::UnitX())))
+  {
+    EXPECT_EQ(candidate.status, CandidateStatus::kGenerationFailed);
+  }
+  for (const Candidate& candidate :
+       generator.generate(endpointState(Eigen::Vector3d::Zero()),
+                          endpointState(Eigen::Vector3d(1e-4, 0.0, 0.0))))
+  {
+    EXPECT_EQ(candidate.status, CandidateStatus::kGenerationFailed);
+  }
 }
 
 TEST(WholeBodyCollision, DetectsTrailingLinkWhenRootTailIsClear)
@@ -596,7 +669,7 @@ TEST(NominalJointPredictor, PreservesHandoverStateAndUsesSharedFollowerGeometry)
   const std::vector<Eigen::Vector3d> route = {
       Eigen::Vector3d(0.0, 0.0, 1.0), Eigen::Vector3d(0.5, 0.0, 1.0)};
   const Candidate candidate = PrimitiveGenerator(primitive).generate(
-      route, endpointState(route.front()), endpointState(route.back())).front();
+      endpointState(route.front()), endpointState(route.back())).front();
 
   FollowerConfig follower;
   TrajectoryHistory history(follower);

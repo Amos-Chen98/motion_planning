@@ -4,7 +4,7 @@
 
 ## Design
 
-Both nodes use the same `PlanningEnvironment` for accumulated-map maintenance, goal clamping, route search, horizon truncation, root primitive generation, and immutable binary occupancy snapshots. They also share DRAGON joint metadata, bounded trajectory history, nominal follow-the-leader prediction, stability configuration, candidate diagnostics, and one instantaneous whole-body collision checker. The root node retains GCOPTER trajectory handover and publication, while the whole-body node retains joint-space planning, activation/hold state, publisher ownership checks, and direct full-state output.
+Both nodes use the same `PlanningEnvironment` for accumulated-map maintenance, goal clamping, route search, horizon truncation, root primitive generation, and immutable binary occupancy snapshots. The searched route determines the local target and, for a non-terminal segment, its terminal-velocity direction; intermediate route points do not shape the root primitives. Both nodes also share DRAGON joint metadata, bounded trajectory history, nominal follow-the-leader prediction, stability configuration, candidate diagnostics, and one instantaneous whole-body collision checker. The root node retains GCOPTER trajectory handover and publication, while the whole-body node retains joint-space planning, activation/hold state, publisher ownership checks, and direct full-state output.
 
 ### Shared Collision Model
 
@@ -12,7 +12,7 @@ For each instantaneous DRAGON configuration, the shared checker reconstructs the
 
 ### Root-Link Planner
 
-The planner searches toward the global goal, selects a local target, and generates polynomial motion primitives for that segment. The default candidate set contains a nominal trajectory and two four-direction offset rings for moderate and large detours.
+The planner searches toward the global goal and selects a local target by truncating the searched route at the planning horizon. It then generates the nominal root primitive as one unconstrained-interior MINCO segment directly between the current PVA state and the local-target PVA state, without using the route's intermediate obstacle-avoidance points. Nonzero endpoint velocity or acceleration can make this continuous optimum deviate temporarily from the geometric chord. Alternative candidates use one offset midpoint in the chord-normal plane; the default set contains the nominal trajectory and two four-direction offset rings.
 
 Each candidate predicts the full body with the shared follow-the-leader predictor, checks swept-body collisions and the same joint-limit, feasible-control, thrust, rotor-clearance, and baselink-tilt constraints used by the whole-body planner, then selects the shortest and smoothest feasible trajectory. If no candidate is feasible, the active trajectory is retained and planning is retried later.
 
