@@ -13,6 +13,7 @@ find_package(ompl REQUIRED)
 find_package(catkin REQUIRED COMPONENTS
   aerial_robot_msgs
   roscpp
+  rospy
   std_msgs
   geometry_msgs
   nav_msgs
@@ -22,12 +23,13 @@ find_package(catkin REQUIRED COMPONENTS
   multilink_copilot
   dragon
   pluginlib
+  tf
 )
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES motion_primitive_planner_core
-  CATKIN_DEPENDS aerial_robot_msgs roscpp std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs gcopter multilink_copilot dragon pluginlib
+  CATKIN_DEPENDS aerial_robot_msgs roscpp rospy std_msgs geometry_msgs nav_msgs sensor_msgs visualization_msgs gcopter multilink_copilot dragon pluginlib tf
 )
 
 include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${OMPL_INCLUDE_DIRS})
@@ -94,6 +96,10 @@ install(TARGETS motion_primitive_planner_core motion_primitive_planner_node whol
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+catkin_install_python(PROGRAMS
+  scripts/root_pose_to_flu_odom.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(DIRECTORY include/${PROJECT_NAME}/ DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
 install(DIRECTORY config launch DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION} USE_SOURCE_PERMISSIONS)

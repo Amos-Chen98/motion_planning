@@ -5,6 +5,7 @@
     <arg name="world_frame_id" default="world" />
     <arg name="pcl_topic" default="/pcl_topic" />
     <arg name="target_topic" default="/move_base_simple/goal" />
+    <arg name="root_pose_topic" default="/$(arg robot_ns)/root/tail_pose" />
     <arg name="odom_topic" default="/$(arg robot_ns)/root/flu_odom" />
     <arg name="joint_states_topic" default="/$(arg robot_ns)/joint_states" />
     <arg name="command_topic" default="/$(arg robot_ns)/root/target_pose" />
@@ -32,6 +33,12 @@
     <arg name="target_height" default="1.0" />
     <arg name="use_target_z" default="true" />
     <arg name="max_vel_mag" default="0.2" />
+
+    <include file="$(find motion_primitive_planner)/launch/root_state_to_flu_odom.launch">
+        <arg name="robot_ns" value="$(arg robot_ns)" />
+        <arg name="root_pose_topic" value="$(arg root_pose_topic)" />
+        <arg name="flu_odom_topic" value="$(arg odom_topic)" />
+    </include>
 
     <group ns="$(arg robot_ns)">
         <node pkg="motion_primitive_planner" type="motion_primitive_planner_node"

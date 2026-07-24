@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+
+<launch>
+    <arg name="robot_ns" default="dragon" />
+
+    <!-- Input: Dragon root-link pose (PoseStamped, LINK frame, world). -->
+    <arg name="root_pose_topic" default="/$(arg robot_ns)/root/tail_pose" />
+    <!-- Output: FLU odometry for the motion planner's planning start. -->
+    <arg name="flu_odom_topic" default="/$(arg robot_ns)/root/flu_odom" />
+    <arg name="child_frame_id" default="$(arg robot_ns)/root_tail" />
+
+    <node pkg="motion_primitive_planner" type="root_pose_to_flu_odom.py"
+          name="root_pose_to_flu_odom" output="screen">
+        <param name="child_frame_id" value="$(arg child_frame_id)" />
+        <remap from="root/pose" to="$(arg root_pose_topic)" />
+        <remap from="odom" to="$(arg flu_odom_topic)" />
+    </node>
+</launch>

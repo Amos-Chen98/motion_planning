@@ -64,11 +64,7 @@ roslaunch motion_primitive_planner motion_primitive_planner.launch
 
 ### Whole-Body Planner
 
-The whole-body planner requires FLU odometry on `/dragon/root/flu_odom`. Start `root_state_to_flu_odom.launch` first; it converts the root-tail pose from `/dragon/root/tail_pose` to the required odometry topic.
-
-```bash
-roslaunch naraha_center root_state_to_flu_odom.launch
-```
+The whole-body planner starts `root_state_to_flu_odom.launch` automatically. It converts the root-tail pose from `/dragon/root/tail_pose` to FLU odometry on `/dragon/root/flu_odom`.
 
 ```bash
 roslaunch motion_primitive_planner whole_body_motion_primitive_planner.launch
