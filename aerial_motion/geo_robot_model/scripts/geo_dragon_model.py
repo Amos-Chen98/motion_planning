@@ -24,23 +24,26 @@ JOINT_NAMES = (
     "joint3_pitch",
     "joint3_yaw",
 )
+AUXILIARY_JOINT_NAMES = (
+    "gimbal1_roll",
+    "gimbal1_pitch",
+    "gimbal2_roll",
+    "gimbal2_pitch",
+    "gimbal3_roll",
+    "gimbal3_pitch",
+    "gimbal4_roll",
+    "gimbal4_pitch",
+    "rotor1",
+    "rotor2",
+    "rotor3",
+    "rotor4",
+)
+URDF_JOINT_NAMES = JOINT_NAMES + AUXILIARY_JOINT_NAMES
 POSITION_MODES = (FlightNav.POS_MODE, FlightNav.POS_VEL_MODE)
 
 
 def all_finite(values):
     return all(math.isfinite(float(value)) for value in values)
-
-
-def vector3_param(name, default):
-    """Read a finite three-element ROS parameter with a safe fallback."""
-    try:
-        vector = np.asarray(rospy.get_param(name, default), dtype=float)
-    except (TypeError, ValueError):
-        vector = np.asarray([], dtype=float)
-    if vector.shape != (3,) or not np.all(np.isfinite(vector)):
-        rospy.logwarn("Invalid %s; using %s.", name, default)
-        return np.asarray(default, dtype=float)
-    return vector
 
 
 def normalized_quaternion(message):
@@ -92,49 +95,14 @@ class DragonGeoRobotModel:
         self.world_frame_id = rospy.get_param("~world_frame_id", "world")
         self.cog_frame_id = rospy.get_param("~cog_frame_id", "dragon/cog")
         self.root_frame_id = rospy.get_param("~root_frame_id", "dragon/root")
-        self.link2_frame_id = rospy.get_param("~link2_frame_id", "dragon/link2")
-        self.livox_frame_id = rospy.get_param(
-            "~livox_frame_id", "dragon/livox_mid360"
-        )
-        self.lidar_frame_id = rospy.get_param(
-            "~lidar_frame_id", "dragon/lidar_imu"
-        )
         self.publish_rate = float(rospy.get_param("~publish_rate", 40.0))
         self.link_length = float(rospy.get_param("~link_length", 0.5255))
         self.link_diameter = float(rospy.get_param("~link_diameter", 0.04))
         self.joint_diameter = float(rospy.get_param("~joint_diameter", 0.06))
-        self.link_body_length = float(rospy.get_param("~link_body_length", 0.474))
-        self.inter_joint_length = float(
-            rospy.get_param("~inter_joint_length", 0.0515)
-        )
-        self.link2_to_livox_xyz = vector3_param(
-            "~link2_to_livox_mid360_xyz", [0.132, 0.0, 0.05592]
-        )
-        self.link2_to_livox_rpy = vector3_param(
-            "~link2_to_livox_mid360_rpy", [0.0, 0.0, 0.0]
-        )
-        self.livox_to_lidar_xyz = vector3_param(
-            "~livox_mid360_to_lidar_imu_xyz", [0.011, 0.02329, -0.02304]
-        )
-        self.livox_to_lidar_rpy = vector3_param(
-            "~livox_mid360_to_lidar_imu_rpy", [0.0, 0.0, 0.0]
-        )
 
         if self.link_length <= 0.0:
             rospy.logwarn("Invalid link_length %.6f; using 0.5255 m.", self.link_length)
             self.link_length = 0.5255
-        if self.link_body_length <= 0.0:
-            rospy.logwarn(
-                "Invalid link_body_length %.6f; using 0.474 m.",
-                self.link_body_length,
-            )
-            self.link_body_length = 0.474
-        if self.inter_joint_length < 0.0:
-            rospy.logwarn(
-                "Invalid inter_joint_length %.6f; using 0.0515 m.",
-                self.inter_joint_length,
-            )
-            self.inter_joint_length = 0.0515
 
         spawn_x = float(rospy.get_param("~spawn_x", 0.0))
         spawn_y = float(rospy.get_param("~spawn_y", 0.0))
@@ -195,8 +163,6 @@ class DragonGeoRobotModel:
         )
 
         self.tf_broadcaster = tf2_ros.TransformBroadcaster()
-        self.static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster()
-        self.publish_lidar_mount_transforms()
         publish_rate = self.publish_rate if self.publish_rate > 0.0 else 40.0
         self.timer = rospy.Timer(
             rospy.Duration.from_sec(1.0 / publish_rate), self.timer_callback
@@ -204,9 +170,8 @@ class DragonGeoRobotModel:
 
         rospy.loginfo(
             "DRAGON geometric model is ready with %.4f m link spacing, "
-            "non-actuating root/target_pose input, and the Livox mounted on %s.",
+            "non-actuating root/target_pose input, and URDF-managed link TF.",
             self.link_length,
-            self.link2_frame_id,
         )
 
     @staticmethod
@@ -416,18 +381,6 @@ class DragonGeoRobotModel:
         link_midpoints = 0.5 * (endpoints[:-1] + endpoints[1:])
         return endpoints, np.mean(link_midpoints, axis=0)
 
-    def compute_link2_pose(self, root_position, root_orientation, joint_positions):
-        """Compute the v1_5 URDF link2 pose, including the articulated joint gap."""
-        link1_rotation = tf_trans.quaternion_matrix(root_orientation)[:3, :3]
-        pitch_rotation = link1_rotation @ rotation_y(float(joint_positions[0]))
-        link2_position = (
-            np.asarray(root_position, dtype=float)
-            + self.link_body_length * link1_rotation[:, 0]
-            + self.inter_joint_length * pitch_rotation[:, 0]
-        )
-        link2_rotation = pitch_rotation @ rotation_z(float(joint_positions[1]))
-        return link2_position, link2_rotation
-
     def timer_callback(self, _event):
         self.publish_state()
 
@@ -439,9 +392,6 @@ class DragonGeoRobotModel:
             joint_positions = self.joint_positions.copy()
 
         endpoints, geometric_cog = self.compute_geometry(
-            root_position, root_orientation, joint_positions
-        )
-        link2_position, link2_rotation = self.compute_link2_pose(
             root_position, root_orientation, joint_positions
         )
         stamp = rospy.Time.now()
@@ -458,10 +408,12 @@ class DragonGeoRobotModel:
         joint_state = JointState()
         joint_state.header.stamp = stamp
         joint_state.header.frame_id = self.root_frame_id
-        joint_state.name = list(JOINT_NAMES)
-        joint_state.position = joint_positions.tolist()
-        joint_state.velocity = [0.0] * len(JOINT_NAMES)
-        joint_state.effort = [0.0] * len(JOINT_NAMES)
+        joint_state.name = list(URDF_JOINT_NAMES)
+        joint_state.position = joint_positions.tolist() + [0.0] * len(
+            AUXILIARY_JOINT_NAMES
+        )
+        joint_state.velocity = [0.0] * len(URDF_JOINT_NAMES)
+        joint_state.effort = [0.0] * len(URDF_JOINT_NAMES)
         self.joint_state_pub.publish(joint_state)
 
         root_pose = PoseStamped()
@@ -483,8 +435,6 @@ class DragonGeoRobotModel:
             stamp,
             root_position,
             root_orientation,
-            link2_position,
-            link2_rotation,
             geometric_cog,
         )
 
@@ -548,42 +498,11 @@ class DragonGeoRobotModel:
 
         return marker_array
 
-    def make_fixed_transform(self, parent_frame, child_frame, xyz, rpy, stamp):
-        transform = TransformStamped()
-        transform.header.stamp = stamp
-        transform.header.frame_id = parent_frame
-        transform.child_frame_id = child_frame
-        self.set_point(transform.transform.translation, xyz)
-        self.set_quaternion(
-            transform.transform.rotation, tf_trans.quaternion_from_euler(*rpy)
-        )
-        return transform
-
-    def publish_lidar_mount_transforms(self):
-        stamp = rospy.Time.now()
-        link2_to_livox = self.make_fixed_transform(
-            self.link2_frame_id,
-            self.livox_frame_id,
-            self.link2_to_livox_xyz,
-            self.link2_to_livox_rpy,
-            stamp,
-        )
-        livox_to_lidar = self.make_fixed_transform(
-            self.livox_frame_id,
-            self.lidar_frame_id,
-            self.livox_to_lidar_xyz,
-            self.livox_to_lidar_rpy,
-            stamp,
-        )
-        self.static_tf_broadcaster.sendTransform([link2_to_livox, livox_to_lidar])
-
     def publish_transforms(
         self,
         stamp,
         root_position,
         root_orientation,
-        link2_position,
-        link2_rotation,
         geometric_cog,
     ):
         root_transform = TransformStamped()
@@ -600,21 +519,7 @@ class DragonGeoRobotModel:
         self.set_point(cog_transform.transform.translation, geometric_cog)
         self.set_quaternion(cog_transform.transform.rotation, root_orientation)
 
-        link2_transform = TransformStamped()
-        link2_transform.header.stamp = stamp
-        link2_transform.header.frame_id = self.world_frame_id
-        link2_transform.child_frame_id = self.link2_frame_id
-        self.set_point(link2_transform.transform.translation, link2_position)
-        link2_matrix = np.identity(4)
-        link2_matrix[:3, :3] = link2_rotation
-        self.set_quaternion(
-            link2_transform.transform.rotation,
-            tf_trans.quaternion_from_matrix(link2_matrix),
-        )
-
-        self.tf_broadcaster.sendTransform(
-            [root_transform, cog_transform, link2_transform]
-        )
+        self.tf_broadcaster.sendTransform([root_transform, cog_transform])
 
 
 if __name__ == "__main__":

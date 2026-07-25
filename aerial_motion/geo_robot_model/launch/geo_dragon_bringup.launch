@@ -4,8 +4,6 @@
   <arg name="world_frame_id" default="world" />
   <arg name="cog_frame_id" default="$(arg robot_ns)/cog" />
   <arg name="root_frame_id" default="$(arg robot_ns)/root" />
-  <arg name="link2_frame_id" default="$(arg robot_ns)/link2" />
-  <arg name="livox_frame_id" default="$(arg robot_ns)/livox_mid360" />
   <arg name="lidar_frame_id" default="$(arg robot_ns)/lidar_imu" />
 
   <arg name="robot_model" default="$(find dragon)/robots/quad/v1_5_202601.urdf.xacro" />
@@ -36,15 +34,17 @@
       <param name="world_frame_id" type="str" value="$(arg world_frame_id)" />
       <param name="cog_frame_id" type="str" value="$(arg cog_frame_id)" />
       <param name="root_frame_id" type="str" value="$(arg root_frame_id)" />
-      <param name="link2_frame_id" type="str" value="$(arg link2_frame_id)" />
-      <param name="livox_frame_id" type="str" value="$(arg livox_frame_id)" />
-      <param name="lidar_frame_id" type="str" value="$(arg lidar_frame_id)" />
       <param name="publish_rate" type="double" value="$(arg publish_rate)" />
       <param name="spawn_x" type="double" value="$(arg spawn_x)" />
       <param name="spawn_y" type="double" value="$(arg spawn_y)" />
       <param name="spawn_z" type="double" value="$(arg spawn_z)" />
       <param name="spawn_yaw" type="double" value="$(arg spawn_yaw)" />
       <rosparam param="initial_joints">[0.0, 1.5707963267948966, 0.0, 1.5707963267948966, 0.0, 1.5707963267948966]</rosparam>
+    </node>
+
+    <node pkg="robot_state_publisher" type="robot_state_publisher"
+          name="robot_state_publisher" output="screen">
+      <param name="tf_prefix" value="$(arg robot_ns)" />
     </node>
   </group>
 
