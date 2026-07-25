@@ -18,6 +18,7 @@
     <arg name="use_accumulated_map" default="true" />
     <arg name="goal_tolerance" default="0.2" />
     <arg name="planning_horizon" default="3.0" />
+    <arg name="zero_local_target_vel" default="true" />
     <arg name="candidate_count" default="9" />
     <arg name="max_primitive_offset" default="0.8" />
 
@@ -75,6 +76,7 @@
         <param name="UseAccumulatedMap" value="$(arg use_accumulated_map)" />
         <param name="GoalTolerance" value="$(arg goal_tolerance)" />
         <param name="PlanningHorizon" value="$(arg planning_horizon)" />
+        <param name="ZeroLocalTargetVel" value="$(arg zero_local_target_vel)" />
         <param name="CandidateCount" value="$(arg candidate_count)" />
         <param name="MaxPrimitiveOffset" value="$(arg max_primitive_offset)" />
         <param name="JointPlanningTimeout" value="$(arg joint_planning_timeout)" />

@@ -50,6 +50,7 @@ struct SharedPlannerConfig
   bool use_accumulated_map = true;
   double goal_tolerance = 0.2;
   double planning_horizon = 3.0;
+  bool zero_local_target_vel = true;
 
   SharedPlannerConfig() = default;
   explicit SharedPlannerConfig(const ros::NodeHandle& private_nh);

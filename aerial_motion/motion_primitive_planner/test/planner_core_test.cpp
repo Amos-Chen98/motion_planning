@@ -753,7 +753,46 @@ TEST(PlanningEnvironment, ClampsTargetsInsideTheConfiguredMap)
   EXPECT_TRUE((clamped.array() <= (environment.mapCorner().array() - clearance)).all());
 }
 
-TEST(PlanningEnvironment, TruncatesRoutesAndBuildsTerminalPrimitiveBatch)
+TEST(PlanningEnvironment, AppliesConfigurableLocalTargetVelocity)
+{
+  RootState start;
+  start.position = Eigen::Vector3d(-0.5, 0.0, 1.0);
+  const Eigen::Vector3d target(1.5, 0.0, 1.0);
+
+  SharedPlannerConfig stopped_config = validSharedConfig();
+  stopped_config.planning_horizon = 0.5;
+  EXPECT_TRUE(stopped_config.zero_local_target_vel);
+  PlanningEnvironment stopped_environment(stopped_config);
+  const PrimitiveBatch stopped_batch = stopped_environment.generate(start, target);
+  ASSERT_TRUE(stopped_batch.success()) << stopped_batch.detail;
+  ASSERT_FALSE(stopped_batch.terminal);
+  for (const Candidate& candidate : stopped_batch.candidates)
+  {
+    ASSERT_GT(candidate.trajectory.getPieceNum(), 0);
+    EXPECT_LT(candidate.trajectory.getVel(candidate.trajectory.getTotalDuration()).norm(), 1e-6);
+  }
+
+  SharedPlannerConfig cruise_config = stopped_config;
+  cruise_config.zero_local_target_vel = false;
+  PlanningEnvironment cruise_environment(cruise_config);
+  const PrimitiveBatch cruise_batch = cruise_environment.generate(start, target);
+  ASSERT_TRUE(cruise_batch.success()) << cruise_batch.detail;
+  ASSERT_FALSE(cruise_batch.terminal);
+  const Eigen::Vector3d tangent =
+      cruise_batch.local_route.back() -
+      cruise_batch.local_route[cruise_batch.local_route.size() - 2];
+  ASSERT_GT(tangent.norm(), 1e-6);
+  const Eigen::Vector3d expected_velocity =
+      cruise_config.primitive.cruise_velocity * tangent.normalized();
+  for (const Candidate& candidate : cruise_batch.candidates)
+  {
+    ASSERT_GT(candidate.trajectory.getPieceNum(), 0);
+    EXPECT_TRUE(candidate.trajectory.getVel(candidate.trajectory.getTotalDuration())
+                    .isApprox(expected_velocity, 1e-6));
+  }
+}
+
+TEST(PlanningEnvironment, TruncatesRoutesAndKeepsGlobalTargetVelocityZero)
 {
   const std::vector<Eigen::Vector3d> route = {
       Eigen::Vector3d(0.0, 0.0, 1.0), Eigen::Vector3d(1.0, 0.0, 1.0),
@@ -763,16 +802,25 @@ TEST(PlanningEnvironment, TruncatesRoutesAndBuildsTerminalPrimitiveBatch)
   ASSERT_EQ(local.size(), 3u);
   EXPECT_TRUE(local_target.isApprox(Eigen::Vector3d(1.5, 0.0, 1.0), 1e-12));
 
-  SharedPlannerConfig config = validSharedConfig();
-  config.planning_horizon = 3.0;
-  PlanningEnvironment environment(config);
   RootState start;
   start.position = Eigen::Vector3d(-0.5, 0.0, 1.0);
-  const PrimitiveBatch batch = environment.generate(start, Eigen::Vector3d(0.5, 0.0, 1.0));
-  ASSERT_TRUE(batch.success()) << batch.detail;
-  EXPECT_TRUE(batch.terminal);
-  ASSERT_EQ(batch.candidates.size(), 3u);
-  EXPECT_TRUE(batch.candidates.front().trajectory.getPos(0.0).isApprox(start.position, 1e-6));
+  for (const bool zero_local_target_vel : {true, false})
+  {
+    SharedPlannerConfig config = validSharedConfig();
+    config.planning_horizon = 3.0;
+    config.zero_local_target_vel = zero_local_target_vel;
+    PlanningEnvironment environment(config);
+    const PrimitiveBatch batch = environment.generate(start, Eigen::Vector3d(0.5, 0.0, 1.0));
+    ASSERT_TRUE(batch.success()) << batch.detail;
+    EXPECT_TRUE(batch.terminal);
+    ASSERT_EQ(batch.candidates.size(), 3u);
+    for (const Candidate& candidate : batch.candidates)
+    {
+      ASSERT_GT(candidate.trajectory.getPieceNum(), 0);
+      EXPECT_TRUE(candidate.trajectory.getPos(0.0).isApprox(start.position, 1e-6));
+      EXPECT_LT(candidate.trajectory.getVel(candidate.trajectory.getTotalDuration()).norm(), 1e-6);
+    }
+  }
 }
 
 TEST(CandidateDiagnostics, UsesOneSharedStatusColorMapping)

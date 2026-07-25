@@ -69,6 +69,7 @@ SharedPlannerConfig::SharedPlannerConfig(const ros::NodeHandle& private_nh) : co
   private_nh.param("UseAccumulatedMap", use_accumulated_map, use_accumulated_map);
   private_nh.param("GoalTolerance", goal_tolerance, goal_tolerance);
   private_nh.param("PlanningHorizon", planning_horizon, planning_horizon);
+  private_nh.param("ZeroLocalTargetVel", zero_local_target_vel, zero_local_target_vel);
   private_nh.param("CandidateCount", primitive.candidate_count, primitive.candidate_count);
   private_nh.param("MaxPrimitiveOffset", primitive.max_offset, primitive.max_offset);
   private_nh.param("PrimitiveCruiseVelocity", primitive.cruise_velocity, 0.8 * common.maxVelMag);
@@ -463,7 +464,7 @@ PrimitiveBatch PlanningEnvironment::generate(const RootState& start, const Eigen
   Eigen::Vector3d final_velocity = Eigen::Vector3d::Zero();
   const Eigen::Vector3d tangent =
       result.local_route.back() - result.local_route[result.local_route.size() - 2];
-  if (!result.terminal && tangent.norm() > kEpsilon)
+  if (!config_.zero_local_target_vel && !result.terminal && tangent.norm() > kEpsilon)
   {
     final_velocity = config_.primitive.cruise_velocity * tangent.normalized();
   }
