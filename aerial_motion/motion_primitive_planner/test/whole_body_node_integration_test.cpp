@@ -50,6 +50,15 @@ protected:
     last_command_stopped_ = stopped;
   }
 
+  void rootTargetCallback(const geometry_msgs::PoseStamped::ConstPtr& message)
+  {
+    root_targets_.push_back(*message);
+    if (root_targets_.size() > 500)
+    {
+      root_targets_.erase(root_targets_.begin(), root_targets_.begin() + 100);
+    }
+  }
+
   void minimumFcCallback(const std_msgs::Float64::ConstPtr& message)
   {
     if (std::isfinite(message->data))
@@ -87,6 +96,7 @@ protected:
   }
 
   std::vector<aerial_robot_msgs::FullStateTarget> commands_;
+  std::vector<geometry_msgs::PoseStamped> root_targets_;
   double maximum_joint_step_ = 0.0;
   double selected_minimum_fc_rp_ = 0.0;
   ros::WallTime last_command_wall_time_;
@@ -101,6 +111,9 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
   const ros::Subscriber command_subscriber = nh.subscribe<aerial_robot_msgs::FullStateTarget>(
       "/dragon/full_state_target", 200,
       [this](const aerial_robot_msgs::FullStateTarget::ConstPtr& message) { fullStateCallback(message); });
+  const ros::Subscriber root_target_subscriber = nh.subscribe<geometry_msgs::PoseStamped>(
+      "/dragon/root/target_pose", 200,
+      [this](const geometry_msgs::PoseStamped::ConstPtr& message) { rootTargetCallback(message); });
   const ros::Subscriber fc_subscriber = nh.subscribe<std_msgs::Float64>(
       "/dragon/selected_min_fc_rp", 10,
       [this](const std_msgs::Float64::ConstPtr& message) { minimumFcCallback(message); });
@@ -200,9 +213,20 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
   EXPECT_EQ(terminal.joint_state.name.size(), 6u);
   EXPECT_EQ(terminal.joint_state.velocity.size(), 6u);
   EXPECT_TRUE(last_command_stopped_);
+  ASSERT_EQ(root_targets_.size(), commands_.size());
+  const geometry_msgs::PoseStamped& terminal_root_target = root_targets_.back();
+  EXPECT_EQ(terminal_root_target.header.stamp, terminal.header.stamp);
+  EXPECT_EQ(terminal_root_target.header.frame_id, terminal.header.frame_id);
+  EXPECT_NEAR(terminal_root_target.pose.position.x, second_goal.pose.position.x, 0.02);
+  EXPECT_NEAR(terminal_root_target.pose.position.y, second_goal.pose.position.y, 0.02);
+  EXPECT_NEAR(terminal_root_target.pose.position.z, second_goal.pose.position.z, 0.02);
   const double terminal_yaw = std::atan2(
       2.0 * terminal.root_state.pose.pose.orientation.w * terminal.root_state.pose.pose.orientation.z,
       1.0 - 2.0 * std::pow(terminal.root_state.pose.pose.orientation.z, 2));
+  const double terminal_tail_yaw = std::atan2(
+      2.0 * terminal_root_target.pose.orientation.w * terminal_root_target.pose.orientation.z,
+      1.0 - 2.0 * std::pow(terminal_root_target.pose.orientation.z, 2));
+  EXPECT_NEAR(std::abs(std::remainder(terminal_yaw - terminal_tail_yaw, 2.0 * M_PI)), M_PI, 1e-6);
   EXPECT_NEAR(terminal.root_state.pose.pose.position.x + 0.5255 * std::cos(terminal_yaw),
               second_goal.pose.position.x, 0.02);
   EXPECT_NEAR(terminal.root_state.pose.pose.position.y + 0.5255 * std::sin(terminal_yaw),

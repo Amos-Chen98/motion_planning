@@ -10,6 +10,7 @@
     <arg name="odom_topic" default="/$(arg robot_ns)/root/flu_odom" />
     <arg name="joint_states_topic" default="joint_states" />
     <arg name="full_state_target_topic" default="full_state_target" />
+    <arg name="root_target_topic" default="/$(arg robot_ns)/root/target_pose" />
     <arg name="trajectory_topic" default="/planning/trajectory" />
 
     <arg name="command_hz" default="40.0" />
@@ -65,6 +66,7 @@
         <remap from="odom" to="$(arg odom_topic)" />
         <remap from="joint_states" to="$(arg joint_states_topic)" />
         <remap from="full_state_target" to="$(arg full_state_target_topic)" />
+        <remap from="root/target_pose" to="$(arg root_target_topic)" />
         <remap from="trajectory" to="$(arg trajectory_topic)" />
         <param name="WorldFrameId" value="$(arg world_frame_id)" />
         <param name="RootChildFrameId" value="$(arg root_child_frame_id)" />

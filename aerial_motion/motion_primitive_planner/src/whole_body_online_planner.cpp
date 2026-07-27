@@ -122,6 +122,7 @@ public:
       throw std::runtime_error("Another node already publishes " + full_state_topic_);
     }
     full_state_pub_ = nh_.advertise<aerial_robot_msgs::FullStateTarget>("full_state_target", 10);
+    root_target_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("root/target_pose", 10);
     command_timer_ = nh_.createTimer(ros::Duration(1.0 / config_.joint.follower.command_hz),
                                      &WholeBodyOnlinePlanner::commandTimerCallback, this);
     planning_timer_ = nh_.createTimer(ros::Duration(1.0 / config_.shared.replan_hz),
@@ -758,7 +759,17 @@ private:
       message.joint_state.position[static_cast<size_t>(index)] = state.joint_positions(index);
       message.joint_state.velocity[static_cast<size_t>(index)] = state.joint_velocities(index);
     }
+
+    geometry_msgs::PoseStamped root_target;
+    root_target.header = message.header;
+    root_target.pose.position.x = state.tail_position.x();
+    root_target.pose.position.y = state.tail_position.y();
+    root_target.pose.position.z = state.tail_position.z();
+    root_target.pose.orientation.z = std::sin(0.5 * state.yaw);
+    root_target.pose.orientation.w = std::cos(0.5 * state.yaw);
+
     full_state_pub_.publish(message);
+    root_target_pub_.publish(root_target);
   }
 
   WholeBodyPlannerConfig config_;
@@ -779,6 +790,7 @@ private:
   ros::Subscriber odom_sub_;
   ros::Subscriber joint_state_sub_;
   ros::Publisher full_state_pub_;
+  ros::Publisher root_target_pub_;
   ros::Timer command_timer_;
   ros::Timer planning_timer_;
   ros::Timer publisher_guard_timer_;
