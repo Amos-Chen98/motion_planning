@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+  <arg name="robot_model" default="$(find dragon)/robots/quad/v1_5_202601.urdf.xacro" />
+
+  <param name="/use_sim_time" value="false" />
+
+  <group ns="dragon">
+    <param name="robot_description"
+           command="$(find xacro)/xacro '$(arg robot_model)' robot_name:=dragon" />
+
+    <node pkg="geo_robot_model" type="geo_dragon_stability_monitor"
+          name="geo_dragon_stability_monitor" output="screen">
+      <param name="publish_rate" type="double" value="20.0" />
+    </node>
+
+    <test test-name="dragon_stability_monitor_test" pkg="geo_robot_model"
+          type="dragon_stability_monitor_test" time-limit="30.0" />
+  </group>
+</launch>

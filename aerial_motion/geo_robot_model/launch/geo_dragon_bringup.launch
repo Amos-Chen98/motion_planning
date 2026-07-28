@@ -42,6 +42,11 @@
       <rosparam param="initial_joints">[0.0, 1.5707963267948966, 0.0, 1.5707963267948966, 0.0, 1.5707963267948966]</rosparam>
     </node>
 
+    <node pkg="geo_robot_model" type="geo_dragon_stability_monitor"
+          name="geo_dragon_stability_monitor" output="screen">
+      <param name="publish_rate" type="double" value="$(arg publish_rate)" />
+    </node>
+
     <node pkg="robot_state_publisher" type="robot_state_publisher"
           name="robot_state_publisher" output="screen">
       <param name="tf_prefix" value="$(arg robot_ns)" />

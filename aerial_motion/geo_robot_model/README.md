@@ -6,6 +6,7 @@
 
 - `point_robot_model.py`: ideal point-robot model that follows `aerial_robot_msgs/FlightNav` commands and publishes odometry and TF.
 - `geo_dragon_model.py`: ideal four-link DRAGON model that publishes its geometric state, complete URDF joint state, root/CoG TF, and optional lightweight visualization from root and joint commands.
+- `geo_dragon_stability_monitor`: evaluates the synchronized root pose and joint state with the canonical DRAGON robot model and publishes the measured roll/pitch feasible-control margin.
 - `livox_mid360_simulator`: converts a global point-cloud map into a local Livox Mid-360 point cloud using robot odometry and the robot-provided LiDAR TF.
 - `pose_to_flight_nav.py`: converts `geometry_msgs/PoseStamped` commands to `aerial_robot_msgs/FlightNav`.
 
@@ -34,7 +35,13 @@ The geometric DRAGON bringup publishes `/dragon/robot_description` from the cano
 
 `/dragon/joint_states` contains the six commanded inter-link joints followed by the eight gimbal joints and four rotor joints required to reconstruct the complete URDF tree. The geometric model keeps the gimbal and rotor positions at zero; planners continue to select the six inter-link joints by name.
 
-To debug the Copilot planner, start the geometric model and planner in separate terminals. Wait until the first launch reports that the DRAGON geometric model is ready before starting Copilot, because the planner reads `robot_description` during initialization.
+The bringup publishes `std_msgs/Float64` on `/dragon/stability/fc_rp_min` at the same configurable `publish_rate` used by the geometric state, which defaults to `40.0` Hz. The stability monitor uses the canonical `dragon/hydrus_like_robot_model`; it does not publish until it has received a valid root pose and complete link-joint state.
+
+To debug the Copilot planner, start the geometric model and planner in separate terminals. Wait until the first launch reports that the DRAGON geometric model is ready before starting Copilot, because the planner reads `robot_description` during initialization. Disable Copilot's duplicate stability publisher so that the geometric model remains the sole owner of the measured topic:
+
+```bash
+roslaunch multilink_copilot copilot_planner.launch publish_stability_metrics:=false
+```
 
 Override `robot_model` when a different compatible DRAGON xacro is required. When changing `robot_ns`, pass the same value to both launches so that the generated `/<robot_ns>/robot_description`, joint-state input, and full-state target output remain in the same namespace. The bundled RViz RobotModel display is configured for the default `dragon` namespace; use a matching RViz configuration for another namespace.
 
