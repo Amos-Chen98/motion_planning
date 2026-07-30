@@ -558,6 +558,47 @@ TEST(FollowTheLeaderGeometry, PartialRootHistoryTransitionsIntoCurrentBodyMorpho
   EXPECT_NEAR((targets.front() - short_history.back().position).norm(), 1.0, 1e-12);
 }
 
+TEST(NominalJointPredictor, ExposesRetracedHistoryBranchDiscontinuity)
+{
+  FollowerConfig follower;
+  follower.publish_yaw_command = false;
+  TrajectoryHistory history(follower);
+  for (int index = 0; index <= 50; ++index)
+  {
+    history.append(Eigen::Vector3d(-2.5 + 0.05 * index, 0.0, 1.0));
+  }
+  NominalJointContext context;
+  context.executed_history = history;
+  context.link_num = 4;
+  context.link_length = 0.5255;
+  context.pitch_joint_indices = {0, 2, 4};
+  context.yaw_joint_indices = {1, 3, 5};
+
+  PrimitiveConfig primitive;
+  primitive.candidate_count = 1;
+  primitive.max_velocity = 1.0;
+  primitive.cruise_velocity = 0.25;
+  Eigen::Matrix3d initial_state = Eigen::Matrix3d::Zero();
+  initial_state.col(0) = Eigen::Vector3d(0.0, 0.0, 1.0);
+  Eigen::Matrix3d final_state = Eigen::Matrix3d::Zero();
+  final_state.col(0) = Eigen::Vector3d(-3.0, 0.0, 1.0);
+  const Candidate candidate =
+      PrimitiveGenerator(primitive).generate(initial_state, final_state).front();
+
+  const std::vector<NominalJointSample> samples =
+      NominalJointPredictor(follower).predict(
+          candidate.trajectory, context, Eigen::VectorXd::Zero(6), 0.0, 0.05);
+  ASSERT_GT(samples.size(), 2u);
+  double maximum_joint_step = 0.0;
+  for (size_t index = 1; index < samples.size(); ++index)
+  {
+    maximum_joint_step = std::max(
+        maximum_joint_step,
+        (samples[index].joints - samples[index - 1].joints).norm());
+  }
+  EXPECT_GT(maximum_joint_step, 3.0);
+}
+
 TEST(CandidateSelector, RanksOnlyFeasibleCandidatesByLengthThenJerk)
 {
   std::vector<Candidate> candidates(5);
@@ -664,6 +705,17 @@ TEST(WholeBodyCandidateSelector, RejectsTheBagDerivedRedundantFold)
   EXPECT_EQ(selectBestWholeBodyCandidate(candidates, 0.25), 1);
   EXPECT_EQ(selectBestWholeBodyCandidate(candidates, 0.0), 0);
   EXPECT_EQ(selectBestWholeBodyCandidate(candidates, -1.0), -1);
+}
+
+TEST(WholeBodyCandidateSelector, ChargesWorkspaceTrackingError)
+{
+  std::vector<WholeBodyCandidateScore> candidates(2);
+  candidates[0] = {true, 5.921, 4.410, 1.0, 0.605};
+  candidates[1] = {true, 5.921, 4.642, 2.0, 0.432};
+
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates, 0.25, 0.0), 0);
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates, 0.25, 6.0), 1);
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates, 0.25, -1.0), -1);
 }
 
 TEST(FullStateConversion, ConvertsFluTailPoseAndTwistToRootLinkOrigin)

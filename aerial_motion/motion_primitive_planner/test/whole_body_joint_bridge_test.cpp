@@ -209,6 +209,127 @@ TEST_F(WholeBodyJointBridge, RejectsAConnectionToAnInfeasibleEndpoint)
   EXPECT_TRUE(path.empty());
   EXPECT_FALSE(failure.empty());
 }
+
+TEST_F(WholeBodyJointBridge, TrackingCostPrefersCompactTurnaround)
+{
+  const Eigen::Vector3d history_start(0.280, 0.986, 0.769);
+  const Eigen::Vector3d start_position(2.554, 1.008, 0.500);
+  const Eigen::Vector3d target_position(-0.345, 0.256, 0.677);
+  Eigen::VectorXd start_joints(6);
+  start_joints << -0.0856703, 0.206497, -0.0231212, 0.334580,
+                  -0.0212780, 0.133864;
+  const double start_yaw = -0.0186;
+
+  JointPlannerConfig config = jointConfig(1);
+  config.planning_timeout = 1.0;
+  TrajectoryHistory history(config.follower);
+  for (int index = 0; index <= 80; ++index)
+  {
+    const double ratio = static_cast<double>(index) / 80.0;
+    history.append(history_start + ratio * (start_position - history_start));
+  }
+  const NominalJointContext context = makeNominalJointContext(history, *info_);
+
+  Eigen::Matrix3d initial_state = Eigen::Matrix3d::Zero();
+  initial_state.col(0) = start_position;
+  Eigen::Matrix3d final_state = Eigen::Matrix3d::Zero();
+  final_state.col(0) = target_position;
+  const std::vector<Candidate> candidates =
+      PrimitiveGenerator(primitive_).generate(initial_state, final_state);
+  ASSERT_EQ(candidates.size(), 9u);
+  std::vector<JointPlanResult> results;
+  std::vector<WholeBodyCandidateScore> scores;
+  results.reserve(candidates.size());
+  scores.reserve(candidates.size());
+  for (size_t index = 0; index < candidates.size(); ++index)
+  {
+    config.random_seed = 1 + static_cast<unsigned int>(index);
+    JointTrajectoryPlanner planner(config, evaluator_);
+    results.push_back(planner.plan(candidates[index].trajectory, context,
+                                   start_joints, start_yaw, 1.0));
+    const JointPlanResult& result = results.back();
+    scores.push_back({result.success, result.duration, result.joint_motion,
+                      candidates[index].jerk_energy, result.tracking_error_rms});
+  }
+
+  const int duration_and_joint_winner =
+      selectBestWholeBodyCandidate(scores, 0.25, 0.0);
+  const int tracking_aware_winner =
+      selectBestWholeBodyCandidate(scores, 0.25, 6.0);
+  ASSERT_GE(duration_and_joint_winner, 0);
+  ASSERT_GE(tracking_aware_winner, 0);
+  EXPECT_NE(tracking_aware_winner, duration_and_joint_winner);
+  EXPECT_LT(results[static_cast<size_t>(tracking_aware_winner)].tracking_error_rms, 0.5);
+  EXPECT_LT(results[static_cast<size_t>(tracking_aware_winner)].tracking_error_rms,
+            0.8 * results[static_cast<size_t>(duration_and_joint_winner)].tracking_error_rms);
+  EXPECT_LT(results[static_cast<size_t>(tracking_aware_winner)].tracking_error_max,
+            0.8 * results[static_cast<size_t>(duration_and_joint_winner)].tracking_error_max);
+}
+
+TEST_F(WholeBodyJointBridge, TerminalProjectionReachesSafeFoldBeforeRootHorizon)
+{
+  const Eigen::Vector3d start_position(0.0, 0.0, 1.0);
+  const Eigen::Vector3d target_position(0.0, -3.0, 1.0);
+  Eigen::VectorXd start_joints(6);
+  start_joints << 0.0, M_PI_2, 0.0, M_PI_2, 0.0, M_PI_2;
+
+  JointPlannerConfig config = jointConfig(31);
+  config.planning_timeout = 1.0;
+  config.bridge_timeout = 0.6;
+  TrajectoryHistory history(config.follower);
+  history.append(start_position);
+  const NominalJointContext context = makeNominalJointContext(history, *info_);
+  Eigen::Matrix3d initial_state = Eigen::Matrix3d::Zero();
+  initial_state.col(0) = start_position;
+  Eigen::Matrix3d final_state = Eigen::Matrix3d::Zero();
+  final_state.col(0) = target_position;
+  const Candidate candidate =
+      PrimitiveGenerator(primitive_).generate(initial_state, final_state).front();
+
+  JointTrajectoryPlanner planner(config, evaluator_);
+  const JointPlanResult result =
+      planner.plan(candidate.trajectory, context, start_joints, 0.0, 1.0);
+  ASSERT_TRUE(result.success) << result.detail;
+  ASSERT_GE(result.joint_waypoints.size(), 3u);
+  size_t motion_end = 0;
+  for (size_t index = 1; index < result.joint_waypoints.size(); ++index)
+  {
+    const TimedJointWaypoint& before = result.joint_waypoints[index - 1];
+    const TimedJointWaypoint& after = result.joint_waypoints[index];
+    const double duration = after.time - before.time;
+    ASSERT_GT(duration, 0.0);
+    const double maximum_rate =
+        (after.positions - before.positions).cwiseAbs().maxCoeff() / duration;
+    EXPECT_LE(maximum_rate, config.max_joint_velocity + 1e-9);
+    EXPECT_LE(maximum_rate / config.follower.command_hz,
+              config.max_joint_command_step + 1e-9);
+    if (!(after.positions - before.positions).isZero(1e-9))
+    {
+      motion_end = index;
+    }
+  }
+  ASSERT_GT(motion_end, 0u);
+  EXPECT_LT(result.joint_waypoints[motion_end].time, 0.3 * result.duration);
+  EXPECT_TRUE(result.joint_waypoints.back().positions.isApprox(
+      result.joint_waypoints[motion_end].positions, 1e-12));
+  EXPECT_NEAR(result.joint_waypoints.back().time, result.duration, 1e-9);
+  EXPECT_TRUE(std::isfinite(result.tracking_error_rms));
+  EXPECT_TRUE(std::isfinite(result.tracking_error_max));
+
+  const int stability_samples =
+      std::max(1, static_cast<int>(std::ceil(result.duration / 0.01)));
+  for (int sample = 0; sample <= stability_samples; ++sample)
+  {
+    const double time =
+        result.duration * static_cast<double>(sample) / stability_samples;
+    evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(result.yaw(time) + M_PI));
+    multilink_copilot::StabilityMetrics metrics;
+    ASSERT_TRUE(evaluator_->evaluate(result.jointPositions(time), metrics));
+    EXPECT_TRUE(metrics.safe) << "unsafe recovery at t=" << time;
+    EXPECT_GE(metrics.fc_rp_min + 1e-4,
+              evaluator_->config().fc_rp_min_threshold);
+  }
+}
 }  // namespace
 }  // namespace motion_primitive_planner
 

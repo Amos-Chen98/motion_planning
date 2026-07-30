@@ -45,11 +45,15 @@ The selected polynomial is handed to `traj_server`. A failed planning attempt do
 
 Planning runs on a dedicated worker so expensive candidate evaluation cannot block command publication. A request predicts the root and joint state at the configured activation time by sampling the current active plan and extending its trajectory history. Concurrent requests are coalesced, and target sequence checks prevent a result for an obsolete goal from being activated.
 
-For each root candidate, the planner constructs a continuous joint trajectory, time-scales the synchronized root and joint motion, and rechecks the final swept body against the occupancy snapshot. Feasible candidates are ranked by `duration + JointMotionCostWeight * joint_motion`, with joint motion, duration, and root jerk used as deterministic tie-breakers. The default weight of 0.25 s/rad prevents a marginal root-duration reduction from selecting a large deep-fold detour while retaining necessary bridges when smoother candidates are unavailable. The selected plan remains pending until its activation time, then becomes the active command source.
+For each root candidate, the planner constructs a continuous joint trajectory, time-scales the synchronized root and joint motion, and rechecks the final swept body against the occupancy snapshot. It also samples the executed shape at the command rate and measures each downstream link tail against the prefix of the root-tail trace available at that instant. The resulting RMS error captures sustained body expansion, while the maximum error records the transient tracking envelope.
+
+Feasible candidates are ranked by `duration + JointMotionCostWeight * joint_motion + TrackingErrorCostWeight * tracking_error_rms`, with tracking RMS, joint motion, duration, and root jerk used as deterministic tie-breakers. The default weights of 0.25 s/rad and 6.0 s/m discourage both unnecessary joint detours and root candidates that make the downstream body sweep far from the first-link trace. `TrackingErrorCostWeight=0` restores duration-and-joint-only ranking. The selected plan remains pending until its activation time, then becomes the active command source.
 
 ### Joint-Trajectory Construction and Repair
 
 The nominal follow-the-leader sequence is sampled and divided into feasible runs. If the measured start configuration is infeasible, the planner first attempts to project it to a nearby safe fold; failure to obtain a safe start rejects the candidate.
+
+When a root path retraces recent history, the exact Euclidean sphere intersections used by follow-the-leader can move between overlapping history branches even though the root motion is smooth. The resulting nominal joint jump cannot in general be removed by choosing a different intersection on the same zero-radius reversal, because a finite-length articulated chain must temporarily leave that trace. Bridge generation repairs flight feasibility for each candidate, and the trace-tracking term favors offset root primitives whose executed body remains compact through the reversal.
 
 **Anchor selection.** A bridge first tries the feasible samples bordering an infeasible interval, then progressively backs off to higher-margin samples within the configured window. This trades a small deviation from nominal motion for endpoints with enough feasible space for a connection.
 
@@ -57,7 +61,7 @@ The nominal follow-the-leader sequence is sampled and divided into feasible runs
 
 **Sampling fallback.** If structured detours fail, OMPL RRT-Connect searches between the backed-off anchors with a fold-biased sampler. The resulting path is shortened and revalidated at full resolution before it can be used.
 
-**Graceful degradation.** If no bridge reaches a later feasible run, the last validated joint shape is held across that interval and nominal tracking resumes when reachable. An infeasible terminal shape is projected toward a safe fold when possible; otherwise the final validated shape is held. Held shapes remain part of the swept-collision check.
+**Graceful degradation.** If no bridge reaches a later feasible run, the last validated joint shape is held across that interval and nominal tracking resumes when reachable. An infeasible terminal shape is projected toward a safe fold when possible; otherwise the final validated shape is held. When the direct transition to that fold is safe under the complete time-varying yaw schedule, the planner reaches it at the earliest joint-velocity- and command-step-limited time and holds it through the root horizon. If that early transition or hold is unsafe, the existing bridge search remains the fallback. Held shapes remain part of the swept-collision check.
 
 **Timing.** Candidate and bridge searches obey their configured deadlines. The completed joint path time-scales the root trajectory to satisfy joint-velocity and command-step limits, so command continuity is enforced on the trajectory that will actually execute.
 
@@ -92,4 +96,4 @@ After a failed attempt, retries remain event driven. The root-link planner keeps
 - **Magenta:** rejected because the nominal joint configuration violates a joint limit.
 - **Red:** rejected because of predicted whole-body collision, trajectory-generation failure, or another non-feasible status.
 
-Both nodes publish `/selected_candidate`, `/selected_min_fc_rp`, and `/selected_joint_motion`. Collision results are binary and no clearance diagnostic is published.
+Both nodes publish `/selected_candidate`, `/selected_min_fc_rp`, and `/selected_joint_motion`. The whole-body planner's selected-candidate log additionally reports the downstream-link tracking RMS and maximum in metres. Collision results are binary and no clearance diagnostic is published.

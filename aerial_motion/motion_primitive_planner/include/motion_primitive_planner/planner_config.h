@@ -28,6 +28,8 @@ struct WholeBodyPlannerConfig
   double activation_lead_time = 0.75;
   //! Equivalent seconds charged per radian of whole-body joint path length.
   double joint_motion_cost_weight = 0.25;
+  //! Equivalent seconds charged per metre of downstream-link tracking RMS.
+  double tracking_error_cost_weight = 6.0;
   std::string root_child_frame_id = "root";
   bool verbose = true;
 

@@ -259,9 +259,14 @@ int selectBestCandidate(const std::vector<Candidate>& candidates,
 }
 
 int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& candidates,
-                                 double joint_motion_cost_weight)
+                                 double joint_motion_cost_weight,
+                                 double tracking_error_cost_weight)
 {
   if (!std::isfinite(joint_motion_cost_weight) || joint_motion_cost_weight < 0.0)
+  {
+    return -1;
+  }
+  if (!std::isfinite(tracking_error_cost_weight) || tracking_error_cost_weight < 0.0)
   {
     return -1;
   }
@@ -271,8 +276,10 @@ int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& can
   {
     const WholeBodyCandidateScore& candidate = candidates[index];
     if (!candidate.feasible || !std::isfinite(candidate.duration) ||
-        !std::isfinite(candidate.joint_motion) || candidate.duration < 0.0 ||
-        candidate.joint_motion < 0.0)
+        !std::isfinite(candidate.joint_motion) ||
+        !std::isfinite(candidate.tracking_error_rms) ||
+        candidate.duration < 0.0 || candidate.joint_motion < 0.0 ||
+        candidate.tracking_error_rms < 0.0)
     {
       continue;
     }
@@ -283,16 +290,28 @@ int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& can
     }
     const WholeBodyCandidateScore& current = candidates[static_cast<size_t>(best)];
     const double candidate_cost =
-        candidate.duration + joint_motion_cost_weight * candidate.joint_motion;
+        candidate.duration + joint_motion_cost_weight * candidate.joint_motion +
+        tracking_error_cost_weight * candidate.tracking_error_rms;
     const double current_cost =
-        current.duration + joint_motion_cost_weight * current.joint_motion;
-    if (candidate_cost < current_cost - kEpsilon ||
-        (std::abs(candidate_cost - current_cost) <= kEpsilon &&
-         (candidate.joint_motion < current.joint_motion - kEpsilon ||
-          (std::abs(candidate.joint_motion - current.joint_motion) <= kEpsilon &&
-           (candidate.duration < current.duration - kEpsilon ||
-            (std::abs(candidate.duration - current.duration) <= kEpsilon &&
-             candidate.root_jerk < current.root_jerk))))))
+        current.duration + joint_motion_cost_weight * current.joint_motion +
+        tracking_error_cost_weight * current.tracking_error_rms;
+    bool better = candidate_cost < current_cost - kEpsilon;
+    if (!better && std::abs(candidate_cost - current_cost) <= kEpsilon)
+    {
+      better = candidate.tracking_error_rms < current.tracking_error_rms - kEpsilon;
+      if (!better &&
+          std::abs(candidate.tracking_error_rms - current.tracking_error_rms) <= kEpsilon)
+      {
+        better = candidate.joint_motion < current.joint_motion - kEpsilon;
+        if (!better && std::abs(candidate.joint_motion - current.joint_motion) <= kEpsilon)
+        {
+          better = candidate.duration < current.duration - kEpsilon ||
+                   (std::abs(candidate.duration - current.duration) <= kEpsilon &&
+                    candidate.root_jerk < current.root_jerk);
+        }
+      }
+    }
+    if (better)
     {
       best = static_cast<int>(index);
     }

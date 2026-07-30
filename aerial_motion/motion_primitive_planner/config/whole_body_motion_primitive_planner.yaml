@@ -11,6 +11,8 @@ MaxJointVelocity: 4.0
 MaxJointCommandStep: 0.10
 # Equivalent seconds charged per radian when ranking feasible whole-body plans.
 JointMotionCostWeight: 0.25
+# Equivalent seconds charged per metre of downstream-link tracking RMS.
+TrackingErrorCostWeight: 6.0
 
 # Joint-space stability projection.
 StabilityQpMaxIterations: 20

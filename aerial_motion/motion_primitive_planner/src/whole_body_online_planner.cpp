@@ -416,9 +416,11 @@ private:
       scores.push_back({candidate.status == CandidateStatus::kFeasible,
                         candidate.joints.duration,
                         candidate.joints.joint_motion,
-                        candidate.root.jerk_energy});
+                        candidate.root.jerk_energy,
+                        candidate.joints.tracking_error_rms});
     }
-    return selectBestWholeBodyCandidate(scores, config_.joint_motion_cost_weight);
+    return selectBestWholeBodyCandidate(scores, config_.joint_motion_cost_weight,
+                                        config_.tracking_error_cost_weight);
   }
 
   void publishDiagnostics(const std::vector<WholeBodyCandidate>& candidates, int selected)
@@ -702,9 +704,12 @@ private:
       pending_plan_ = plan;
     }
     ROS_INFO("Selected whole-body primitive %d/%zu: duration=%.3f s, min_fc_rp=%.3f, "
-             "joint_motion=%.3f rad, scale=%.2f, bridges=%d, holds=%d.",
+             "joint_motion=%.3f rad, tracking_rms=%.3f m, tracking_max=%.3f m, "
+             "scale=%.2f, bridges=%d, holds=%d.",
              selected, candidates.size(), selected_candidate.joints.duration,
              selected_candidate.joints.minimum_fc_rp, selected_candidate.joints.joint_motion,
+             selected_candidate.joints.tracking_error_rms,
+             selected_candidate.joints.tracking_error_max,
              selected_candidate.joints.time_scale, selected_candidate.joints.bridge_count,
              selected_candidate.joints.hold_count);
     return PlanAttemptResult::kSucceeded;

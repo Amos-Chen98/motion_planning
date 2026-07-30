@@ -59,6 +59,10 @@ struct JointPlanResult
   double time_scale = 1.0;
   double minimum_fc_rp = 0.0;
   double joint_motion = 0.0;
+  //! RMS distance over time and downstream link tails from the root-tail trace.
+  double tracking_error_rms = 0.0;
+  //! Largest downstream link-tail distance from the root-tail trace.
+  double tracking_error_max = 0.0;
   //! Number of infeasible nominal intervals repaired by the bridge search.
   int bridge_count = 0;
   //! Number of infeasible nominal intervals the planner could only hold through.
@@ -182,6 +186,21 @@ private:
                            multilink_copilot::StabilityMetrics* metrics = nullptr);
   double stabilityMargin(const Eigen::VectorXd& joints, double yaw, bool& safe,
                          double& fc_rp_min);
+  static double nominalYawAt(const std::vector<NominalSample>& samples, double time);
+  bool timedConfigurationPathIsSafe(const TimedJointWaypoint& start,
+                                    const TimedJointWaypoint& goal,
+                                    const std::vector<NominalSample>& nominal,
+                                    double& minimum_fc_rp);
+  bool appendEarlyDirectRecovery(TimedJointWaypoint start,
+                                 const Eigen::VectorXd& target,
+                                 double terminal_time,
+                                 const std::vector<NominalSample>& nominal,
+                                 std::vector<TimedJointWaypoint>& path,
+                                 double& minimum_fc_rp);
+  void computeTrackingError(const Trajectory<5>& root_trajectory,
+                            const NominalJointContext& context,
+                            const std::vector<NominalSample>& nominal,
+                            JointPlanResult& result) const;
   Eigen::VectorXd projectedTerminal(const Eigen::VectorXd& desired,
                                     const Eigen::VectorXd& current,
                                     const Eigen::VectorXd& start,

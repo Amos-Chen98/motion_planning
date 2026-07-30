@@ -481,7 +481,13 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
         }
         const CommitPoint exit = tracked[exit_position];
         rewind(exit_position);
-        if (terminal.time > result.joint_waypoints.back().time + kEpsilon &&
+        if (terminal.time <= result.joint_waypoints.back().time + kEpsilon)
+        {
+          continue;
+        }
+        if (appendEarlyDirectRecovery(result.joint_waypoints.back(), target, terminal.time,
+                                      nominal, result.joint_waypoints,
+                                      result.minimum_fc_rp) ||
             appendBridge(result.joint_waypoints.back(), exit.yaw + M_PI, target, terminal.time,
                          terminal.yaw + M_PI, deadline, result.joint_waypoints,
                          result.minimum_fc_rp, result.bridge_count))
@@ -549,6 +555,7 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
     waypoint.time *= result.time_scale;
   }
   result.duration = root_trajectory.getTotalDuration() * result.time_scale;
+  computeTrackingError(root_trajectory, context, nominal, result);
   result.success = true;
   return result;
 }
@@ -1142,6 +1149,264 @@ double JointTrajectoryPlanner::stabilityMargin(const Eigen::VectorXd& joints, do
                                          limits.max_baselink_tilt));
   }
   return std::isfinite(margin) ? margin : -kInfinity;
+}
+
+double JointTrajectoryPlanner::nominalYawAt(const std::vector<NominalSample>& samples,
+                                            double time)
+{
+  if (samples.empty())
+  {
+    return 0.0;
+  }
+  if (time <= samples.front().time)
+  {
+    return samples.front().yaw;
+  }
+  const size_t upper = upperWaypointIndex(samples, time);
+  if (upper >= samples.size())
+  {
+    return samples.back().yaw;
+  }
+  const NominalSample& before = samples[upper - 1];
+  const NominalSample& after = samples[upper];
+  const double duration = after.time - before.time;
+  const double ratio = duration > kEpsilon ? (time - before.time) / duration : 1.0;
+  return interpolateYaw(before.yaw, after.yaw, ratio);
+}
+
+bool JointTrajectoryPlanner::timedConfigurationPathIsSafe(
+    const TimedJointWaypoint& start, const TimedJointWaypoint& goal,
+    const std::vector<NominalSample>& nominal, double& minimum_fc_rp)
+{
+  if (start.positions.size() != goal.positions.size() || nominal.empty() ||
+      !start.positions.allFinite() || !goal.positions.allFinite() ||
+      !std::isfinite(start.time) || !std::isfinite(goal.time) ||
+      goal.time + kEpsilon < start.time)
+  {
+    return false;
+  }
+
+  std::vector<double> times{start.time, goal.time};
+  const double duration = goal.time - start.time;
+  const double maximum_delta =
+      start.positions.size() > 0 ?
+          (goal.positions - start.positions).cwiseAbs().maxCoeff() : 0.0;
+  const int joint_subdivisions =
+      std::max(1, static_cast<int>(std::ceil(maximum_delta / config_.validity_resolution)));
+  for (int subdivision = 1; subdivision < joint_subdivisions; ++subdivision)
+  {
+    times.push_back(start.time + duration * static_cast<double>(subdivision) /
+                                     joint_subdivisions);
+  }
+
+  // The nominal yaw is piecewise linear. Add enough samples on every overlapping
+  // yaw segment that neither joint motion nor root-yaw motion can step over a
+  // thin infeasible shell.
+  for (size_t index = 1; index < nominal.size(); ++index)
+  {
+    const double interval_start = std::max(start.time, nominal[index - 1].time);
+    const double interval_end = std::min(goal.time, nominal[index].time);
+    if (interval_end <= interval_start + kEpsilon)
+    {
+      continue;
+    }
+    const double yaw_start = nominalYawAt(nominal, interval_start);
+    const double yaw_end = nominalYawAt(nominal, interval_end);
+    const int yaw_subdivisions = std::max(
+        1, static_cast<int>(std::ceil(
+               std::abs(shortestYawDelta(yaw_start, yaw_end)) /
+               config_.validity_resolution)));
+    for (int subdivision = 0; subdivision <= yaw_subdivisions; ++subdivision)
+    {
+      times.push_back(interval_start +
+                      (interval_end - interval_start) *
+                          static_cast<double>(subdivision) / yaw_subdivisions);
+    }
+  }
+
+  std::sort(times.begin(), times.end());
+  times.erase(std::unique(times.begin(), times.end(),
+                          [](double lhs, double rhs) {
+                            return std::abs(lhs - rhs) <= kEpsilon;
+                          }),
+              times.end());
+  double path_minimum = kInfinity;
+  for (const double time : times)
+  {
+    if (budgetExpired())
+    {
+      return false;
+    }
+    const double ratio = duration > kEpsilon ? (time - start.time) / duration : 1.0;
+    const Eigen::VectorXd joints =
+        start.positions + ratio * (goal.positions - start.positions);
+    multilink_copilot::StabilityMetrics metrics;
+    if (!configurationIsSafe(joints, nominalYawAt(nominal, time) + M_PI, &metrics))
+    {
+      return false;
+    }
+    path_minimum = std::min(path_minimum, metrics.fc_rp_min);
+  }
+  minimum_fc_rp = std::min(minimum_fc_rp, path_minimum);
+  return true;
+}
+
+bool JointTrajectoryPlanner::appendEarlyDirectRecovery(
+    TimedJointWaypoint start, const Eigen::VectorXd& target,
+    double terminal_time, const std::vector<NominalSample>& nominal,
+    std::vector<TimedJointWaypoint>& path, double& minimum_fc_rp)
+{
+  if (target.size() != start.positions.size() || !target.allFinite() ||
+      terminal_time <= start.time + kEpsilon)
+  {
+    return false;
+  }
+
+  constexpr double kCommandStepSchedulingMargin = 0.99;
+  const double effective_joint_rate = std::min(
+      config_.max_joint_velocity,
+      kCommandStepSchedulingMargin * config_.max_joint_command_step *
+          config_.follower.command_hz);
+  const double maximum_delta =
+      target.size() > 0 ? (target - start.positions).cwiseAbs().maxCoeff() : 0.0;
+  const double arrival_time = start.time + maximum_delta / effective_joint_rate;
+  if (arrival_time >= terminal_time - kEpsilon)
+  {
+    return false;
+  }
+
+  double recovery_minimum = kInfinity;
+  const TimedJointWaypoint arrival{arrival_time, target};
+  const TimedJointWaypoint terminal{terminal_time, target};
+  if (!timedConfigurationPathIsSafe(start, arrival, nominal, recovery_minimum) ||
+      !timedConfigurationPathIsSafe(arrival, terminal, nominal, recovery_minimum))
+  {
+    return false;
+  }
+
+  if (arrival.time > path.back().time + kEpsilon)
+  {
+    path.push_back(arrival);
+  }
+  else
+  {
+    path.back().positions = target;
+  }
+  path.push_back(terminal);
+  minimum_fc_rp = std::min(minimum_fc_rp, recovery_minimum);
+  return true;
+}
+
+void JointTrajectoryPlanner::computeTrackingError(
+    const Trajectory<5>& root_trajectory, const NominalJointContext& context,
+    const std::vector<NominalSample>& nominal, JointPlanResult& result) const
+{
+  result.tracking_error_rms = 0.0;
+  result.tracking_error_max = 0.0;
+  const int downstream_link_count = context.link_num - 1;
+  if (!std::isfinite(result.duration) || !std::isfinite(result.time_scale) ||
+      result.duration <= kEpsilon || result.time_scale <= 0.0 ||
+      downstream_link_count <= 0 || nominal.empty())
+  {
+    return;
+  }
+
+  const double required_history =
+      static_cast<double>(downstream_link_count) * context.link_length;
+  const Eigen::Vector3d initial_root_tail = root_trajectory.getPos(0.0);
+  const Eigen::Matrix3d initial_root_rotation =
+      Eigen::AngleAxisd(nominal.front().yaw + M_PI,
+                        Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  const std::deque<multilink_copilot::TrajectoryPoint> initial_trace =
+      context.executed_history.arcLength() < required_history
+          ? multilink_copilot::follow_the_leader::prependCurrentBodyMorphology(
+                context.executed_history.points(), initial_root_tail,
+                initial_root_rotation, nominal.front().joints,
+                context.pitch_joint_indices, context.yaw_joint_indices,
+                context.link_num, context.link_length)
+          : context.executed_history.points();
+  std::vector<Eigen::Vector3d> trace;
+  trace.reserve(initial_trace.size() +
+                static_cast<size_t>(std::ceil(result.duration *
+                                              config_.follower.command_hz)) + 1);
+  for (const multilink_copilot::TrajectoryPoint& point : initial_trace)
+  {
+    trace.push_back(point.position);
+  }
+  if (trace.empty() || (trace.back() - initial_root_tail).norm() > kEpsilon)
+  {
+    trace.push_back(initial_root_tail);
+  }
+  const auto distanceToTrace = [](const Eigen::Vector3d& point,
+                                  const std::vector<Eigen::Vector3d>& polyline) {
+    if (polyline.empty())
+    {
+      return kInfinity;
+    }
+    double minimum = (point - polyline.front()).norm();
+    for (size_t index = 1; index < polyline.size(); ++index)
+    {
+      const Eigen::Vector3d start = polyline[index - 1];
+      const Eigen::Vector3d delta = polyline[index] - start;
+      const double length_squared = delta.squaredNorm();
+      const double ratio =
+          length_squared > kEpsilon * kEpsilon
+              ? std::max(0.0, std::min(1.0,
+                  (point - start).dot(delta) / length_squared))
+              : 0.0;
+      minimum = std::min(minimum, (point - (start + ratio * delta)).norm());
+    }
+    return minimum;
+  };
+
+  const double command_dt = 1.0 / config_.follower.command_hz;
+  const int sample_count =
+      std::max(1, static_cast<int>(std::ceil(result.duration / command_dt)));
+  const double sample_dt = result.duration / sample_count;
+  double squared_error_integral = 0.0;
+  double previous_mean_squared_error = 0.0;
+  for (int sample = 0; sample <= sample_count; ++sample)
+  {
+    const double scaled_time =
+        result.duration * static_cast<double>(sample) / sample_count;
+    const double nominal_time = scaled_time / result.time_scale;
+    const Eigen::Vector3d root_position = root_trajectory.getPos(nominal_time);
+    if ((trace.back() - root_position).norm() > kEpsilon)
+    {
+      trace.push_back(root_position);
+    }
+    const Eigen::Matrix3d root_rotation =
+        Eigen::AngleAxisd(result.yaw(scaled_time) + M_PI,
+                          Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    const std::vector<Eigen::Vector3d> actual_endpoints = linkEndpoints(
+        root_position, root_rotation, result.jointPositions(scaled_time),
+        context.pitch_joint_indices, context.yaw_joint_indices,
+        context.link_num, context.link_length);
+    if (actual_endpoints.size() < static_cast<size_t>(context.link_num + 1))
+    {
+      result.tracking_error_rms = kInfinity;
+      result.tracking_error_max = kInfinity;
+      return;
+    }
+
+    double mean_squared_error = 0.0;
+    for (int link = 2; link <= context.link_num; ++link)
+    {
+      const double error = distanceToTrace(
+          actual_endpoints[static_cast<size_t>(link)], trace);
+      mean_squared_error += error * error;
+      result.tracking_error_max = std::max(result.tracking_error_max, error);
+    }
+    mean_squared_error /= downstream_link_count;
+    if (sample > 0)
+    {
+      squared_error_integral +=
+          0.5 * (previous_mean_squared_error + mean_squared_error) * sample_dt;
+    }
+    previous_mean_squared_error = mean_squared_error;
+  }
+  result.tracking_error_rms =
+      std::sqrt(std::max(0.0, squared_error_integral / result.duration));
 }
 
 Eigen::VectorXd JointTrajectoryPlanner::projectedTerminal(const Eigen::VectorXd& desired,

@@ -59,6 +59,7 @@ struct WholeBodyCandidateScore
   double duration = std::numeric_limits<double>::infinity();
   double joint_motion = std::numeric_limits<double>::infinity();
   double root_jerk = std::numeric_limits<double>::infinity();
+  double tracking_error_rms = 0.0;
 };
 
 struct WholeBodyConfiguration
@@ -132,11 +133,11 @@ private:
 int selectBestCandidate(const std::vector<Candidate>& candidates,
                         bool allow_stability_projection_fallback = false);
 
-//! `joint_motion_cost_weight` converts joint-space path length [rad] into an
-//! equivalent execution-time penalty [s]. A positive value prevents a
-//! marginally shorter root primitive from winning with a large joint detour.
+//! The two weights convert joint-space path length [rad] and downstream-link
+//! tracking RMS [m] into equivalent execution-time penalties [s].
 int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& candidates,
-                                 double joint_motion_cost_weight = 0.25);
+                                 double joint_motion_cost_weight = 0.25,
+                                 double tracking_error_cost_weight = 6.0);
 
 RootCommandKinematics tailFluToRootLinkCommand(const Eigen::Vector3d& tail_position,
                                                 const Eigen::Vector3d& tail_velocity,

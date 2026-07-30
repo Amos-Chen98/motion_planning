@@ -25,6 +25,8 @@ class WholeBodyNodeIntegration : public ::testing::Test
 protected:
   void fullStateCallback(const aerial_robot_msgs::FullStateTarget::ConstPtr& message)
   {
+    // Keep a monotonic count independent of the bounded diagnostic sample buffer.
+    ++command_count_;
     if (!commands_.empty() && commands_.back().joint_state.position.size() == message->joint_state.position.size())
     {
       for (size_t index = 0; index < message->joint_state.position.size(); ++index)
@@ -147,6 +149,7 @@ protected:
   double selected_minimum_fc_rp_ = 0.0;
   ros::WallTime last_command_wall_time_;
   int selection_count_ = 0;
+  size_t command_count_ = 0;
   bool received_selection_ = false;
   bool last_command_stopped_ = false;
 };
@@ -228,7 +231,7 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
         commands_.size() >= 20 && first_goal_reached && output_silent)
     {
       first_goal_stopped = true;
-      commands_after_first_goal = commands_.size();
+      commands_after_first_goal = command_count_;
       selections_after_first_goal = selection_count_;
     }
     if (first_goal_stopped && !blocking_cloud_published)
@@ -247,14 +250,14 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
       second_goal_published = true;
       second_goal_wall_time = now;
     }
-    if (second_goal_published && commands_.size() > commands_after_first_goal)
+    if (second_goal_published && command_count_ > commands_after_first_goal)
     {
       second_goal_started = true;
     }
     if (second_goal_started && !failure_hold_observed &&
         (now - second_goal_wall_time).toSec() >= 0.75 &&
         selection_count_ == selections_after_first_goal &&
-        commands_.size() >= commands_after_first_goal + 10)
+        command_count_ >= commands_after_first_goal + 10)
     {
       failure_hold_observed = true;
     }
@@ -290,10 +293,10 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
   ASSERT_TRUE(clearing_cloud_published);
   ASSERT_TRUE(second_goal_stopped);
   ASSERT_TRUE(received_selection_);
-  ASSERT_GT(commands_.size(), commands_after_first_goal);
+  ASSERT_GT(command_count_, commands_after_first_goal);
   EXPECT_GE(selected_minimum_fc_rp_ + 1e-4, 3.2);
   EXPECT_LE(maximum_joint_step_, 0.1001);
-  const size_t rate_window = std::min<size_t>(40, commands_.size() - commands_after_first_goal - 1);
+  const size_t rate_window = std::min<size_t>(40, commands_.size() - 1);
   ASSERT_GT(rate_window, 10u);
   const double elapsed = (commands_.back().header.stamp -
                           commands_[commands_.size() - 1 - rate_window].header.stamp).toSec();
@@ -325,7 +328,7 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
   EXPECT_NEAR(terminal.root_state.pose.pose.position.y + 0.5255 * std::sin(terminal_yaw),
               second_goal.pose.position.y, 0.2);
 
-  const size_t stopped_command_count = commands_.size();
+  const size_t stopped_command_count = command_count_;
   const int stopped_selection_count = selection_count_;
   const ros::WallTime silence_check_start = ros::WallTime::now();
   while (ros::ok() && (ros::WallTime::now() - silence_check_start).toSec() < 0.50)
@@ -333,7 +336,7 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
     ros::spinOnce();
     rate.sleep();
   }
-  EXPECT_EQ(commands_.size(), stopped_command_count);
+  EXPECT_EQ(command_count_, stopped_command_count);
   EXPECT_EQ(selection_count_, stopped_selection_count);
 
   const std::vector<std::string> publishers = fullStatePublishers();
