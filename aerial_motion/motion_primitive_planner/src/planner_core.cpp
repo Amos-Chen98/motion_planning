@@ -258,13 +258,21 @@ int selectBestCandidate(const std::vector<Candidate>& candidates,
   return best;
 }
 
-int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& candidates)
+int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& candidates,
+                                 double joint_motion_cost_weight)
 {
+  if (!std::isfinite(joint_motion_cost_weight) || joint_motion_cost_weight < 0.0)
+  {
+    return -1;
+  }
+
   int best = -1;
   for (size_t index = 0; index < candidates.size(); ++index)
   {
     const WholeBodyCandidateScore& candidate = candidates[index];
-    if (!candidate.feasible)
+    if (!candidate.feasible || !std::isfinite(candidate.duration) ||
+        !std::isfinite(candidate.joint_motion) || candidate.duration < 0.0 ||
+        candidate.joint_motion < 0.0)
     {
       continue;
     }
@@ -274,11 +282,17 @@ int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& can
       continue;
     }
     const WholeBodyCandidateScore& current = candidates[static_cast<size_t>(best)];
-    if (candidate.duration < current.duration - kEpsilon ||
-        (std::abs(candidate.duration - current.duration) <= kEpsilon &&
+    const double candidate_cost =
+        candidate.duration + joint_motion_cost_weight * candidate.joint_motion;
+    const double current_cost =
+        current.duration + joint_motion_cost_weight * current.joint_motion;
+    if (candidate_cost < current_cost - kEpsilon ||
+        (std::abs(candidate_cost - current_cost) <= kEpsilon &&
          (candidate.joint_motion < current.joint_motion - kEpsilon ||
           (std::abs(candidate.joint_motion - current.joint_motion) <= kEpsilon &&
-           candidate.root_jerk < current.root_jerk))))
+           (candidate.duration < current.duration - kEpsilon ||
+            (std::abs(candidate.duration - current.duration) <= kEpsilon &&
+             candidate.root_jerk < current.root_jerk))))))
     {
       best = static_cast<int>(index);
     }

@@ -418,7 +418,7 @@ private:
                         candidate.joints.joint_motion,
                         candidate.root.jerk_energy});
     }
-    return selectBestWholeBodyCandidate(scores);
+    return selectBestWholeBodyCandidate(scores, config_.joint_motion_cost_weight);
   }
 
   void publishDiagnostics(const std::vector<WholeBodyCandidate>& candidates, int selected)

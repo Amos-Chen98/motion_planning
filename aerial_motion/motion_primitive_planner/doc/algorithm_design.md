@@ -45,7 +45,7 @@ The selected polynomial is handed to `traj_server`. A failed planning attempt do
 
 Planning runs on a dedicated worker so expensive candidate evaluation cannot block command publication. A request predicts the root and joint state at the configured activation time by sampling the current active plan and extending its trajectory history. Concurrent requests are coalesced, and target sequence checks prevent a result for an obsolete goal from being activated.
 
-For each root candidate, the planner constructs a continuous joint trajectory, time-scales the synchronized root and joint motion, and rechecks the final swept body against the occupancy snapshot. Feasible candidates are ranked by duration, joint motion, and root jerk. The selected plan remains pending until its activation time, then becomes the active command source.
+For each root candidate, the planner constructs a continuous joint trajectory, time-scales the synchronized root and joint motion, and rechecks the final swept body against the occupancy snapshot. Feasible candidates are ranked by `duration + JointMotionCostWeight * joint_motion`, with joint motion, duration, and root jerk used as deterministic tie-breakers. The default weight of 0.25 s/rad prevents a marginal root-duration reduction from selecting a large deep-fold detour while retaining necessary bridges when smoother candidates are unavailable. The selected plan remains pending until its activation time, then becomes the active command source.
 
 ### Joint-Trajectory Construction and Repair
 

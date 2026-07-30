@@ -132,7 +132,11 @@ private:
 int selectBestCandidate(const std::vector<Candidate>& candidates,
                         bool allow_stability_projection_fallback = false);
 
-int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& candidates);
+//! `joint_motion_cost_weight` converts joint-space path length [rad] into an
+//! equivalent execution-time penalty [s]. A positive value prevents a
+//! marginally shorter root primitive from winning with a large joint detour.
+int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& candidates,
+                                 double joint_motion_cost_weight = 0.25);
 
 RootCommandKinematics tailFluToRootLinkCommand(const Eigen::Vector3d& tail_position,
                                                 const Eigen::Vector3d& tail_velocity,

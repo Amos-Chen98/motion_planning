@@ -26,6 +26,8 @@ struct WholeBodyPlannerConfig
   JointPlannerConfig joint;
   multilink_copilot::StabilityConfig stability;
   double activation_lead_time = 0.75;
+  //! Equivalent seconds charged per radian of whole-body joint path length.
+  double joint_motion_cost_weight = 0.25;
   std::string root_child_frame_id = "root";
   bool verbose = true;
 

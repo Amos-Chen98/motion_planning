@@ -14,7 +14,7 @@
     <arg name="trajectory_topic" default="/planning/trajectory" />
 
     <arg name="command_hz" default="40.0" />
-    <arg name="replan_trigger_ratio" default="0.5" />
+    <arg name="replan_trigger_ratio" default="0.3" />
     <arg name="verbose" default="true" />
     <arg name="activation_lead_time" default="0.75" />
     <arg name="use_accumulated_map" default="true" />
@@ -31,6 +31,7 @@
     <arg name="joint_planner_seed" default="1" />
     <arg name="max_joint_velocity" default="4.0" />
     <arg name="max_joint_command_step" default="0.10" />
+    <arg name="joint_motion_cost_weight" default="0.25" />
     <arg name="publish_yaw_command" default="true" />
     <arg name="max_yaw_rate" default="1.5" />
     <arg name="snake_ik_singularity_threshold" default="0.10" />
@@ -92,6 +93,7 @@
         <param name="JointPlannerSeed" value="$(arg joint_planner_seed)" />
         <param name="MaxJointVelocity" value="$(arg max_joint_velocity)" />
         <param name="MaxJointCommandStep" value="$(arg max_joint_command_step)" />
+        <param name="JointMotionCostWeight" value="$(arg joint_motion_cost_weight)" />
         <param name="PublishYawCommand" value="$(arg publish_yaw_command)" />
         <param name="MaxYawRate" value="$(arg max_yaw_rate)" />
         <param name="SnakeIkSingularityThreshold" value="$(arg snake_ik_singularity_threshold)" />

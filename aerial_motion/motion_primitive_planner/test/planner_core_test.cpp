@@ -631,7 +631,7 @@ TEST(CandidateSelector, RanksProjectionFallbackByLengthJointMotionMarginAndJerk)
   EXPECT_EQ(selectBestCandidate(candidates, true), 2);
 }
 
-TEST(WholeBodyCandidateSelector, PrioritizesDurationThenJointMotionAndJerk)
+TEST(WholeBodyCandidateSelector, BalancesDurationAndJointMotionThenUsesDeterministicTies)
 {
   std::vector<WholeBodyCandidateScore> candidates(6);
   candidates[0] = {false, 0.5, 1.0, 1.0};
@@ -640,16 +640,30 @@ TEST(WholeBodyCandidateSelector, PrioritizesDurationThenJointMotionAndJerk)
   candidates[3] = {true, 2.0, 4.0, 5.0};
   candidates[4] = {true, 2.0, 4.0, 3.0};
   candidates[5] = {true, 1.5, 10.0, 10.0};
-  EXPECT_EQ(selectBestWholeBodyCandidate(candidates), 5);
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates, 0.25), 4);
 
-  candidates[5].duration = 2.0;
-  EXPECT_EQ(selectBestWholeBodyCandidate(candidates), 4);
+  candidates[4].joint_motion = 5.0;
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates, 0.25), 3);
+
+  candidates[3].joint_motion = 5.0;
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates, 0.25), 1);
 
   for (WholeBodyCandidateScore& candidate : candidates)
   {
     candidate.feasible = false;
   }
   EXPECT_EQ(selectBestWholeBodyCandidate(candidates), -1);
+}
+
+TEST(WholeBodyCandidateSelector, RejectsTheBagDerivedRedundantFold)
+{
+  std::vector<WholeBodyCandidateScore> candidates(2);
+  candidates[0] = {true, 5.051, 8.508, 1.0};
+  candidates[1] = {true, 5.200, 0.500, 2.0};
+
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates, 0.25), 1);
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates, 0.0), 0);
+  EXPECT_EQ(selectBestWholeBodyCandidate(candidates, -1.0), -1);
 }
 
 TEST(FullStateConversion, ConvertsFluTailPoseAndTwistToRootLinkOrigin)
