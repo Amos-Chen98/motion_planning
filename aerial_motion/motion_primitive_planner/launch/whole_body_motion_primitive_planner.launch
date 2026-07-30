@@ -25,8 +25,6 @@
     <arg name="max_primitive_offset" default="0.8" />
 
     <arg name="joint_planning_timeout" default="0.15" />
-    <arg name="joint_bridge_timeout" default="0.12" />
-    <arg name="joint_anchor_backoff_time" default="0.50" />
     <arg name="joint_validity_resolution" default="0.025" />
     <arg name="joint_planner_seed" default="1" />
     <arg name="max_joint_velocity" default="4.0" />
@@ -88,8 +86,6 @@
         <param name="CandidateCount" value="$(arg candidate_count)" />
         <param name="MaxPrimitiveOffset" value="$(arg max_primitive_offset)" />
         <param name="JointPlanningTimeout" value="$(arg joint_planning_timeout)" />
-        <param name="JointBridgeTimeout" value="$(arg joint_bridge_timeout)" />
-        <param name="JointAnchorBackoffTime" value="$(arg joint_anchor_backoff_time)" />
         <param name="JointValidityResolution" value="$(arg joint_validity_resolution)" />
         <param name="JointPlannerSeed" value="$(arg joint_planner_seed)" />
         <param name="MaxJointVelocity" value="$(arg max_joint_velocity)" />

@@ -28,13 +28,9 @@ struct JointPlannerConfig
   double reference_dt = 0.10;
   //! Total per-candidate joint-planning budget.
   double planning_timeout = 0.15;
-  //! Budget for a single infeasible-interval bridge inside that total.
-  double bridge_timeout = 0.12;
   double validity_resolution = 0.025;
   double max_joint_velocity = 4.0;
   double max_joint_command_step = 0.10;
-  //! How far the bridge endpoints may be pulled away from an infeasible interval.
-  double anchor_backoff_time = 0.50;
   unsigned int random_seed = 1;
 };
 
@@ -63,10 +59,6 @@ struct JointPlanResult
   double tracking_error_rms = 0.0;
   //! Largest downstream link-tail distance from the root-tail trace.
   double tracking_error_max = 0.0;
-  //! Number of infeasible nominal intervals repaired by the bridge search.
-  int bridge_count = 0;
-  //! Number of infeasible nominal intervals the planner could only hold through.
-  int hold_count = 0;
   std::string detail;
 
   Eigen::VectorXd jointPositions(double time) const;
@@ -104,72 +96,20 @@ private:
     double time = 0.0;
     double yaw = 0.0;
     Eigen::VectorXd joints;
-    bool safe = false;
-    //! Normalized worst-case flight-feasibility margin; negative when infeasible.
-    double margin = -std::numeric_limits<double>::infinity();
-    double fc_rp_min = 0.0;
-  };
-
-  //! Inclusive [first, last] index range of consecutive flight-feasible samples.
-  struct SafeRun
-  {
-    size_t first = 0;
-    size_t last = 0;
   };
 
   std::vector<NominalSample> buildNominalSamples(const Trajectory<5>& root_trajectory,
                                                  const NominalJointContext& context,
                                                  const Eigen::VectorXd& start_joints,
                                                  double start_yaw);
-  static std::vector<SafeRun> safeRuns(const std::vector<NominalSample>& samples);
-
-  //! Ordered anchor indices for one side of a bridge: the sample closest to the
-  //! infeasible interval first, then progressively better-conditioned ones.
-  std::vector<size_t> anchorCandidates(const std::vector<NominalSample>& samples,
-                                       size_t nominal_index, size_t limit_index) const;
-
-  //! `start` is taken by value because `path` may be the container holding it.
-  bool appendBridge(TimedJointWaypoint start,
-                    double start_root_yaw,
-                    const Eigen::VectorXd& goal,
-                    double goal_time,
-                    double goal_root_yaw,
-                    const Clock::time_point& deadline,
-                    std::vector<TimedJointWaypoint>& path,
-                    double& minimum_fc_rp,
-                    int& bridge_count);
-
-  bool planBridge(const Eigen::VectorXd& start,
-                  const Eigen::VectorXd& goal,
-                  double start_yaw,
-                  double goal_yaw,
-                  const Clock::time_point& deadline,
-                  std::vector<Eigen::VectorXd>& path,
-                  double& minimum_fc_rp);
-
-  std::vector<std::vector<Eigen::VectorXd>> bridgeChains(const Eigen::VectorXd& start,
-                                                         const Eigen::VectorXd& goal) const;
-  std::vector<std::vector<int>> jointOrders(const Eigen::VectorXd& start,
-                                            const Eigen::VectorXd& goal) const;
-  static std::vector<Eigen::VectorXd> expandChain(const std::vector<Eigen::VectorXd>& keys,
-                                                  const std::vector<int>& order);
-  Eigen::VectorXd deepFold(const Eigen::VectorXd& reference,
-                           const Eigen::VectorXd& sign_source) const;
 
   bool chainIsSafe(const std::vector<Eigen::VectorXd>& chain, double start_yaw, double goal_yaw,
                    double& minimum_fc_rp);
-  //! Greedy corner removal on a sampled detour; the result is re-validated by
-  //! `chainIsSafe`, so a single root yaw is enough for the search itself.
+  //! Greedy corner removal on a sampled path; the result is subsequently
+  //! re-validated against the complete time-varying root-yaw schedule.
   std::vector<Eigen::VectorXd> shortcutChain(const std::vector<Eigen::VectorXd>& chain,
                                              double root_yaw);
 
-  bool directEdgeIsSafe(const Eigen::VectorXd& start,
-                        const Eigen::VectorXd& goal,
-                        double start_yaw,
-                        double goal_yaw,
-                        double& minimum_fc_rp);
-  //! Validates only the strict interior of an edge whose endpoints are already
-  //! known to be flight-feasible, which halves the cost of dense tracking.
   bool edgeInteriorIsSafe(const Eigen::VectorXd& start,
                           const Eigen::VectorXd& goal,
                           double start_yaw,
@@ -177,45 +117,33 @@ private:
                           double resolution,
                           double& minimum_fc_rp);
   bool budgetExpired() const;
-  bool searchJointDetour(const Eigen::VectorXd& start,
-                         const Eigen::VectorXd& goal,
-                         double yaw,
-                         const Clock::time_point& deadline,
-                         std::vector<Eigen::VectorXd>& path);
+  bool searchJointPath(const Eigen::VectorXd& start,
+                       const Eigen::VectorXd& goal,
+                       double yaw,
+                       const Clock::time_point& deadline,
+                       std::vector<Eigen::VectorXd>& path);
   bool configurationIsSafe(const Eigen::VectorXd& joints, double yaw,
                            multilink_copilot::StabilityMetrics* metrics = nullptr);
-  double stabilityMargin(const Eigen::VectorXd& joints, double yaw, bool& safe,
-                         double& fc_rp_min);
   static double nominalYawAt(const std::vector<NominalSample>& samples, double time);
   bool timedConfigurationPathIsSafe(const TimedJointWaypoint& start,
                                     const TimedJointWaypoint& goal,
                                     const std::vector<NominalSample>& nominal,
                                     double& minimum_fc_rp);
-  bool appendEarlyDirectRecovery(TimedJointWaypoint start,
-                                 const Eigen::VectorXd& target,
-                                 double terminal_time,
-                                 const std::vector<NominalSample>& nominal,
-                                 std::vector<TimedJointWaypoint>& path,
-                                 double& minimum_fc_rp);
-  void computeTrackingError(const Trajectory<5>& root_trajectory,
+  bool computeTrackingError(const Trajectory<5>& root_trajectory,
                             const NominalJointContext& context,
                             const std::vector<NominalSample>& nominal,
                             JointPlanResult& result) const;
-  Eigen::VectorXd projectedTerminal(const Eigen::VectorXd& desired,
-                                    const Eigen::VectorXd& current,
-                                    const Eigen::VectorXd& start,
-                                    double yaw,
-                                    bool& success);
+  bool repairEndpoint(const Eigen::VectorXd& desired,
+                      const Eigen::VectorXd& reference,
+                      double yaw,
+                      bool allow_unstable_seed,
+                      Eigen::VectorXd& repaired);
 
   JointPlannerConfig config_;
   //! Hard wall-clock limit for the running plan; every validation loop honours it.
   Clock::time_point deadline_ = Clock::time_point::max();
   std::shared_ptr<multilink_copilot::StabilityEvaluator> stability_evaluator_;
   NominalJointPredictor nominal_predictor_;
-  //! Per-joint deep-fold magnitude derived from the model joint limits.
-  Eigen::VectorXd fold_magnitude_;
-  std::vector<int> pitch_joint_indices_;
-  std::vector<int> yaw_joint_indices_;
 };
 
 }  // namespace motion_primitive_planner

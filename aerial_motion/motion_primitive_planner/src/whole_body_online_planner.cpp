@@ -626,8 +626,8 @@ private:
     std::vector<WholeBodyCandidate> candidates(batch.candidates.size());
     const NominalJointContext nominal_context = makeNominalJointContext(history, *model_info_);
 
-    // Joint-space bridging is the expensive part of whole-body planning, so all
-    // candidates share one wall-clock budget.  Running out only costs the quality
+    // Global joint-space RRT is the expensive part of whole-body planning, so all
+    // candidates share one wall-clock budget. Running out only costs the quality
     // of the remaining candidates; the ones already evaluated stay selectable and
     // the plan still reaches its activation instant.
     const ros::Time joint_planning_deadline =
@@ -705,13 +705,12 @@ private:
     }
     ROS_INFO("Selected whole-body primitive %d/%zu: duration=%.3f s, min_fc_rp=%.3f, "
              "joint_motion=%.3f rad, tracking_rms=%.3f m, tracking_max=%.3f m, "
-             "scale=%.2f, bridges=%d, holds=%d.",
+             "scale=%.2f.",
              selected, candidates.size(), selected_candidate.joints.duration,
              selected_candidate.joints.minimum_fc_rp, selected_candidate.joints.joint_motion,
              selected_candidate.joints.tracking_error_rms,
              selected_candidate.joints.tracking_error_max,
-             selected_candidate.joints.time_scale, selected_candidate.joints.bridge_count,
-             selected_candidate.joints.hold_count);
+             selected_candidate.joints.time_scale);
     return PlanAttemptResult::kSucceeded;
   }
 

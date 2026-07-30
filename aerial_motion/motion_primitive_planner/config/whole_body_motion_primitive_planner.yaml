@@ -1,10 +1,7 @@
 # Per-candidate joint-space planning.
 JointReferenceDt: 0.10
-# Per-candidate budget, and the share of it one infeasible-interval bridge may use.
+# Per-candidate joint-space planning budget.
 JointPlanningTimeout: 0.15
-JointBridgeTimeout: 0.12
-# How far a bridge endpoint may be pulled back from the infeasible interval.
-JointAnchorBackoffTime: 0.50
 JointValidityResolution: 0.025
 JointPlannerSeed: 1
 MaxJointVelocity: 4.0

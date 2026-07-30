@@ -1,6 +1,6 @@
-// Regression coverage for the joint-space bridge search: every free-space target
-// direction must yield an executable whole-body joint trajectory, and the
-// archetypal fold flip must be repaired by single-joint moves.
+// Regression coverage for global joint-space RRT planning: every free-space
+// candidate batch must yield an executable whole-body trajectory, and the
+// archetypal fold flip must be connected without crossing an infeasible edge.
 #include <motion_primitive_planner/joint_trajectory_planner.h>
 #include <motion_primitive_planner/planner_common.h>
 
@@ -57,13 +57,97 @@ protected:
     config.follower.max_yaw_rate = 1.5;
     config.reference_dt = 0.10;
     config.planning_timeout = 0.15;
-    config.bridge_timeout = 0.12;
-    config.anchor_backoff_time = 0.50;
     config.validity_resolution = 0.025;
     config.max_joint_velocity = 4.0;
     config.max_joint_command_step = 0.10;
     config.random_seed = seed;
     return config;
+  }
+
+  bool edgeIsSafe(const Eigen::VectorXd& start, const Eigen::VectorXd& goal,
+                  double start_yaw, double goal_yaw, double resolution,
+                  double& minimum_fc_rp) const
+  {
+    const double maximum_delta =
+        start.size() > 0 ? (goal - start).cwiseAbs().maxCoeff() : 0.0;
+    const int subdivisions =
+        std::max(1, static_cast<int>(std::ceil(maximum_delta / resolution)));
+    for (int sample = 0; sample <= subdivisions; ++sample)
+    {
+      const double ratio = static_cast<double>(sample) / subdivisions;
+      const double yaw = start_yaw + ratio * shortestYawDelta(start_yaw, goal_yaw);
+      evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(yaw));
+      multilink_copilot::StabilityMetrics metrics;
+      if (!evaluator_->evaluate(start + ratio * (goal - start), metrics) || !metrics.safe)
+      {
+        return false;
+      }
+      minimum_fc_rp = std::min(minimum_fc_rp, metrics.fc_rp_min);
+    }
+    return true;
+  }
+
+  void expectTimedPathIsSafe(const JointPlanResult& result,
+                             const JointPlannerConfig& config,
+                             size_t first_safe_waypoint = 0) const
+  {
+    ASSERT_GE(result.joint_waypoints.size(), 2u);
+    ASSERT_LT(first_safe_waypoint, result.joint_waypoints.size());
+    for (size_t index = first_safe_waypoint + 1;
+         index < result.joint_waypoints.size(); ++index)
+    {
+      const TimedJointWaypoint& before = result.joint_waypoints[index - 1];
+      const TimedJointWaypoint& after = result.joint_waypoints[index];
+      const double interval = after.time - before.time;
+      ASSERT_GT(interval, 0.0);
+      const double maximum_delta =
+          (after.positions - before.positions).cwiseAbs().maxCoeff();
+      const int subdivisions = std::max(
+          {1, static_cast<int>(std::ceil(maximum_delta / config.validity_resolution)),
+           static_cast<int>(std::ceil(interval / 0.01))});
+      for (int sample = index == first_safe_waypoint + 1 ? 0 : 1;
+           sample <= subdivisions; ++sample)
+      {
+        const double ratio = static_cast<double>(sample) / subdivisions;
+        const double time = before.time + ratio * interval;
+        evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(result.yaw(time) + M_PI));
+        multilink_copilot::StabilityMetrics metrics;
+        ASSERT_TRUE(evaluator_->evaluate(result.jointPositions(time), metrics));
+        EXPECT_TRUE(metrics.safe) << "unsafe timed path at t=" << time;
+        EXPECT_GE(metrics.fc_rp_min + 1e-4,
+                  evaluator_->config().fc_rp_min_threshold);
+      }
+    }
+    for (const TimedYawWaypoint& waypoint : result.yaw_waypoints)
+    {
+      if (waypoint.time + 1e-12 <
+          result.joint_waypoints[first_safe_waypoint].time)
+      {
+        continue;
+      }
+      evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(waypoint.yaw + M_PI));
+      multilink_copilot::StabilityMetrics metrics;
+      ASSERT_TRUE(evaluator_->evaluate(result.jointPositions(waypoint.time), metrics));
+      EXPECT_TRUE(metrics.safe) << "unsafe path at yaw breakpoint t=" << waypoint.time;
+    }
+  }
+
+  void expectArcLengthTiming(const JointPlanResult& result) const
+  {
+    ASSERT_GE(result.joint_waypoints.size(), 2u);
+    std::vector<double> cumulative(result.joint_waypoints.size(), 0.0);
+    for (size_t index = 1; index < result.joint_waypoints.size(); ++index)
+    {
+      cumulative[index] = cumulative[index - 1] +
+                          (result.joint_waypoints[index].positions -
+                           result.joint_waypoints[index - 1].positions).norm();
+    }
+    ASSERT_GT(cumulative.back(), 1e-9);
+    for (size_t index = 0; index < result.joint_waypoints.size(); ++index)
+    {
+      const double expected_time = result.duration * cumulative[index] / cumulative.back();
+      EXPECT_NEAR(result.joint_waypoints[index].time, expected_time, 1e-8);
+    }
   }
 
   std::unique_ptr<pluginlib::ClassLoader<aerial_robot_model::RobotModel>> loader_;
@@ -73,9 +157,9 @@ protected:
   PrimitiveConfig primitive_;
 };
 
-// Targets behind the robot force the follow-the-leader shape through the
-// infeasible near-straight band; before the anchor back-off and the structured
-// detour search these made every candidate fail and the node hover-hold.
+// Targets behind the robot force the nominal follow-the-leader terminal shape
+// across the infeasible near-straight band.  At least one global-RRT plan in
+// each root-candidate batch must fit the node's shared online budget.
 TEST_F(WholeBodyJointBridge, PlansEveryFreeSpaceTargetDirection)
 {
   const Eigen::Vector3d start_position(0.0, 0.0, 1.0);
@@ -158,9 +242,10 @@ TEST_F(WholeBodyJointBridge, PlansEveryFreeSpaceTargetDirection)
   EXPECT_LT(slowest_batch, 1.5 * kBatchBudget);
 }
 
-// A straight interpolation between the two mirrored folds crosses the infeasible
-// near-straight band, so the bridge has to re-fold one joint at a time.
-TEST_F(WholeBodyJointBridge, BridgesTheFoldFlipWithSingleJointMoves)
+// A straight interpolation between the mirrored folds crosses the infeasible
+// near-straight band.  The test intentionally makes no assumptions about the
+// topology or waypoint count of the RRT detour.
+TEST_F(WholeBodyJointBridge, GlobalRrtConnectsFoldFlipWithFullySafeEdges)
 {
   Eigen::VectorXd positive(6);
   Eigen::VectorXd negative(6);
@@ -169,24 +254,25 @@ TEST_F(WholeBodyJointBridge, BridgesTheFoldFlipWithSingleJointMoves)
 
   JointPlannerConfig config = jointConfig(7);
   JointTrajectoryPlanner planner(config, evaluator_);
+  double direct_minimum = std::numeric_limits<double>::infinity();
+  ASSERT_FALSE(edgeIsSafe(positive, negative, M_PI, M_PI,
+                          config.validity_resolution, direct_minimum));
+
   std::vector<Eigen::VectorXd> path;
   double minimum_fc_rp = 0.0;
   std::string failure;
   ASSERT_TRUE(planner.planStableConnection(positive, negative, M_PI, path, minimum_fc_rp, &failure))
       << failure;
-  ASSERT_EQ(path.size(), 4u);
+  ASSERT_GT(path.size(), 2u);
   EXPECT_TRUE(path.front().isApprox(positive, 1e-9));
   EXPECT_TRUE(path.back().isApprox(negative, 1e-9));
   EXPECT_GE(minimum_fc_rp + 1e-4, evaluator_->config().fc_rp_min_threshold);
   for (size_t index = 1; index < path.size(); ++index)
   {
-    const Eigen::VectorXd delta = (path[index] - path[index - 1]).cwiseAbs();
-    int moved = 0;
-    for (int joint = 0; joint < delta.size(); ++joint)
-    {
-      moved += delta(joint) > 1e-9 ? 1 : 0;
-    }
-    EXPECT_EQ(moved, 1) << "bridge leg " << index << " is not a single-joint fold";
+    double edge_minimum = std::numeric_limits<double>::infinity();
+    ASSERT_TRUE(edgeIsSafe(path[index - 1], path[index], M_PI, M_PI,
+                           config.validity_resolution, edge_minimum))
+        << "unsafe RRT edge " << index;
   }
 }
 
@@ -210,7 +296,7 @@ TEST_F(WholeBodyJointBridge, RejectsAConnectionToAnInfeasibleEndpoint)
   EXPECT_FALSE(failure.empty());
 }
 
-TEST_F(WholeBodyJointBridge, TrackingCostPrefersCompactTurnaround)
+TEST_F(WholeBodyJointBridge, TrackingCostSelectsTheMinimumComputedPlanCost)
 {
   const Eigen::Vector3d history_start(0.280, 0.986, 0.769);
   const Eigen::Vector3d start_position(2.554, 1.008, 0.500);
@@ -252,21 +338,31 @@ TEST_F(WholeBodyJointBridge, TrackingCostPrefersCompactTurnaround)
                       candidates[index].jerk_energy, result.tracking_error_rms});
   }
 
-  const int duration_and_joint_winner =
-      selectBestWholeBodyCandidate(scores, 0.25, 0.0);
-  const int tracking_aware_winner =
-      selectBestWholeBodyCandidate(scores, 0.25, 6.0);
-  ASSERT_GE(duration_and_joint_winner, 0);
-  ASSERT_GE(tracking_aware_winner, 0);
-  EXPECT_NE(tracking_aware_winner, duration_and_joint_winner);
-  EXPECT_LT(results[static_cast<size_t>(tracking_aware_winner)].tracking_error_rms, 0.5);
-  EXPECT_LT(results[static_cast<size_t>(tracking_aware_winner)].tracking_error_rms,
-            0.8 * results[static_cast<size_t>(duration_and_joint_winner)].tracking_error_rms);
-  EXPECT_LT(results[static_cast<size_t>(tracking_aware_winner)].tracking_error_max,
-            0.8 * results[static_cast<size_t>(duration_and_joint_winner)].tracking_error_max);
+  constexpr double kJointMotionWeight = 0.25;
+  constexpr double kTrackingErrorWeight = 6.0;
+  const int winner = selectBestWholeBodyCandidate(
+      scores, kJointMotionWeight, kTrackingErrorWeight);
+  ASSERT_GE(winner, 0);
+  const WholeBodyCandidateScore& selected = scores[static_cast<size_t>(winner)];
+  const double selected_cost =
+      selected.duration + kJointMotionWeight * selected.joint_motion +
+      kTrackingErrorWeight * selected.tracking_error_rms;
+  for (size_t index = 0; index < scores.size(); ++index)
+  {
+    const WholeBodyCandidateScore& score = scores[index];
+    if (!score.feasible)
+    {
+      continue;
+    }
+    const double cost = score.duration + kJointMotionWeight * score.joint_motion +
+                        kTrackingErrorWeight * score.tracking_error_rms;
+    EXPECT_LE(selected_cost, cost + 1e-9) << "candidate " << index;
+  }
+  EXPECT_TRUE(std::isfinite(results[static_cast<size_t>(winner)].tracking_error_rms));
+  EXPECT_TRUE(std::isfinite(results[static_cast<size_t>(winner)].tracking_error_max));
 }
 
-TEST_F(WholeBodyJointBridge, TerminalProjectionReachesSafeFoldBeforeRootHorizon)
+TEST_F(WholeBodyJointBridge, ProjectsTerminalAndMapsGlobalRrtAcrossTheRootHorizon)
 {
   const Eigen::Vector3d start_position(0.0, 0.0, 1.0);
   const Eigen::Vector3d target_position(0.0, -3.0, 1.0);
@@ -275,7 +371,90 @@ TEST_F(WholeBodyJointBridge, TerminalProjectionReachesSafeFoldBeforeRootHorizon)
 
   JointPlannerConfig config = jointConfig(31);
   config.planning_timeout = 1.0;
-  config.bridge_timeout = 0.6;
+  TrajectoryHistory history(config.follower);
+  history.append(start_position);
+  const NominalJointContext context = makeNominalJointContext(history, *info_);
+  Eigen::Matrix3d initial_state = Eigen::Matrix3d::Zero();
+  initial_state.col(0) = start_position;
+  Eigen::Matrix3d final_state = Eigen::Matrix3d::Zero();
+  final_state.col(0) = target_position;
+  const Candidate candidate =
+      PrimitiveGenerator(primitive_).generate(initial_state, final_state).front();
+
+  const std::vector<NominalJointSample> nominal =
+      NominalJointPredictor(config.follower).predict(
+          candidate.trajectory, context, start_joints, 0.0, config.reference_dt);
+  ASSERT_GE(nominal.size(), 2u);
+  evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(nominal.back().yaw + M_PI));
+  multilink_copilot::StabilityMetrics nominal_terminal_metrics;
+  ASSERT_TRUE(evaluator_->evaluate(nominal.back().joints, nominal_terminal_metrics));
+  ASSERT_FALSE(nominal_terminal_metrics.safe);
+  Eigen::VectorXd projected_terminal;
+  ASSERT_TRUE(evaluator_->projectToSafe(
+      nominal.back().joints, start_joints, projected_terminal, false));
+
+  JointTrajectoryPlanner planner(config, evaluator_);
+  const JointPlanResult result =
+      planner.plan(candidate.trajectory, context, start_joints, 0.0, 1.0);
+  ASSERT_TRUE(result.success) << result.detail;
+  ASSERT_GE(result.joint_waypoints.size(), 2u);
+  EXPECT_TRUE(result.joint_waypoints.front().positions.isApprox(start_joints, 1e-9));
+  EXPECT_TRUE(result.joint_waypoints.back().positions.isApprox(projected_terminal, 1e-8));
+  EXPECT_NEAR(result.joint_waypoints.front().time, 0.0, 1e-12);
+  EXPECT_NEAR(result.joint_waypoints.back().time, result.duration, 1e-9);
+  expectArcLengthTiming(result);
+
+  for (size_t index = 1; index < result.joint_waypoints.size(); ++index)
+  {
+    const TimedJointWaypoint& before = result.joint_waypoints[index - 1];
+    const TimedJointWaypoint& after = result.joint_waypoints[index];
+    const double duration = after.time - before.time;
+    ASSERT_GT(duration, 0.0);
+    const double maximum_rate =
+        (after.positions - before.positions).cwiseAbs().maxCoeff() / duration;
+    EXPECT_LE(maximum_rate, config.max_joint_velocity + 1e-9);
+    EXPECT_LE(maximum_rate / config.follower.command_hz,
+              config.max_joint_command_step + 1e-9);
+  }
+  EXPECT_TRUE(std::isfinite(result.tracking_error_rms));
+  EXPECT_TRUE(std::isfinite(result.tracking_error_max));
+  expectTimedPathIsSafe(result, config);
+}
+
+TEST_F(WholeBodyJointBridge, RepairsMeasuredStartAndPreservesTheCommandHandover)
+{
+  Eigen::VectorXd safe_fold(6);
+  safe_fold << 0.0, M_PI_2, 0.0, M_PI_2, 0.0, M_PI_2;
+
+  // Find a deterministic configuration just outside the feasible set.  Starting
+  // close to its boundary gives the generic QP an unstable seed that it can
+  // repair without supplying any hand-crafted positive/negative fold reference.
+  Eigen::VectorXd measured_start;
+  Eigen::VectorXd repaired_start;
+  bool repairable_start_found = false;
+  evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(M_PI));
+  for (int step = 1; step <= 100 && !repairable_start_found; ++step)
+  {
+    const double ratio = 1.0 - static_cast<double>(step) / 100.0;
+    const Eigen::VectorXd candidate = ratio * safe_fold;
+    multilink_copilot::StabilityMetrics metrics;
+    ASSERT_TRUE(evaluator_->evaluate(candidate, metrics));
+    if (!metrics.safe &&
+        evaluator_->projectToSafe(candidate, candidate, repaired_start, true))
+    {
+      measured_start = candidate;
+      repairable_start_found = true;
+    }
+  }
+  ASSERT_TRUE(repairable_start_found);
+  multilink_copilot::StabilityMetrics repaired_metrics;
+  ASSERT_TRUE(evaluator_->evaluate(repaired_start, repaired_metrics));
+  ASSERT_TRUE(repaired_metrics.safe);
+
+  const Eigen::Vector3d start_position(0.0, 0.0, 1.0);
+  const Eigen::Vector3d target_position(1.0, 0.0, 1.0);
+  JointPlannerConfig config = jointConfig(43);
+  config.planning_timeout = 1.0;
   TrajectoryHistory history(config.follower);
   history.append(start_position);
   const NominalJointContext context = makeNominalJointContext(history, *info_);
@@ -288,47 +467,58 @@ TEST_F(WholeBodyJointBridge, TerminalProjectionReachesSafeFoldBeforeRootHorizon)
 
   JointTrajectoryPlanner planner(config, evaluator_);
   const JointPlanResult result =
-      planner.plan(candidate.trajectory, context, start_joints, 0.0, 1.0);
+      planner.plan(candidate.trajectory, context, measured_start, 0.0, 1.0);
   ASSERT_TRUE(result.success) << result.detail;
   ASSERT_GE(result.joint_waypoints.size(), 3u);
-  size_t motion_end = 0;
+  EXPECT_TRUE(result.joint_waypoints.front().positions.isApprox(measured_start, 1e-9));
+  EXPECT_NEAR(result.joint_waypoints.front().time, 0.0, 1e-12);
+
+  size_t repaired_index = result.joint_waypoints.size();
   for (size_t index = 1; index < result.joint_waypoints.size(); ++index)
   {
-    const TimedJointWaypoint& before = result.joint_waypoints[index - 1];
-    const TimedJointWaypoint& after = result.joint_waypoints[index];
-    const double duration = after.time - before.time;
-    ASSERT_GT(duration, 0.0);
-    const double maximum_rate =
-        (after.positions - before.positions).cwiseAbs().maxCoeff() / duration;
-    EXPECT_LE(maximum_rate, config.max_joint_velocity + 1e-9);
-    EXPECT_LE(maximum_rate / config.follower.command_hz,
-              config.max_joint_command_step + 1e-9);
-    if (!(after.positions - before.positions).isZero(1e-9))
+    if (result.joint_waypoints[index].positions.isApprox(repaired_start, 1e-8))
     {
-      motion_end = index;
+      repaired_index = index;
+      break;
     }
   }
-  ASSERT_GT(motion_end, 0u);
-  EXPECT_LT(result.joint_waypoints[motion_end].time, 0.3 * result.duration);
-  EXPECT_TRUE(result.joint_waypoints.back().positions.isApprox(
-      result.joint_waypoints[motion_end].positions, 1e-12));
-  EXPECT_NEAR(result.joint_waypoints.back().time, result.duration, 1e-9);
-  EXPECT_TRUE(std::isfinite(result.tracking_error_rms));
-  EXPECT_TRUE(std::isfinite(result.tracking_error_max));
+  ASSERT_LT(repaired_index, result.joint_waypoints.size());
+  EXPECT_GT(result.joint_waypoints[repaired_index].time, 0.0);
+  expectArcLengthTiming(result);
+  expectTimedPathIsSafe(result, config, repaired_index);
+}
 
-  const int stability_samples =
-      std::max(1, static_cast<int>(std::ceil(result.duration / 0.01)));
-  for (int sample = 0; sample <= stability_samples; ++sample)
-  {
-    const double time =
-        result.duration * static_cast<double>(sample) / stability_samples;
-    evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(result.yaw(time) + M_PI));
-    multilink_copilot::StabilityMetrics metrics;
-    ASSERT_TRUE(evaluator_->evaluate(result.jointPositions(time), metrics));
-    EXPECT_TRUE(metrics.safe) << "unsafe recovery at t=" << time;
-    EXPECT_GE(metrics.fc_rp_min + 1e-4,
-              evaluator_->config().fc_rp_min_threshold);
-  }
+TEST_F(WholeBodyJointBridge, RejectsCandidateWhenTerminalProjectionFails)
+{
+  const Eigen::Vector3d start_position(0.0, 0.0, 1.0);
+  Eigen::VectorXd start_joints(6);
+  start_joints << 0.0, M_PI_2, 0.0, M_PI_2, 0.0, M_PI_2;
+
+  JointPlannerConfig config = jointConfig(47);
+  config.planning_timeout = 1.0;
+  // With no yaw-rate clamp, a deliberately non-finite terminal velocity makes
+  // the terminal stability frame invalid and forces the shared QP to reject its
+  // otherwise safe reference. This exercises the candidate-level failure path.
+  config.follower.max_yaw_rate = 0.0;
+  TrajectoryHistory history(config.follower);
+  history.append(start_position);
+  const NominalJointContext context = makeNominalJointContext(history, *info_);
+
+  Piece<5>::CoefficientMat coefficients = Piece<5>::CoefficientMat::Zero();
+  coefficients.col(5) = start_position;
+  const double maximum = std::numeric_limits<double>::max();
+  coefficients(0, 4) = maximum;
+  coefficients(0, 3) = -maximum;
+  coefficients(0, 2) = maximum;
+  const Trajectory<5> malformed_root(
+      std::vector<double>{1.0},
+      std::vector<Piece<5>::CoefficientMat>{coefficients});
+
+  JointTrajectoryPlanner planner(config, evaluator_);
+  const JointPlanResult result =
+      planner.plan(malformed_root, context, start_joints, 0.0, 1.0);
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(result.detail, "terminal joint configuration could not be repaired");
 }
 }  // namespace
 }  // namespace motion_primitive_planner

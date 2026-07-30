@@ -61,7 +61,7 @@ protected:
   std::shared_ptr<multilink_copilot::StabilityEvaluator> evaluator_;
 };
 
-TEST_F(WholeBodyJointPlannerIntegration, RejectsLinearYawFlipAndFindsStableDetour)
+TEST_F(WholeBodyJointPlannerIntegration, GlobalRrtConnectsFoldFlipWithFullySafeEdges)
 {
   Eigen::VectorXd positive(6);
   Eigen::VectorXd negative(6);
@@ -70,19 +70,6 @@ TEST_F(WholeBodyJointPlannerIntegration, RejectsLinearYawFlipAndFindsStableDetou
 
   double linear_minimum = std::numeric_limits<double>::infinity();
   EXPECT_FALSE(edgeIsSafe(positive, negative, linear_minimum));
-
-  Eigen::VectorXd first_fold = positive;
-  Eigen::VectorXd second_fold = positive;
-  first_fold(1) = -M_PI_2;
-  second_fold(1) = -M_PI_2;
-  second_fold(3) = -M_PI_2;
-  const std::vector<Eigen::VectorXd> known_detour = {positive, first_fold, second_fold, negative};
-  double known_minimum = std::numeric_limits<double>::infinity();
-  for (size_t index = 1; index < known_detour.size(); ++index)
-  {
-    ASSERT_TRUE(edgeIsSafe(known_detour[index - 1], known_detour[index], known_minimum));
-  }
-  EXPECT_GE(known_minimum + 1e-4, 3.2);
 
   JointPlannerConfig planner_config;
   planner_config.planning_timeout = 1.0;
@@ -95,6 +82,8 @@ TEST_F(WholeBodyJointPlannerIntegration, RejectsLinearYawFlipAndFindsStableDetou
   ASSERT_TRUE(planner.planStableConnection(positive, negative, M_PI, planned_detour,
                                            planned_minimum, &failure)) << failure;
   ASSERT_GT(planned_detour.size(), 2u);
+  EXPECT_TRUE(planned_detour.front().isApprox(positive, 1e-9));
+  EXPECT_TRUE(planned_detour.back().isApprox(negative, 1e-9));
   EXPECT_GE(planned_minimum + 1e-4, 3.2);
   for (size_t index = 1; index < planned_detour.size(); ++index)
   {
