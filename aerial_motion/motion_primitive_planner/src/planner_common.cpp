@@ -65,7 +65,7 @@ void FollowerConfig::validateOrThrow() const
 
 SharedPlannerConfig::SharedPlannerConfig(const ros::NodeHandle& private_nh) : common(private_nh)
 {
-  private_nh.param("ReplanHz", replan_hz, replan_hz);
+  private_nh.param("ReplanTriggerRatio", replan_trigger_ratio, replan_trigger_ratio);
   private_nh.param("UseAccumulatedMap", use_accumulated_map, use_accumulated_map);
   private_nh.param("GoalTolerance", goal_tolerance, goal_tolerance);
   private_nh.param("PlanningHorizon", planning_horizon, planning_horizon);
@@ -82,7 +82,8 @@ SharedPlannerConfig::SharedPlannerConfig(const ros::NodeHandle& private_nh) : co
 void SharedPlannerConfig::validateOrThrow() const
 {
   common.validateOrThrow();
-  if (!std::isfinite(replan_hz) || replan_hz <= 0.0 ||
+  if (!std::isfinite(replan_trigger_ratio) ||
+      replan_trigger_ratio <= 0.0 || replan_trigger_ratio >= 1.0 ||
       !std::isfinite(goal_tolerance) || goal_tolerance <= 0.0 ||
       !std::isfinite(planning_horizon) || planning_horizon <= 0.0)
   {

@@ -68,9 +68,51 @@ TEST(SharedPlannerConfig, RejectsInvalidSharedAndFollowerParameters)
   shared.goal_tolerance = 0.0;
   EXPECT_THROW(shared.validateOrThrow(), std::invalid_argument);
 
+  shared = validSharedConfig();
+  shared.replan_trigger_ratio = 0.0;
+  EXPECT_THROW(shared.validateOrThrow(), std::invalid_argument);
+  shared.replan_trigger_ratio = 1.0;
+  EXPECT_THROW(shared.validateOrThrow(), std::invalid_argument);
+  shared.replan_trigger_ratio = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(shared.validateOrThrow(), std::invalid_argument);
+
   FollowerConfig follower;
   follower.command_hz = 0.0;
   EXPECT_THROW(follower.validateOrThrow(), std::invalid_argument);
+}
+
+TEST(TrajectoryReplanTrigger, FiresOnceAtConfiguredExecutionRatio)
+{
+  TrajectoryReplanTrigger trigger(0.5);
+  trigger.arm(10.0, 4.0, false);
+  EXPECT_TRUE(trigger.armed());
+  EXPECT_FALSE(trigger.triggered());
+  EXPECT_FALSE(trigger.shouldTrigger(11.999));
+  EXPECT_TRUE(trigger.shouldTrigger(12.0));
+  EXPECT_TRUE(trigger.triggered());
+  EXPECT_FALSE(trigger.shouldTrigger(13.0));
+
+  trigger.arm(20.0, 10.0, false);
+  EXPECT_FALSE(trigger.shouldTrigger(24.999));
+  EXPECT_TRUE(trigger.shouldTrigger(25.0));
+
+  trigger.arm(30.0, 2.0, true);
+  EXPECT_FALSE(trigger.armed());
+  EXPECT_TRUE(trigger.terminal());
+  EXPECT_FALSE(trigger.shouldTrigger(32.0));
+}
+
+TEST(TrajectoryReplanTrigger, RejectsInvalidRatiosAndIntervals)
+{
+  EXPECT_THROW(TrajectoryReplanTrigger(0.0), std::invalid_argument);
+  EXPECT_THROW(TrajectoryReplanTrigger(1.0), std::invalid_argument);
+  EXPECT_THROW(TrajectoryReplanTrigger(std::numeric_limits<double>::infinity()),
+               std::invalid_argument);
+
+  TrajectoryReplanTrigger trigger;
+  EXPECT_THROW(trigger.arm(0.0, 0.0, false), std::invalid_argument);
+  EXPECT_THROW(trigger.arm(std::numeric_limits<double>::quiet_NaN(), 1.0, false),
+               std::invalid_argument);
 }
 
 TEST(PrimitiveGenerator, ProducesSinglePieceNominalAndOffsetCandidatesWithSharedBoundaryState)

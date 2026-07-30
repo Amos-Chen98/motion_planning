@@ -46,7 +46,7 @@ struct SharedPlannerConfig
 {
   gcopter_planner::CommonPlannerConfig common;
   PrimitiveConfig primitive;
-  double replan_hz = 2.0;
+  double replan_trigger_ratio = 0.5;
   bool use_accumulated_map = true;
   double goal_tolerance = 0.2;
   double planning_horizon = 3.0;

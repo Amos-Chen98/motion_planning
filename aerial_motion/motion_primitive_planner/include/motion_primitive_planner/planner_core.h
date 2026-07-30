@@ -84,6 +84,29 @@ struct RootCommandKinematics
   double yaw_rate = 0.0;
 };
 
+class TrajectoryReplanTrigger
+{
+public:
+  explicit TrajectoryReplanTrigger(double trigger_ratio = 0.5);
+
+  void arm(double start_time, double duration, bool terminal);
+  void reset();
+  bool shouldTrigger(double current_time);
+
+  double triggerRatio() const { return trigger_ratio_; }
+  bool armed() const { return armed_; }
+  bool triggered() const { return triggered_; }
+  bool terminal() const { return terminal_; }
+
+private:
+  double trigger_ratio_ = 0.5;
+  double start_time_ = 0.0;
+  double duration_ = 0.0;
+  bool armed_ = false;
+  bool triggered_ = false;
+  bool terminal_ = false;
+};
+
 class PrimitiveGenerator
 {
 public:

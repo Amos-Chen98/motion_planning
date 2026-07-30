@@ -10,7 +10,7 @@ IntegralIntervs: 16
 RelCostTol: 1.0e-5
 
 # Shared online planning and root motion primitive configuration.
-ReplanHz: 2.0
+ReplanTriggerRatio: 0.5
 UseAccumulatedMap: true
 GoalTolerance: 0.2
 PlanningHorizon: 3.0

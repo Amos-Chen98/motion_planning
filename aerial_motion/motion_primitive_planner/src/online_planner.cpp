@@ -21,6 +21,13 @@ namespace motion_primitive_planner
 namespace
 {
 constexpr char kRobotModelPlugin[] = "dragon/hydrus_like_robot_model";
+
+enum class PlanAttemptResult
+{
+  kIdle,
+  kSucceeded,
+  kRetry
+};
 }  // namespace
 
 class OnlinePlanner
@@ -35,6 +42,7 @@ public:
     , executed_history_(config.follower)
     , diagnostics_(nh_, config.shared.common.worldFrameId,
                    "motion_primitive_candidates", 0.0125)
+    , replan_trigger_(config.shared.replan_trigger_ratio)
   {
     initializeRobotModel();
     ROS_INFO("Motion primitive map starts as free space and will be updated when point clouds arrive.");
@@ -48,12 +56,11 @@ public:
                                           &OnlinePlanner::executedCommandCallback, this,
                                           ros::TransportHints().tcpNoDelay());
     ros_interface_.visualizer().clearTrajectory();
-    timer_ = nh_.createTimer(ros::Duration(1.0 / config_.shared.replan_hz),
-                             &OnlinePlanner::timerCallback, this);
     ROS_INFO("Motion primitive planner ready: N=%d, horizon=%.2f m, fc_rp_min>=%.2f, "
-             "baselink_tilt<=%.2f, Copilot projection fallback=%s.",
+             "baselink_tilt<=%.2f, replan_ratio=%.2f, Copilot projection fallback=%s.",
              config_.shared.primitive.candidate_count, config_.shared.planning_horizon,
              config_.stability.fc_rp_min_threshold, config_.stability.max_baselink_tilt,
+             config_.shared.replan_trigger_ratio,
              config_.allow_copilot_stability_projection_fallback ? "enabled" : "disabled");
   }
 
@@ -89,6 +96,7 @@ private:
       return;
     }
     environment_.updateMap(points);
+    retryPlanningIfPending();
   }
 
   void targetCallback(const geometry_msgs::PoseStamped::ConstPtr& message)
@@ -107,9 +115,12 @@ private:
     const bool clamped = (target_ - requested).norm() > 1e-3;
     target_received_ = true;
     goal_latched_ = false;
+    retry_pending_ = false;
+    replan_trigger_.reset();
     ros_interface_.visualizer().visualizeStartGoal(target_, 0.05, 1);
     ROS_INFO("Received motion-primitive goal [%.2f, %.2f, %.2f]%s.",
              target_.x(), target_.y(), target_.z(), clamped ? " (clamped to map)" : "");
+    requestPlanning();
   }
 
   void jointStateCallback(const sensor_msgs::JointState::ConstPtr& message)
@@ -117,6 +128,7 @@ private:
     if (model_info_->readCompleteJointState(*message, current_joints_))
     {
       joints_received_ = true;
+      retryPlanningIfPending();
     }
   }
 
@@ -127,6 +139,13 @@ private:
                                              message->pose.position.z));
     executed_yaw_ = yawFromQuaternion(message->pose.orientation);
     executed_command_received_ = true;
+    const double execution_time =
+        message->header.stamp.isZero() ? ros::Time::now().toSec() : message->header.stamp.toSec();
+    const bool progress_triggered = replan_trigger_.shouldTrigger(execution_time);
+    if (progress_triggered || retry_pending_)
+    {
+      requestPlanning();
+    }
   }
 
   bool activeTrajectory(double now) const
@@ -154,11 +173,29 @@ private:
     ros_interface_.visualizer().clearTrajectory();
   }
 
-  void timerCallback(const ros::TimerEvent&)
+  void requestPlanning()
   {
-    if (!target_received_ || !ros_interface_.odomReceived() || !joints_received_ || goal_latched_)
+    retry_pending_ = false;
+    retry_pending_ = planOnce() == PlanAttemptResult::kRetry;
+  }
+
+  void retryPlanningIfPending()
+  {
+    if (retry_pending_)
     {
-      return;
+      requestPlanning();
+    }
+  }
+
+  PlanAttemptResult planOnce()
+  {
+    if (!target_received_ || goal_latched_)
+    {
+      return PlanAttemptResult::kIdle;
+    }
+    if (!ros_interface_.odomReceived() || !joints_received_)
+    {
+      return PlanAttemptResult::kRetry;
     }
     const double handover = ros::Time::now().toSec();
     RootState start;
@@ -174,7 +211,8 @@ private:
     if ((start.position - target_).norm() <= config_.shared.goal_tolerance)
     {
       goal_latched_ = true;
-      return;
+      replan_trigger_.reset();
+      return PlanAttemptResult::kIdle;
     }
 
     struct PlanningTimingLogger
@@ -190,7 +228,7 @@ private:
         {
           const double elapsed_ms = std::chrono::duration<double, std::milli>(
               std::chrono::steady_clock::now() - start_).count();
-          ROS_INFO("Root-link local planning completed in %.1f ms.", elapsed_ms);
+          ROS_INFO_THROTTLE(1.0, "Root-link local planning completed in %.1f ms.", elapsed_ms);
         }
       }
 
@@ -205,7 +243,7 @@ private:
       {
         ROS_WARN_THROTTLE(1.0, "Motion primitive start is in collision.");
       }
-      return;
+      return PlanAttemptResult::kRetry;
     }
 
     const double start_yaw = config_.follower.publish_yaw_command && executed_command_received_
@@ -235,9 +273,9 @@ private:
     publishDiagnostics(batch.candidates, selected);
     if (selected < 0)
     {
-      ROS_WARN("All %zu primitives rejected; keeping the previous trajectory.",
-               batch.candidates.size());
-      return;
+      ROS_WARN_THROTTLE(1.0, "All %zu primitives rejected; keeping the previous trajectory.",
+                        batch.candidates.size());
+      return PlanAttemptResult::kRetry;
     }
     const Candidate& selected_candidate = batch.candidates[static_cast<size_t>(selected)];
     if (selected_requires_projection)
@@ -250,12 +288,17 @@ private:
     trajectory_ = selected_candidate.trajectory;
     trajectory_stamp_ = handover;
     ros_interface_.publishTrajectory(trajectory_, handover);
-    goal_latched_ = batch.terminal;
+    const double trajectory_duration = trajectory_.getTotalDuration();
+    const bool terminal = batch.terminal ||
+        (trajectory_.getPos(trajectory_duration) - target_).norm() <= config_.shared.goal_tolerance;
+    goal_latched_ = terminal;
+    replan_trigger_.arm(trajectory_stamp_, trajectory_duration, terminal);
     ROS_INFO("Selected primitive %d/%zu (length %.2f m, min fc_rp %.3f).",
              selected, batch.candidates.size(), selected_candidate.path_length,
              selected_candidate.min_fc_rp);
     ros_interface_.visualizer().visualizeStartGoal(start.position, 0.05, 0);
     ros_interface_.visualizer().visualizeStartGoal(target_, 0.05, 1);
+    return PlanAttemptResult::kSucceeded;
   }
 
   RootPlannerConfig config_;
@@ -274,7 +317,6 @@ private:
   ros::Subscriber target_sub_;
   ros::Subscriber joint_state_sub_;
   ros::Subscriber executed_command_sub_;
-  ros::Timer timer_;
 
   double executed_yaw_ = 0.0;
   bool executed_command_received_ = false;
@@ -286,6 +328,8 @@ private:
 
   Trajectory<5> trajectory_;
   double trajectory_stamp_ = 0.0;
+  TrajectoryReplanTrigger replan_trigger_;
+  bool retry_pending_ = false;
 };
 
 }  // namespace motion_primitive_planner

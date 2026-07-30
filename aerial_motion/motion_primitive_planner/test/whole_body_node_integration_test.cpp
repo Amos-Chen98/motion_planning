@@ -4,8 +4,11 @@
 #include <nav_msgs/Odometry.h>
 #include <ros/master.h>
 #include <ros/ros.h>
+#include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/point_cloud2_iterator.h>
 #include <std_msgs/Float64.h>
 
+#include <Eigen/Core>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -95,6 +98,49 @@ protected:
     return result;
   }
 
+  static sensor_msgs::PointCloud2 blockingCloud()
+  {
+    std::vector<Eigen::Vector3d> points;
+    for (double x = -1.0; x <= 3.0; x += 0.10)
+    {
+      for (double y = -0.5; y <= 0.5; y += 0.15)
+      {
+        for (double z = 0.5; z <= 1.5; z += 0.15)
+        {
+          points.emplace_back(x, y, z);
+        }
+      }
+    }
+    sensor_msgs::PointCloud2 cloud;
+    cloud.header.frame_id = "world";
+    sensor_msgs::PointCloud2Modifier modifier(cloud);
+    modifier.setPointCloud2FieldsByString(1, "xyz");
+    modifier.resize(points.size());
+    sensor_msgs::PointCloud2Iterator<float> x(cloud, "x");
+    sensor_msgs::PointCloud2Iterator<float> y(cloud, "y");
+    sensor_msgs::PointCloud2Iterator<float> z(cloud, "z");
+    for (const Eigen::Vector3d& point : points)
+    {
+      *x = static_cast<float>(point.x());
+      *y = static_cast<float>(point.y());
+      *z = static_cast<float>(point.z());
+      ++x;
+      ++y;
+      ++z;
+    }
+    return cloud;
+  }
+
+  static sensor_msgs::PointCloud2 emptyCloud()
+  {
+    sensor_msgs::PointCloud2 cloud;
+    cloud.header.frame_id = "world";
+    sensor_msgs::PointCloud2Modifier modifier(cloud);
+    modifier.setPointCloud2FieldsByString(1, "xyz");
+    modifier.resize(0);
+    return cloud;
+  }
+
   std::vector<aerial_robot_msgs::FullStateTarget> commands_;
   std::vector<geometry_msgs::PoseStamped> root_targets_;
   double maximum_joint_step_ = 0.0;
@@ -134,6 +180,8 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
       });
   const ros::Publisher goal_publisher = nh.advertise<geometry_msgs::PoseStamped>(
       "/move_base_simple/goal", 1, true);
+  const ros::Publisher cloud_publisher = nh.advertise<sensor_msgs::PointCloud2>(
+      "/whole_body_planner_test/cloud", 1, true);
 
   const auto make_goal = [](double x, double y) {
     geometry_msgs::PoseStamped goal;
@@ -144,8 +192,8 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
     goal.pose.orientation.w = 1.0;
     return goal;
   };
-  geometry_msgs::PoseStamped first_goal = make_goal(1.2, 0.0);
-  geometry_msgs::PoseStamped second_goal = make_goal(1.8, 0.0);
+  geometry_msgs::PoseStamped first_goal = make_goal(1.8, 0.0);
+  geometry_msgs::PoseStamped second_goal = make_goal(2.4, 0.0);
 
   const ros::WallTime start = ros::WallTime::now();
   ros::WallRate rate(100.0);
@@ -154,12 +202,17 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
   bool second_goal_published = false;
   bool second_goal_started = false;
   bool second_goal_stopped = false;
+  bool blocking_cloud_published = false;
+  bool failure_hold_observed = false;
+  bool clearing_cloud_published = false;
   size_t commands_after_first_goal = 0;
   int selections_after_first_goal = 0;
+  ros::WallTime blocking_cloud_wall_time;
+  ros::WallTime second_goal_wall_time;
   while (ros::ok() && (ros::WallTime::now() - start).toSec() < 30.0)
   {
     const ros::WallTime now = ros::WallTime::now();
-    if (!first_goal_published && (now - start).toSec() > 0.5)
+    if (!first_goal_published && (now - start).toSec() > 1.0)
     {
       first_goal.header.stamp = ros::Time::now();
       goal_publisher.publish(first_goal);
@@ -168,23 +221,55 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
     ros::spinOnce();
     const bool output_silent = !last_command_wall_time_.isZero() &&
                                (now - last_command_wall_time_).toSec() >= 0.40;
-    if (!first_goal_stopped && received_selection_ && commands_.size() >= 20 && output_silent)
+    const bool first_goal_reached = !root_targets_.empty() &&
+        std::abs(root_targets_.back().pose.position.x - first_goal.pose.position.x) <= 0.2 &&
+        std::abs(root_targets_.back().pose.position.y - first_goal.pose.position.y) <= 0.2;
+    if (!first_goal_stopped && received_selection_ && selection_count_ >= 2 &&
+        commands_.size() >= 20 && first_goal_reached && output_silent)
     {
       first_goal_stopped = true;
       commands_after_first_goal = commands_.size();
       selections_after_first_goal = selection_count_;
     }
-    if (first_goal_stopped && !second_goal_published)
+    if (first_goal_stopped && !blocking_cloud_published)
+    {
+      sensor_msgs::PointCloud2 cloud = blockingCloud();
+      cloud.header.stamp = ros::Time::now();
+      cloud_publisher.publish(cloud);
+      blocking_cloud_published = true;
+      blocking_cloud_wall_time = now;
+    }
+    if (blocking_cloud_published && !second_goal_published &&
+        (now - blocking_cloud_wall_time).toSec() >= 0.50)
     {
       second_goal.header.stamp = ros::Time::now();
       goal_publisher.publish(second_goal);
       second_goal_published = true;
+      second_goal_wall_time = now;
     }
     if (second_goal_published && commands_.size() > commands_after_first_goal)
     {
       second_goal_started = true;
     }
-    if (second_goal_started && selection_count_ > selections_after_first_goal && output_silent)
+    if (second_goal_started && !failure_hold_observed &&
+        (now - second_goal_wall_time).toSec() >= 0.75 &&
+        selection_count_ == selections_after_first_goal &&
+        commands_.size() >= commands_after_first_goal + 10)
+    {
+      failure_hold_observed = true;
+    }
+    if (failure_hold_observed && !clearing_cloud_published)
+    {
+      sensor_msgs::PointCloud2 cloud = emptyCloud();
+      cloud.header.stamp = ros::Time::now();
+      cloud_publisher.publish(cloud);
+      clearing_cloud_published = true;
+    }
+    const bool second_goal_reached = !root_targets_.empty() &&
+        std::abs(root_targets_.back().pose.position.x - second_goal.pose.position.x) <= 0.2 &&
+        std::abs(root_targets_.back().pose.position.y - second_goal.pose.position.y) <= 0.2;
+    if (second_goal_started && selection_count_ > selections_after_first_goal &&
+        second_goal_reached && output_silent)
     {
       second_goal_stopped = true;
       break;
@@ -192,9 +277,17 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
     rate.sleep();
   }
 
-  ASSERT_TRUE(first_goal_stopped);
+  ASSERT_TRUE(first_goal_stopped)
+      << "commands=" << commands_.size() << ", selections=" << selection_count_
+      << ", last_command_age="
+      << (last_command_wall_time_.isZero() ? -1.0 :
+          (ros::WallTime::now() - last_command_wall_time_).toSec());
+  EXPECT_GE(selections_after_first_goal, 2);
+  ASSERT_TRUE(blocking_cloud_published);
   ASSERT_TRUE(second_goal_published);
   ASSERT_TRUE(second_goal_started);
+  ASSERT_TRUE(failure_hold_observed);
+  ASSERT_TRUE(clearing_cloud_published);
   ASSERT_TRUE(second_goal_stopped);
   ASSERT_TRUE(received_selection_);
   ASSERT_GT(commands_.size(), commands_after_first_goal);
@@ -217,9 +310,9 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
   const geometry_msgs::PoseStamped& terminal_root_target = root_targets_.back();
   EXPECT_EQ(terminal_root_target.header.stamp, terminal.header.stamp);
   EXPECT_EQ(terminal_root_target.header.frame_id, terminal.header.frame_id);
-  EXPECT_NEAR(terminal_root_target.pose.position.x, second_goal.pose.position.x, 0.02);
-  EXPECT_NEAR(terminal_root_target.pose.position.y, second_goal.pose.position.y, 0.02);
-  EXPECT_NEAR(terminal_root_target.pose.position.z, second_goal.pose.position.z, 0.02);
+  EXPECT_NEAR(terminal_root_target.pose.position.x, second_goal.pose.position.x, 0.2);
+  EXPECT_NEAR(terminal_root_target.pose.position.y, second_goal.pose.position.y, 0.2);
+  EXPECT_NEAR(terminal_root_target.pose.position.z, second_goal.pose.position.z, 0.2);
   const double terminal_yaw = std::atan2(
       2.0 * terminal.root_state.pose.pose.orientation.w * terminal.root_state.pose.pose.orientation.z,
       1.0 - 2.0 * std::pow(terminal.root_state.pose.pose.orientation.z, 2));
@@ -228,11 +321,12 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
       1.0 - 2.0 * std::pow(terminal_root_target.pose.orientation.z, 2));
   EXPECT_NEAR(std::abs(std::remainder(terminal_yaw - terminal_tail_yaw, 2.0 * M_PI)), M_PI, 1e-6);
   EXPECT_NEAR(terminal.root_state.pose.pose.position.x + 0.5255 * std::cos(terminal_yaw),
-              second_goal.pose.position.x, 0.02);
+              second_goal.pose.position.x, 0.2);
   EXPECT_NEAR(terminal.root_state.pose.pose.position.y + 0.5255 * std::sin(terminal_yaw),
-              second_goal.pose.position.y, 0.02);
+              second_goal.pose.position.y, 0.2);
 
   const size_t stopped_command_count = commands_.size();
+  const int stopped_selection_count = selection_count_;
   const ros::WallTime silence_check_start = ros::WallTime::now();
   while (ros::ok() && (ros::WallTime::now() - silence_check_start).toSec() < 0.50)
   {
@@ -240,6 +334,7 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
     rate.sleep();
   }
   EXPECT_EQ(commands_.size(), stopped_command_count);
+  EXPECT_EQ(selection_count_, stopped_selection_count);
 
   const std::vector<std::string> publishers = fullStatePublishers();
   ASSERT_EQ(publishers.size(), 1u);

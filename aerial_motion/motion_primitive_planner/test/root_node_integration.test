@@ -13,6 +13,9 @@
         <arg name="command_topic" value="/dragon/root/target_pose" />
         <arg name="trajectory_topic" value="/planning/trajectory" />
         <arg name="max_vel_mag" value="0.4" />
+        <arg name="planning_horizon" value="0.4" />
+        <arg name="replan_trigger_ratio" value="0.5" />
+        <arg name="use_accumulated_map" value="false" />
         <arg name="snake_ik_singularity_threshold" value="2.0" />
         <arg name="allow_copilot_stability_projection_fallback" value="true" />
     </include>

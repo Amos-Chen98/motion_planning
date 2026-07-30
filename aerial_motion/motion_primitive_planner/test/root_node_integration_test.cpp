@@ -70,6 +70,16 @@ protected:
     return cloud;
   }
 
+  static sensor_msgs::PointCloud2 emptyCloud()
+  {
+    sensor_msgs::PointCloud2 cloud;
+    cloud.header.frame_id = "world";
+    sensor_msgs::PointCloud2Modifier modifier(cloud);
+    modifier.setPointCloud2FieldsByString(1, "xyz");
+    modifier.resize(0);
+    return cloud;
+  }
+
   std::vector<gcopter::PolyTraj> trajectories_;
   std::vector<geometry_msgs::PoseStamped> commands_;
   double selected_minimum_fc_rp_ = 0.0;
@@ -110,7 +120,7 @@ TEST_F(RootNodeIntegration, PublishesTrajectoryAndKeepsItWhenReplanningFails)
 
   geometry_msgs::PoseStamped goal;
   goal.header.frame_id = "world";
-  goal.pose.position.y = 0.3;
+  goal.pose.position.y = 1.2;
   goal.pose.position.z = 1.0;
   goal.pose.orientation.w = 1.0;
 
@@ -133,8 +143,30 @@ TEST_F(RootNodeIntegration, PublishesTrajectoryAndKeepsItWhenReplanningFails)
   ASSERT_TRUE(received_selection_);
   EXPECT_GT(trajectories_.front().durations.size(), 0u);
 
-  const size_t trajectory_count = trajectories_.size();
-  const size_t command_count = commands_.size();
+  double first_duration = 0.0;
+  for (const double duration : trajectories_.front().durations)
+  {
+    first_duration += duration;
+  }
+  const ros::Time expected_replan_time =
+      trajectories_.front().start_time + ros::Duration(0.5 * first_duration);
+  while (ros::ok() && ros::Time::now() < expected_replan_time - ros::Duration(0.05))
+  {
+    ros::spinOnce();
+    rate.sleep();
+  }
+  EXPECT_EQ(trajectories_.size(), 1u);
+  const ros::WallTime replan_wait = ros::WallTime::now();
+  while (ros::ok() && trajectories_.size() < 2u &&
+         (ros::WallTime::now() - replan_wait).toSec() < 3.0)
+  {
+    ros::spinOnce();
+    rate.sleep();
+  }
+  ASSERT_GE(trajectories_.size(), 2u);
+  EXPECT_GE(trajectories_[1].start_time.toSec(), expected_replan_time.toSec() - 0.05);
+  EXPECT_LE(trajectories_[1].start_time.toSec(), expected_replan_time.toSec() + 1.0);
+
   sensor_msgs::PointCloud2 cloud = blockingCloud();
   cloud.header.stamp = ros::Time::now();
   cloud_publisher.publish(cloud);
@@ -145,7 +177,9 @@ TEST_F(RootNodeIntegration, PublishesTrajectoryAndKeepsItWhenReplanningFails)
     rate.sleep();
   }
 
-  goal.pose.position.y = -0.6;
+  const size_t trajectory_count = trajectories_.size();
+  const size_t command_count = commands_.size();
+  goal.pose.position.y = 1.6;
   goal.header.stamp = ros::Time::now();
   goal_publisher.publish(goal);
   const ros::WallTime failure_wait = ros::WallTime::now();
@@ -156,6 +190,18 @@ TEST_F(RootNodeIntegration, PublishesTrajectoryAndKeepsItWhenReplanningFails)
   }
   EXPECT_EQ(trajectories_.size(), trajectory_count);
   EXPECT_GT(commands_.size(), command_count);
+
+  sensor_msgs::PointCloud2 clear_cloud = emptyCloud();
+  clear_cloud.header.stamp = ros::Time::now();
+  cloud_publisher.publish(clear_cloud);
+  const ros::WallTime recovery_wait = ros::WallTime::now();
+  while (ros::ok() && trajectories_.size() == trajectory_count &&
+         (ros::WallTime::now() - recovery_wait).toSec() < 5.0)
+  {
+    ros::spinOnce();
+    rate.sleep();
+  }
+  EXPECT_GT(trajectories_.size(), trajectory_count);
 }
 }  // namespace
 }  // namespace motion_primitive_planner

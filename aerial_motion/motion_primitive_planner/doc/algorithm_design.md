@@ -12,21 +12,35 @@ For each instantaneous DRAGON configuration, the shared checker reconstructs the
 
 The planner searches toward the global goal and selects a local target by truncating the searched route at the planning horizon. It then generates the nominal root primitive as one unconstrained-interior MINCO segment directly between the current PVA state and the local-target PVA state, without using the route's intermediate obstacle-avoidance points. By default, every local target has zero desired velocity. Setting `ZeroLocalTargetVel=false` restores the previous behavior in which a non-terminal local target uses `PrimitiveCruiseVelocity` along the final local-route tangent; the global target always has zero desired velocity. Nonzero endpoint velocity or acceleration can make this continuous optimum deviate temporarily from the geometric chord. Alternative candidates use one offset midpoint in the chord-normal plane; the default set contains the nominal trajectory and two four-direction offset rings.
 
-Each candidate predicts the full body with the shared follow-the-leader predictor, checks swept-body collisions and the same joint-limit, feasible-control, thrust, rotor-clearance, and baselink-tilt constraints used by the whole-body planner, then selects the shortest and smoothest feasible trajectory. If no candidate is feasible, the active trajectory is retained and planning is retried later.
+Each candidate predicts the full body with the shared follow-the-leader predictor, checks swept-body collisions and the same joint-limit, feasible-control, thrust, rotor-clearance, and baselink-tilt constraints used by the whole-body planner, then selects the shortest and smoothest feasible trajectory. If no candidate is feasible, the active trajectory is retained and planning is retried on the next input update.
 
 `PredictionDt` controls only nominal stability evaluation; collision sampling is independently determined from command-rate nominal intervals and the adaptive whole-body displacement bound.
 
 `AllowCopilotStabilityProjectionFallback` is disabled by default. When enabled, a candidate rejected only for insufficient nominal `fc_rp_min` may be projected to a stable configuration by Copilot. Because the projected body can differ from the collision-checked shape, use this option only in free space or when projected-shape collision checking is provided separately.
 
-Both launch files first load `config/common_motion_primitive_planner.yaml`, then their mode-specific configuration. Shared parameter names and ROS topics remain identical between the two nodes. The `zero_local_target_vel` launch argument maps to the shared `ZeroLocalTargetVel` private parameter and defaults to `true`; `MaxBaselinkTilt` defaults to `1.20 rad` in both modes.
+Both launch files first load `config/common_motion_primitive_planner.yaml`, then their mode-specific configuration. Shared parameter names and ROS topics remain identical between the two nodes. The `replan_trigger_ratio` launch argument maps to `ReplanTriggerRatio` and defaults to `0.5`; the removed `replan_hz` and `ReplanHz` interfaces are not accepted. The `zero_local_target_vel` launch argument maps to the shared `ZeroLocalTargetVel` private parameter and defaults to `true`; `MaxBaselinkTilt` defaults to `1.20 rad` in both modes.
 
 ## Whole-Body Planner
 
 For every root primitive, the whole-body node plans and revalidates a continuous joint trajectory. It first uses nominal follow-the-leader motion, connects infeasible intervals with OMPL RRT-Connect, projects an infeasible terminal target to the nearest stable fold when necessary, and slows the root trajectory to meet joint-velocity and 40 Hz command-step limits.
 
-Only candidates with a fully feasible joint trajectory and collision-free swept body may execute. Candidates are ranked by minimum duration, minimum joint motion, and minimum root jerk. The node publishes root and joint commands at 40 Hz and holds the latest validated command at zero velocity after a planning failure.
+Only candidates with a fully feasible joint trajectory and collision-free swept body may execute. Candidates are ranked by minimum duration, minimum joint motion, and minimum root jerk. The node publishes root and joint commands at 40 Hz, holds the latest validated command at zero velocity after a planning failure, and keeps retrying from updated inputs until a replacement plan becomes available.
 
 The whole-body planner exclusively owns `full_state_target`; do not run it with output from `traj_server` or `multilink_copilot`.
+
+## Replanning and Execution Lifecycle
+
+A new target invalidates any pending plan and requests planning immediately. Every successfully published or activated non-terminal trajectory arms one trigger at `ReplanTriggerRatio` of its execution duration; each trajectory can trigger only once.
+
+| Mode | Progress clock | Retry events after failure |
+| --- | --- | --- |
+| Root-link | Executed-command timestamp relative to the published polynomial start time | Point cloud, valid joint state, or executed command |
+| Whole-body | Current ROS time relative to the active time-scaled trajectory's activation time | Point cloud, odometry, valid joint state, or command-publication cycle |
+
+There is no periodic replanning timer. A plan is terminal when route generation reaches the global target or its endpoint lies within `GoalTolerance`; terminal plans complete without arming another progress trigger. Whole-body replacement plans retain their configured activation lead time and become active only at the predicted handover instant.
+
+After a failed attempt, retries remain event driven. The root-link planner keeps its previous trajectory. The whole-body planner uses the last validated command as a zero-velocity hover hold for generation or evaluation failures; a plan that misses its activation deadline is discarded while the existing safe state remains active.
+
 
 ## RViz Candidate Markers
 

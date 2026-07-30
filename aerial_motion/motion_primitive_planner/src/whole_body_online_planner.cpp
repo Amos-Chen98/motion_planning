@@ -19,11 +19,13 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace motion_primitive_planner
@@ -32,6 +34,12 @@ namespace
 {
 constexpr char kRobotModelPlugin[] = "dragon/hydrus_like_robot_model";
 constexpr double kEpsilon = 1e-6;
+enum class PlanAttemptResult
+{
+  kIdle,
+  kSucceeded,
+  kRetry
+};
 
 struct CommandState
 {
@@ -106,6 +114,7 @@ public:
     , executed_history_(config.joint.follower)
     , diagnostics_(nh_, config.shared.common.worldFrameId,
                    "whole_body_root_candidates", 0.015)
+    , replan_trigger_(config.shared.replan_trigger_ratio)
   {
     initializeRobotModels();
     map_sub_ = nh_.subscribe("pcl_topic", 1, &WholeBodyOnlinePlanner::mapCallback, this,
@@ -125,14 +134,23 @@ public:
     root_target_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("root/target_pose", 10);
     command_timer_ = nh_.createTimer(ros::Duration(1.0 / config_.joint.follower.command_hz),
                                      &WholeBodyOnlinePlanner::commandTimerCallback, this);
-    planning_timer_ = nh_.createTimer(ros::Duration(1.0 / config_.shared.replan_hz),
-                                      &WholeBodyOnlinePlanner::planningTimerCallback, this);
     publisher_guard_timer_ = nh_.createTimer(ros::Duration(1.0),
                                              &WholeBodyOnlinePlanner::publisherGuardTimerCallback, this);
+    planning_worker_ = std::thread(&WholeBodyOnlinePlanner::planningWorker, this);
     ROS_INFO("Whole-body motion primitive planner ready: candidates=%d, fc_rp_min>=%.2f, "
-             "collision radius=%.2f m.",
+             "collision radius=%.2f m, replan_ratio=%.2f.",
              config_.shared.primitive.candidate_count, config_.stability.fc_rp_min_threshold,
-             config_.shared.common.dilateRadius);
+             config_.shared.common.dilateRadius, config_.shared.replan_trigger_ratio);
+  }
+
+  ~WholeBodyOnlinePlanner()
+  {
+    planning_shutdown_.store(true);
+    planning_request_cv_.notify_one();
+    if (planning_worker_.joinable())
+    {
+      planning_worker_.join();
+    }
   }
 
 private:
@@ -222,8 +240,11 @@ private:
       }
       return;
     }
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    environment_.updateMap(points);
+    {
+      std::lock_guard<std::mutex> lock(map_mutex_);
+      environment_.updateMap(points);
+    }
+    retryPlanningIfPending();
   }
 
   void targetCallback(const geometry_msgs::PoseStamped::ConstPtr& message)
@@ -258,31 +279,45 @@ private:
     {
       std::lock_guard<std::mutex> lock(plan_mutex_);
       pending_plan_.reset();
+      replan_trigger_.reset();
     }
+    retry_pending_.store(false);
     ROS_INFO("Received whole-body goal [%.2f, %.2f, %.2f].", target.x(), target.y(), target.z());
+    requestPlanning();
   }
 
   void odomCallback(const nav_msgs::Odometry::ConstPtr& message)
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    latest_odom_state_.valid = true;
-    latest_odom_state_.tail_position = Eigen::Vector3d(message->pose.pose.position.x,
-                                                       message->pose.pose.position.y,
-                                                       message->pose.pose.position.z);
-    latest_odom_state_.tail_velocity = Eigen::Vector3d(message->twist.twist.linear.x,
-                                                       message->twist.twist.linear.y,
-                                                       message->twist.twist.linear.z);
-    latest_odom_state_.yaw = yawFromQuaternion(message->pose.pose.orientation);
-    latest_odom_state_.yaw_rate = message->twist.twist.angular.z;
-    odom_received_ = true;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      latest_odom_state_.valid = true;
+      latest_odom_state_.tail_position = Eigen::Vector3d(message->pose.pose.position.x,
+                                                         message->pose.pose.position.y,
+                                                         message->pose.pose.position.z);
+      latest_odom_state_.tail_velocity = Eigen::Vector3d(message->twist.twist.linear.x,
+                                                         message->twist.twist.linear.y,
+                                                         message->twist.twist.linear.z);
+      latest_odom_state_.yaw = yawFromQuaternion(message->pose.pose.orientation);
+      latest_odom_state_.yaw_rate = message->twist.twist.angular.z;
+      odom_received_ = true;
+    }
+    retryPlanningIfPending();
   }
 
   void jointStateCallback(const sensor_msgs::JointState::ConstPtr& message)
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    if (model_info_->readCompleteJointState(*message, current_joints_))
+    bool state_updated = false;
     {
-      joints_received_ = true;
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      if (model_info_->readCompleteJointState(*message, current_joints_))
+      {
+        joints_received_ = true;
+        state_updated = true;
+      }
+    }
+    if (state_updated)
+    {
+      retryPlanningIfPending();
     }
   }
 
@@ -402,28 +437,68 @@ private:
     diagnostics_.publish(visualizations, selected, metrics);
   }
 
-  void planningTimerCallback(const ros::TimerEvent&)
+  void requestPlanning()
   {
-    if (planning_in_progress_.exchange(true))
+    planning_requested_.store(true);
+    if (!planning_in_progress_.load())
     {
-      return;
+      planning_request_cv_.notify_one();
     }
-    struct PlanningGuard
-    {
-      explicit PlanningGuard(std::atomic<bool>& flag) : flag_(flag) {}
-      ~PlanningGuard() { flag_.store(false); }
-      std::atomic<bool>& flag_;
-    } guard(planning_in_progress_);
+  }
 
+  void planningWorker()
+  {
+    while (!planning_shutdown_.load())
+    {
+      std::unique_lock<std::mutex> request_lock(planning_request_mutex_);
+      planning_request_cv_.wait(request_lock, [this] {
+        return planning_shutdown_.load() || planning_requested_.load();
+      });
+      if (planning_shutdown_.load())
+      {
+        return;
+      }
+      planning_requested_.store(false);
+      planning_in_progress_.store(true);
+      request_lock.unlock();
+
+      while (!planning_shutdown_.load())
+      {
+        retry_pending_.store(false);
+        const PlanAttemptResult result = planOnce();
+        if (result == PlanAttemptResult::kRetry)
+        {
+          retry_pending_.store(true);
+        }
+        if (!planning_requested_.exchange(false))
+        {
+          break;
+        }
+      }
+      planning_in_progress_.store(false);
+    }
+  }
+
+  void retryPlanningIfPending()
+  {
+    bool expected = true;
+    if (retry_pending_.compare_exchange_strong(expected, false))
+    {
+      requestPlanning();
+    }
+  }
+
+  PlanAttemptResult planOnce()
+  {
     if (goal_latched_.load())
     {
-      return;
+      return PlanAttemptResult::kIdle;
     }
     {
       std::lock_guard<std::mutex> lock(plan_mutex_);
       if (pending_plan_)
       {
-        return;
+        return PlanAttemptResult::kIdle;
       }
     }
 
@@ -433,9 +508,13 @@ private:
     TrajectoryHistory history;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
-      if (!target_received_ || !odom_received_ || !joints_received_)
+      if (!target_received_)
       {
-        return;
+        return PlanAttemptResult::kIdle;
+      }
+      if (!odom_received_ || !joints_received_)
+      {
+        return PlanAttemptResult::kRetry;
       }
       target = target_;
       target_sequence = target_sequence_;
@@ -476,7 +555,7 @@ private:
     {
       if (active_snapshot && !active_snapshot->hold)
       {
-        return;
+        return PlanAttemptResult::kIdle;
       }
       bool completed_current_target = false;
       {
@@ -489,6 +568,7 @@ private:
             active_plan_.reset();
           }
           pending_plan_.reset();
+          replan_trigger_.reset();
           goal_latched_.store(true);
           completed_current_target = true;
         }
@@ -497,7 +577,7 @@ private:
       {
         ROS_INFO("Whole-body target already reached; full-state command output stopped.");
       }
-      return;
+      return PlanAttemptResult::kIdle;
     }
 
     struct PlanningTimingLogger
@@ -513,7 +593,7 @@ private:
         {
           const double elapsed_ms = std::chrono::duration<double, std::milli>(
               std::chrono::steady_clock::now() - start_).count();
-          ROS_INFO("Whole-body local planning completed in %.1f ms.", elapsed_ms);
+          ROS_INFO_THROTTLE(1.0, "Whole-body local planning completed in %.1f ms.", elapsed_ms);
         }
       }
 
@@ -535,7 +615,7 @@ private:
     if (!batch.success())
     {
       enterHold(currentCommandOr(start), target_sequence, batch.detail);
-      return;
+      return PlanAttemptResult::kRetry;
     }
     std::vector<WholeBodyCandidate> candidates(batch.candidates.size());
     const NominalJointContext nominal_context = makeNominalJointContext(history, *model_info_);
@@ -577,12 +657,12 @@ private:
     if (selected < 0)
     {
       enterHold(currentCommandOr(start), target_sequence, "all whole-body candidates failed");
-      return;
+      return PlanAttemptResult::kRetry;
     }
     if (ros::Time::now() >= activation_time)
     {
       ROS_WARN_THROTTLE(1.0, "Dropping whole-body plan that missed its activation deadline.");
-      return;
+      return PlanAttemptResult::kRetry;
     }
     const WholeBodyCandidate& selected_candidate = candidates[static_cast<size_t>(selected)];
     std::shared_ptr<ActivePlan> plan(new ActivePlan);
@@ -590,13 +670,16 @@ private:
     plan->target_sequence = target_sequence;
     plan->root_trajectory = selected_candidate.scaled_root;
     plan->joint_plan = selected_candidate.joints;
-    plan->terminal = batch.terminal;
+    const double plan_duration = plan->root_trajectory.getTotalDuration();
+    plan->terminal = batch.terminal ||
+        (plan->root_trajectory.getPos(plan_duration) - target).norm() <=
+            config_.shared.goal_tolerance;
     {
       std::lock_guard<std::mutex> plan_lock(plan_mutex_);
       std::lock_guard<std::mutex> state_lock(state_mutex_);
       if (target_sequence != target_sequence_)
       {
-        return;
+        return PlanAttemptResult::kIdle;
       }
       pending_plan_ = plan;
     }
@@ -605,6 +688,7 @@ private:
              selected, candidates.size(), selected_candidate.joints.duration,
              selected_candidate.joints.minimum_fc_rp, selected_candidate.joints.joint_motion,
              selected_candidate.joints.time_scale);
+    return PlanAttemptResult::kSucceeded;
   }
 
   CommandState currentCommandOr(const CommandState& fallback)
@@ -665,8 +749,9 @@ private:
       }
       active_plan_ = hold;
       pending_plan_.reset();
+      replan_trigger_.reset();
     }
-    ROS_WARN("Whole-body planner entered hover hold: %s", reason.c_str());
+    ROS_WARN_THROTTLE(1.0, "Whole-body planner entered hover hold: %s", reason.c_str());
   }
 
   void commandTimerCallback(const ros::TimerEvent&)
@@ -674,6 +759,7 @@ private:
     const ros::Time now = ros::Time::now();
     CommandState state;
     bool terminal_complete = false;
+    bool progress_triggered = false;
     uint64_t completed_target_sequence = 0;
     {
       std::lock_guard<std::mutex> lock(plan_mutex_);
@@ -681,29 +767,40 @@ private:
       {
         active_plan_ = pending_plan_;
         pending_plan_.reset();
+        replan_trigger_.arm(active_plan_->start_time.toSec(),
+                            active_plan_->duration(), active_plan_->terminal);
       }
-      if (!active_plan_)
+      if (active_plan_)
       {
-        return;
-      }
-      state = active_plan_->sample(now);
-      terminal_complete = active_plan_->terminal && !active_plan_->hold &&
-                          (now - active_plan_->start_time).toSec() >= active_plan_->duration();
-      if (terminal_complete)
-      {
-        completed_target_sequence = active_plan_->target_sequence;
-      }
-      if (state.valid)
-      {
-        last_command_ = state;
-      }
-      if (terminal_complete)
-      {
-        active_plan_.reset();
+        state = active_plan_->sample(now);
+        terminal_complete = active_plan_->terminal && !active_plan_->hold &&
+                            (now - active_plan_->start_time).toSec() >= active_plan_->duration();
+        if (terminal_complete)
+        {
+          completed_target_sequence = active_plan_->target_sequence;
+        }
+        else
+        {
+          progress_triggered = replan_trigger_.shouldTrigger(now.toSec());
+          if (progress_triggered)
+          {
+            ROS_DEBUG("Whole-body trajectory reached the replanning ratio at %.3f.", now.toSec());
+          }
+        }
+        if (state.valid)
+        {
+          last_command_ = state;
+        }
+        if (terminal_complete)
+        {
+          active_plan_.reset();
+          replan_trigger_.reset();
+        }
       }
     }
     if (!state.valid)
     {
+      retryPlanningIfPending();
       return;
     }
     if (terminal_complete)
@@ -721,12 +818,21 @@ private:
       if (terminal_complete && target_received_ && completed_target_sequence == target_sequence_)
       {
         goal_latched_.store(true);
+        retry_pending_.store(false);
         completed_current_target = true;
       }
     }
     if (completed_current_target)
     {
       ROS_INFO("Whole-body target reached; full-state command output stopped.");
+    }
+    if (progress_triggered)
+    {
+      requestPlanning();
+    }
+    else
+    {
+      retryPlanningIfPending();
     }
   }
 
@@ -784,6 +890,7 @@ private:
   TrajectoryHistory executed_history_;
   DragonCollisionGeometry collision_geometry_;
   CandidateDiagnosticsPublisher diagnostics_;
+  TrajectoryReplanTrigger replan_trigger_;
 
   ros::Subscriber map_sub_;
   ros::Subscriber target_sub_;
@@ -792,7 +899,6 @@ private:
   ros::Publisher full_state_pub_;
   ros::Publisher root_target_pub_;
   ros::Timer command_timer_;
-  ros::Timer planning_timer_;
   ros::Timer publisher_guard_timer_;
   std::string full_state_topic_;
 
@@ -812,7 +918,13 @@ private:
   std::shared_ptr<const ActivePlan> pending_plan_;
   CommandState last_command_;
   std::atomic<bool> planning_in_progress_{false};
+  std::atomic<bool> planning_requested_{false};
+  std::atomic<bool> retry_pending_{false};
+  std::atomic<bool> planning_shutdown_{false};
   std::atomic<bool> goal_latched_{false};
+  std::mutex planning_request_mutex_;
+  std::condition_variable planning_request_cv_;
+  std::thread planning_worker_;
 };
 
 }  // namespace motion_primitive_planner

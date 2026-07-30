@@ -27,6 +27,52 @@ Eigen::Vector3d safeNormal(const Eigen::Vector3d& direction)
 }
 }  // namespace
 
+TrajectoryReplanTrigger::TrajectoryReplanTrigger(double trigger_ratio)
+  : trigger_ratio_(trigger_ratio)
+{
+  if (!std::isfinite(trigger_ratio_) || trigger_ratio_ <= 0.0 || trigger_ratio_ >= 1.0)
+  {
+    throw std::invalid_argument("Replan trigger ratio must be finite and inside (0, 1)");
+  }
+}
+
+void TrajectoryReplanTrigger::arm(double start_time, double duration, bool terminal)
+{
+  if (!std::isfinite(start_time) || !std::isfinite(duration) || duration <= 0.0)
+  {
+    throw std::invalid_argument("Invalid trajectory replan trigger interval");
+  }
+  start_time_ = start_time;
+  duration_ = duration;
+  terminal_ = terminal;
+  triggered_ = false;
+  armed_ = !terminal;
+}
+
+void TrajectoryReplanTrigger::reset()
+{
+  start_time_ = 0.0;
+  duration_ = 0.0;
+  armed_ = false;
+  triggered_ = false;
+  terminal_ = false;
+}
+
+bool TrajectoryReplanTrigger::shouldTrigger(double current_time)
+{
+  if (!armed_ || triggered_ || !std::isfinite(current_time))
+  {
+    return false;
+  }
+  const double trigger_time = start_time_ + trigger_ratio_ * duration_;
+  if (current_time + kEpsilon < trigger_time)
+  {
+    return false;
+  }
+  triggered_ = true;
+  return true;
+}
+
 PrimitiveGenerator::PrimitiveGenerator(const PrimitiveConfig& config) : config_(config)
 {
   if (config_.candidate_count <= 0 || !std::isfinite(config_.max_offset) || config_.max_offset < 0.0 ||
