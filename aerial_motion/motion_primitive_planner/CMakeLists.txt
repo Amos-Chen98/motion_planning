@@ -74,6 +74,14 @@ if(CATKIN_ENABLE_TESTING)
     target_link_libraries(whole_body_joint_planner_test motion_primitive_planner_core ${catkin_LIBRARIES})
     add_dependencies(whole_body_joint_planner_test ${catkin_EXPORTED_TARGETS})
   endif()
+  add_rostest_gtest(whole_body_joint_bridge_test
+    test/whole_body_joint_bridge.test
+    test/whole_body_joint_bridge_test.cpp
+  )
+  if(TARGET whole_body_joint_bridge_test)
+    target_link_libraries(whole_body_joint_bridge_test motion_primitive_planner_core ${catkin_LIBRARIES})
+    add_dependencies(whole_body_joint_bridge_test ${catkin_EXPORTED_TARGETS})
+  endif()
   add_rostest_gtest(whole_body_node_integration_test
     test/whole_body_node_integration.test
     test/whole_body_node_integration_test.cpp

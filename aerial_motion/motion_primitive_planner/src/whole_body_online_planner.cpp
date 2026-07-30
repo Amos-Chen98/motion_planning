@@ -34,6 +34,10 @@ namespace
 {
 constexpr char kRobotModelPlugin[] = "dragon/hydrus_like_robot_model";
 constexpr double kEpsilon = 1e-6;
+//! Wall-clock reserve kept between the end of candidate evaluation and activation.
+//! It absorbs the last candidate's swept-collision check and diagnostics.
+constexpr double kActivationSafetyMargin = 0.20;
+
 enum class PlanAttemptResult
 {
   kIdle,
@@ -620,6 +624,12 @@ private:
     std::vector<WholeBodyCandidate> candidates(batch.candidates.size());
     const NominalJointContext nominal_context = makeNominalJointContext(history, *model_info_);
 
+    // Joint-space bridging is the expensive part of whole-body planning, so all
+    // candidates share one wall-clock budget.  Running out only costs the quality
+    // of the remaining candidates; the ones already evaluated stay selectable and
+    // the plan still reaches its activation instant.
+    const ros::Time joint_planning_deadline =
+        activation_time - ros::Duration(kActivationSafetyMargin);
     for (size_t index = 0; index < batch.candidates.size(); ++index)
     {
       WholeBodyCandidate& candidate = candidates[index];
@@ -629,8 +639,16 @@ private:
         candidate.detail = candidate.root.detail;
         continue;
       }
+      const double joint_planning_budget = (joint_planning_deadline - ros::Time::now()).toSec();
+      if (joint_planning_budget <= 0.0)
+      {
+        candidate.status = CandidateStatus::kJointPlanningFailed;
+        candidate.detail = "whole-body planning budget exhausted";
+        continue;
+      }
       candidate.joints = joint_planners_[index]->plan(candidate.root.trajectory, nominal_context,
-                                                      start.joint_positions, start.yaw);
+                                                      start.joint_positions, start.yaw,
+                                                      joint_planning_budget);
       if (!candidate.joints.success)
       {
         candidate.status = CandidateStatus::kJointPlanningFailed;
@@ -684,10 +702,11 @@ private:
       pending_plan_ = plan;
     }
     ROS_INFO("Selected whole-body primitive %d/%zu: duration=%.3f s, min_fc_rp=%.3f, "
-             "joint_motion=%.3f rad, scale=%.2f.",
+             "joint_motion=%.3f rad, scale=%.2f, bridges=%d, holds=%d.",
              selected, candidates.size(), selected_candidate.joints.duration,
              selected_candidate.joints.minimum_fc_rp, selected_candidate.joints.joint_motion,
-             selected_candidate.joints.time_scale);
+             selected_candidate.joints.time_scale, selected_candidate.joints.bridge_count,
+             selected_candidate.joints.hold_count);
     return PlanAttemptResult::kSucceeded;
   }
 

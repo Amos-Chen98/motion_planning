@@ -2,6 +2,7 @@
 #include <motion_primitive_planner/planner_core.h>
 
 #include <ompl/base/ScopedState.h>
+#include <ompl/base/StateSampler.h>
 #include <ompl/base/spaces/RealVectorStateSpace.h>
 #include <ompl/geometric/SimpleSetup.h>
 #include <ompl/geometric/planners/rrt/RRTConnect.h>
@@ -12,13 +13,27 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <mutex>
+#include <numeric>
+#include <random>
 #include <stdexcept>
+#include <utility>
 
 namespace motion_primitive_planner
 {
 namespace
 {
 constexpr double kEpsilon = 1e-9;
+constexpr double kInfinity = std::numeric_limits<double>::infinity();
+//! Marks a commit point that is not one of the nominal samples.
+constexpr size_t kOffNominal = std::numeric_limits<size_t>::max();
+//! Resolution relaxation used by the sampling-based search and its shortcut,
+//! whose output is always re-validated at the configured resolution.
+constexpr double kSearchResolutionFactor = 4.0;
+//! Fraction of RRT samples snapped onto single-joint fold corners.
+constexpr double kStructuredSampleRatio = 0.65;
+//! Upper bound on the anchor pairs tried for one infeasible nominal interval.
+constexpr size_t kMaxAnchorCandidates = 3;
 
 template <typename Waypoint>
 size_t upperWaypointIndex(const std::vector<Waypoint>& waypoints, double time)
@@ -33,6 +48,115 @@ size_t upperWaypointIndex(const std::vector<Waypoint>& waypoints, double time)
 double interpolateYaw(double start, double goal, double ratio)
 {
   return start + ratio * shortestYawDelta(start, goal);
+}
+
+bool expired(const std::chrono::steady_clock::time_point& deadline)
+{
+  return std::chrono::steady_clock::now() >= deadline;
+}
+
+std::chrono::steady_clock::duration toDuration(double seconds)
+{
+  return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(seconds));
+}
+
+//! Normalized distances of the chain vertices along the chain, used both for
+//! root-yaw interpolation and for time allocation.
+std::vector<double> chainRatios(const std::vector<Eigen::VectorXd>& chain)
+{
+  std::vector<double> ratios(chain.size(), 0.0);
+  double total = 0.0;
+  for (size_t index = 1; index < chain.size(); ++index)
+  {
+    total += (chain[index] - chain[index - 1]).norm();
+    ratios[index] = total;
+  }
+  for (size_t index = 1; index < chain.size(); ++index)
+  {
+    ratios[index] = total > kEpsilon ? ratios[index] / total :
+                                       static_cast<double>(index) / (chain.size() - 1);
+  }
+  return ratios;
+}
+
+// DRAGON's infeasible joint-space regions are thin shells around the shapes whose
+// rotors become coplanar, and the shortest escape from them is almost always a
+// single-joint fold.  Biasing a large fraction of the samples onto the corners
+// spanned by the bridge endpoints and the joint-limit folds turns RRT-Connect
+// into an efficient search over exactly those staircase detours.
+class FoldBiasedSampler : public ompl::base::StateSampler
+{
+public:
+  FoldBiasedSampler(const ompl::base::StateSpace* space,
+                    const std::vector<std::vector<double>>& anchors,
+                    unsigned int seed)
+    : ompl::base::StateSampler(space)
+    , bounds_(space->as<ompl::base::RealVectorStateSpace>()->getBounds())
+    , anchors_(anchors)
+    , generator_(seed)
+  {
+  }
+
+  void sampleUniform(ompl::base::State* state) override
+  {
+    double* values = state->as<ompl::base::RealVectorStateSpace::StateType>()->values;
+    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    const bool structured = unit(generator_) < kStructuredSampleRatio;
+    for (size_t index = 0; index < anchors_.size(); ++index)
+    {
+      double value = bounds_.low[index] +
+                     unit(generator_) * (bounds_.high[index] - bounds_.low[index]);
+      if (structured && !anchors_[index].empty())
+      {
+        std::uniform_int_distribution<size_t> pick(0, anchors_[index].size() - 1);
+        value = anchors_[index][pick(generator_)];
+      }
+      values[index] = clamp(index, value);
+    }
+  }
+
+  void sampleUniformNear(ompl::base::State* state, const ompl::base::State* near,
+                         double distance) override
+  {
+    const double* center = near->as<ompl::base::RealVectorStateSpace::StateType>()->values;
+    double* values = state->as<ompl::base::RealVectorStateSpace::StateType>()->values;
+    std::uniform_real_distribution<double> offset(-distance, distance);
+    for (size_t index = 0; index < anchors_.size(); ++index)
+    {
+      values[index] = clamp(index, center[index] + offset(generator_));
+    }
+  }
+
+  void sampleGaussian(ompl::base::State* state, const ompl::base::State* mean,
+                      double std_deviation) override
+  {
+    const double* center = mean->as<ompl::base::RealVectorStateSpace::StateType>()->values;
+    double* values = state->as<ompl::base::RealVectorStateSpace::StateType>()->values;
+    std::normal_distribution<double> normal(0.0, std_deviation);
+    for (size_t index = 0; index < anchors_.size(); ++index)
+    {
+      values[index] = clamp(index, center[index] + normal(generator_));
+    }
+  }
+
+private:
+  double clamp(size_t index, double value) const
+  {
+    return std::max(bounds_.low[index], std::min(bounds_.high[index], value));
+  }
+
+  ompl::base::RealVectorBounds bounds_;
+  std::vector<std::vector<double>> anchors_;
+  std::mt19937 generator_;
+};
+
+void seedOmplOnce(unsigned int seed)
+{
+  // OMPL refuses to reseed once its global generator has been used, and every
+  // additional attempt logs an error.  Seed it exactly once per process.
+  static std::once_flag flag;
+  std::call_once(flag, [seed]() { ompl::RNG::setSeed(seed); });
 }
 }  // namespace
 
@@ -124,19 +248,45 @@ JointTrajectoryPlanner::JointTrajectoryPlanner(
   : config_(config), stability_evaluator_(stability_evaluator), nominal_predictor_(config.follower)
 {
   if (!stability_evaluator_ || config_.reference_dt <= 0.0 ||
-      config_.planning_timeout <= 0.0 || config_.validity_resolution <= 0.0 ||
+      config_.planning_timeout <= 0.0 || config_.bridge_timeout <= 0.0 ||
+      config_.validity_resolution <= 0.0 || config_.anchor_backoff_time < 0.0 ||
       config_.max_joint_velocity <= 0.0 || config_.max_joint_command_step <= 0.0 ||
       config_.follower.command_hz <= 0.0)
   {
     throw std::invalid_argument("Invalid joint trajectory planner configuration");
   }
-  ompl::RNG::setSeed(config_.random_seed);
+  seedOmplOnce(config_.random_seed);
+
+  const int joint_count = stability_evaluator_->jointCount();
+  const std::vector<double>& lower = stability_evaluator_->robotModel()->getLinkJointLowerLimits();
+  const std::vector<double>& upper = stability_evaluator_->robotModel()->getLinkJointUpperLimits();
+  fold_magnitude_ = Eigen::VectorXd::Zero(joint_count);
+  for (int index = 0; index < joint_count; ++index)
+  {
+    const size_t limit_index = static_cast<size_t>(index);
+    const double reach = limit_index < lower.size() && limit_index < upper.size() ?
+                             std::min(std::abs(lower[limit_index]), std::abs(upper[limit_index])) :
+                             M_PI_2;
+    fold_magnitude_(index) = std::min(reach, M_PI_2);
+  }
+  try
+  {
+    const DragonModelInfo model_info(stability_evaluator_->robotModel());
+    pitch_joint_indices_ = model_info.pitchJointIndices();
+    yaw_joint_indices_ = model_info.yawJointIndices();
+  }
+  catch (const std::exception&)
+  {
+    // Without the DRAGON pitch/yaw split the planner falls back to plain joint
+    // ordering; every detour is still validated against the same constraints.
+  }
 }
 
 JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajectory,
                                              const NominalJointContext& context,
                                              const Eigen::VectorXd& start_joints,
-                                             double start_yaw)
+                                             double start_yaw,
+                                             double time_budget)
 {
   JointPlanResult result;
   if (root_trajectory.getPieceNum() <= 0 || start_joints.size() != stability_evaluator_->jointCount() ||
@@ -146,56 +296,206 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
     return result;
   }
 
+  const double budget = time_budget > 0.0 ? std::min(time_budget, config_.planning_timeout) :
+                                            config_.planning_timeout;
+  deadline_ = Clock::now() + toDuration(budget);
+  const Clock::time_point deadline = deadline_;
+
   multilink_copilot::StabilityMetrics start_metrics;
+  Eigen::VectorXd origin = start_joints;
+  bool repaired_start = false;
   if (!configurationIsSafe(start_joints, start_yaw + M_PI, &start_metrics))
   {
-    result.detail = "start joint configuration is not flight-feasible";
-    return result;
+    // Never strand the robot: recover onto the closest stable fold instead of
+    // refusing to produce any command for an already-infeasible measurement.
+    bool projected = false;
+    origin = projectedTerminal(start_joints, start_joints, start_joints, start_yaw + M_PI, projected);
+    if (!projected || !configurationIsSafe(origin, start_yaw + M_PI, &start_metrics))
+    {
+      result.detail = "start joint configuration is not flight-feasible";
+      return result;
+    }
+    repaired_start = true;
   }
 
-  const std::vector<NominalSample> nominal = buildNominalSamples(root_trajectory, context, start_joints, start_yaw);
-  if (nominal.empty())
+  const std::vector<NominalSample> nominal =
+      buildNominalSamples(root_trajectory, context, start_joints, start_yaw);
+  if (nominal.size() < 2)
   {
     result.detail = "failed to build nominal follow-the-leader joint samples";
     return result;
   }
 
-  const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                            std::chrono::duration<double>(config_.planning_timeout));
   result.joint_waypoints.push_back({0.0, start_joints});
   result.minimum_fc_rp = start_metrics.fc_rp_min;
-  double last_anchor_yaw = start_yaw;
 
-  for (size_t index = 1; index < nominal.size(); ++index)
+  struct CommitPoint
   {
-    const bool final_sample = index + 1 == nominal.size();
-    if (!nominal[index].safe && !final_sample)
+    size_t nominal_index = kOffNominal;
+    size_t waypoint_count = 0;
+    double minimum_fc_rp = kInfinity;
+    double yaw = 0.0;
+  };
+  std::vector<CommitPoint> tracked;
+  if (repaired_start)
+  {
+    result.joint_waypoints.push_back({0.5 * nominal[1].time, origin});
+    result.detail = "recovered from an infeasible start configuration";
+  }
+  tracked.push_back({repaired_start ? kOffNominal : 0u, result.joint_waypoints.size(),
+                     result.minimum_fc_rp, start_yaw});
+
+  // A rewind must be able to both shrink and re-grow the committed tail, so it
+  // always replays a snapshot instead of resizing the live vector in place.
+  std::vector<TimedJointWaypoint> committed = result.joint_waypoints;
+  const auto rewind = [&result, &tracked, &committed](size_t position) {
+    const size_t count = std::min(tracked[position].waypoint_count, committed.size());
+    result.joint_waypoints.assign(committed.begin(), committed.begin() + count);
+    result.minimum_fc_rp = tracked[position].minimum_fc_rp;
+  };
+  // Ordered exit anchors: the sample bordering the infeasible interval first, then
+  // progressively earlier and better-conditioned samples of the same safe run.
+  const auto exitCandidates = [&nominal, &tracked, this]() {
+    std::vector<size_t> positions{tracked.size() - 1};
+    const size_t window =
+        std::max<size_t>(1, static_cast<size_t>(config_.anchor_backoff_time / config_.reference_dt));
+    const size_t lowest = tracked.size() - 1 >= window ? tracked.size() - 1 - window : 0;
+    size_t best = tracked.size() - 1;
+    double best_margin = -kInfinity;
+    for (size_t position = lowest; position < tracked.size(); ++position)
+    {
+      const size_t index = tracked[position].nominal_index;
+      const double margin = index == kOffNominal ? -kInfinity : nominal[index].margin;
+      if (margin > best_margin)
+      {
+        best_margin = margin;
+        best = position;
+      }
+    }
+    if (best != positions.front())
+    {
+      positions.push_back(best);
+    }
+    if (lowest != positions.front() && lowest != best && positions.size() < kMaxAnchorCandidates)
+    {
+      positions.push_back(lowest);
+    }
+    return positions;
+  };
+
+  const std::vector<SafeRun> runs = safeRuns(nominal);
+  for (const SafeRun& run : runs)
+  {
+    const size_t committed_index = tracked.back().nominal_index;
+    if (committed_index != kOffNominal && run.last <= committed_index)
     {
       continue;
     }
 
-    Eigen::VectorXd target = nominal[index].joints;
-    if (!nominal[index].safe)
+    size_t entry = run.first;
+    if (committed_index != run.first)
     {
-      bool projected = false;
-      target = projectedTerminal(target, result.joint_waypoints.back().positions, start_joints, context,
-                                 nominal[index].yaw + M_PI, projected);
-      if (!projected)
+      const std::vector<size_t> entries = anchorCandidates(nominal, run.first, run.last);
+      bool entered = false;
+      for (const size_t exit_position : exitCandidates())
       {
-        result.detail = "no stable terminal projection for nominal joint target";
-        return result;
+        const CommitPoint exit = tracked[exit_position];
+        for (const size_t candidate : entries)
+        {
+          if (expired(deadline))
+          {
+            break;
+          }
+          if (exit.nominal_index != kOffNominal && candidate <= exit.nominal_index)
+          {
+            continue;
+          }
+          rewind(exit_position);
+          if (appendBridge(result.joint_waypoints.back(), exit.yaw + M_PI,
+                           nominal[candidate].joints, nominal[candidate].time,
+                           nominal[candidate].yaw + M_PI, deadline, result.joint_waypoints,
+                           result.minimum_fc_rp, result.bridge_count))
+          {
+            entry = candidate;
+            entered = true;
+            break;
+          }
+        }
+        if (entered)
+        {
+          break;
+        }
       }
+      if (!entered)
+      {
+        // Hold the last validated shape through this run; the root trajectory is
+        // still executed and the next replan starts from a feasible state.
+        rewind(tracked.size() - 1);
+        ++result.hold_count;
+        continue;
+      }
+      committed = result.joint_waypoints;
+      tracked.clear();
+      tracked.push_back({entry, result.joint_waypoints.size(), result.minimum_fc_rp,
+                         nominal[entry].yaw});
     }
 
-    const TimedJointWaypoint goal{nominal[index].time, target};
-    if (!appendConnection(result.joint_waypoints.back(), goal, last_anchor_yaw, nominal[index].yaw,
-                          deadline, result.joint_waypoints, result.minimum_fc_rp))
+    for (size_t index = entry + 1; index <= run.last; ++index)
     {
-      result.detail = "RRT-Connect failed to bridge an unstable nominal joint interval";
-      return result;
+      // Both endpoints are already validated samples, so only the edge interior
+      // still has to be swept.
+      double edge_minimum = nominal[index].fc_rp_min;
+      if (!edgeInteriorIsSafe(result.joint_waypoints.back().positions, nominal[index].joints,
+                              tracked.back().yaw + M_PI, nominal[index].yaw + M_PI,
+                              config_.validity_resolution, edge_minimum))
+      {
+        continue;
+      }
+      result.joint_waypoints.push_back({nominal[index].time, nominal[index].joints});
+      result.minimum_fc_rp = std::min(result.minimum_fc_rp, edge_minimum);
+      tracked.push_back({index, result.joint_waypoints.size(), result.minimum_fc_rp,
+                         nominal[index].yaw});
     }
-    last_anchor_yaw = nominal[index].yaw;
+    committed = result.joint_waypoints;
+  }
+
+  // An infeasible terminal sample never belongs to a safe run, so it is still
+  // unreached at this point.
+  const NominalSample& terminal = nominal.back();
+  if (!terminal.safe)
+  {
+    // The nominal terminal shape is infeasible; steer to the closest stable fold
+    // so that the next replanning cycle starts from a well-conditioned state.
+    bool projected = false;
+    const Eigen::VectorXd target =
+        projectedTerminal(terminal.joints, result.joint_waypoints.back().positions, start_joints,
+                          terminal.yaw + M_PI, projected);
+    bool reached = false;
+    if (projected)
+    {
+      for (const size_t exit_position : exitCandidates())
+      {
+        if (expired(deadline))
+        {
+          break;
+        }
+        const CommitPoint exit = tracked[exit_position];
+        rewind(exit_position);
+        if (terminal.time > result.joint_waypoints.back().time + kEpsilon &&
+            appendBridge(result.joint_waypoints.back(), exit.yaw + M_PI, target, terminal.time,
+                         terminal.yaw + M_PI, deadline, result.joint_waypoints,
+                         result.minimum_fc_rp, result.bridge_count))
+        {
+          reached = true;
+          break;
+        }
+      }
+    }
+    if (!reached)
+    {
+      rewind(tracked.size() - 1);
+      ++result.hold_count;
+    }
   }
 
   if (result.joint_waypoints.back().time + kEpsilon < root_trajectory.getTotalDuration())
@@ -254,14 +554,15 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
 }
 
 bool JointTrajectoryPlanner::planStableConnection(const Eigen::VectorXd& start,
-                                                   const Eigen::VectorXd& goal,
-                                                   double root_link_yaw,
-                                                   std::vector<Eigen::VectorXd>& path,
-                                                   double& minimum_fc_rp,
-                                                   std::string* failure_reason)
+                                                  const Eigen::VectorXd& goal,
+                                                  double root_link_yaw,
+                                                  std::vector<Eigen::VectorXd>& path,
+                                                  double& minimum_fc_rp,
+                                                  std::string* failure_reason)
 {
   path.clear();
-  minimum_fc_rp = std::numeric_limits<double>::infinity();
+  minimum_fc_rp = kInfinity;
+  deadline_ = Clock::now() + toDuration(config_.planning_timeout);
   multilink_copilot::StabilityMetrics start_metrics;
   multilink_copilot::StabilityMetrics goal_metrics;
   if (!configurationIsSafe(start, root_link_yaw, &start_metrics) ||
@@ -279,43 +580,16 @@ bool JointTrajectoryPlanner::planStableConnection(const Eigen::VectorXd& start,
     return true;
   }
 
-  const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                            std::chrono::duration<double>(config_.planning_timeout));
-  std::vector<Eigen::VectorXd> raw_path;
-  if (!searchJointDetour(start, goal, root_link_yaw, deadline, raw_path) || raw_path.size() < 2)
+  std::vector<Eigen::VectorXd> bridge;
+  double bridge_minimum = kInfinity;
+  if (!planBridge(start, goal, root_link_yaw, root_link_yaw, deadline_, bridge, bridge_minimum))
   {
-    if (failure_reason) *failure_reason = "RRT-Connect did not find a stable joint connection";
+    if (failure_reason) *failure_reason = "no stable joint connection was found";
     return false;
   }
-
-  path.push_back(raw_path.front());
-  size_t current = 0;
-  while (current + 1 < raw_path.size())
-  {
-    size_t next = raw_path.size() - 1;
-    for (; next > current + 1; --next)
-    {
-      double ignored = std::numeric_limits<double>::infinity();
-      if (directEdgeIsSafe(raw_path[current], raw_path[next], root_link_yaw, root_link_yaw, ignored))
-      {
-        break;
-      }
-    }
-    path.push_back(raw_path[next]);
-    current = next;
-  }
-  for (size_t index = 1; index < path.size(); ++index)
-  {
-    double edge_minimum = minimum_fc_rp;
-    if (!directEdgeIsSafe(path[index - 1], path[index], root_link_yaw, root_link_yaw, edge_minimum))
-    {
-      path.clear();
-      if (failure_reason) *failure_reason = "shortcut failed full-resolution stability validation";
-      return false;
-    }
-    minimum_fc_rp = std::min(minimum_fc_rp, edge_minimum);
-  }
+  path.push_back(start);
+  path.insert(path.end(), bridge.begin(), bridge.end());
+  minimum_fc_rp = std::min(minimum_fc_rp, bridge_minimum);
   return true;
 }
 
@@ -331,81 +605,351 @@ std::vector<JointTrajectoryPlanner::NominalSample> JointTrajectoryPlanner::build
   samples.reserve(nominal.size());
   for (const NominalJointSample& sample : nominal)
   {
-    multilink_copilot::StabilityMetrics metrics;
-    const bool safe = configurationIsSafe(sample.joints, sample.yaw + M_PI, &metrics);
-    samples.push_back({sample.time, sample.yaw, sample.joints, safe});
+    bool safe = false;
+    double fc_rp_min = 0.0;
+    const double margin = stabilityMargin(sample.joints, sample.yaw + M_PI, safe, fc_rp_min);
+    samples.push_back({sample.time, sample.yaw, sample.joints, safe, margin, fc_rp_min});
   }
   return samples;
 }
 
-bool JointTrajectoryPlanner::appendConnection(
-    const TimedJointWaypoint& start,
-    const TimedJointWaypoint& goal,
-    double start_yaw,
-    double goal_yaw,
-    const std::chrono::steady_clock::time_point& deadline,
-    std::vector<TimedJointWaypoint>& path,
-    double& minimum_fc_rp)
+std::vector<JointTrajectoryPlanner::SafeRun> JointTrajectoryPlanner::safeRuns(
+    const std::vector<NominalSample>& samples)
 {
-  double direct_minimum = minimum_fc_rp;
-  if (directEdgeIsSafe(start.positions, goal.positions, start_yaw + M_PI, goal_yaw + M_PI,
-                       direct_minimum))
+  std::vector<SafeRun> runs;
+  size_t index = 0;
+  while (index < samples.size())
   {
-    path.push_back(goal);
+    if (!samples[index].safe)
+    {
+      ++index;
+      continue;
+    }
+    const size_t first = index;
+    while (index + 1 < samples.size() && samples[index + 1].safe)
+    {
+      ++index;
+    }
+    runs.push_back({first, index});
+    ++index;
+  }
+  return runs;
+}
+
+std::vector<size_t> JointTrajectoryPlanner::anchorCandidates(
+    const std::vector<NominalSample>& samples, size_t nominal_index, size_t limit_index) const
+{
+  const size_t window =
+      std::max<size_t>(1, static_cast<size_t>(config_.anchor_backoff_time / config_.reference_dt));
+  const size_t highest = std::min(limit_index, nominal_index + window);
+  std::vector<size_t> candidates{nominal_index};
+  size_t best = nominal_index;
+  double best_margin = -kInfinity;
+  for (size_t index = nominal_index; index <= highest; ++index)
+  {
+    if (samples[index].margin > best_margin)
+    {
+      best_margin = samples[index].margin;
+      best = index;
+    }
+  }
+  if (best != nominal_index)
+  {
+    candidates.push_back(best);
+  }
+  if (highest != nominal_index && highest != best && candidates.size() < kMaxAnchorCandidates)
+  {
+    candidates.push_back(highest);
+  }
+  return candidates;
+}
+
+bool JointTrajectoryPlanner::appendBridge(TimedJointWaypoint start,
+                                          double start_root_yaw,
+                                          const Eigen::VectorXd& goal,
+                                          double goal_time,
+                                          double goal_root_yaw,
+                                          const Clock::time_point& deadline,
+                                          std::vector<TimedJointWaypoint>& path,
+                                          double& minimum_fc_rp,
+                                          int& bridge_count)
+{
+  double direct_minimum = kInfinity;
+  if (directEdgeIsSafe(start.positions, goal, start_root_yaw, goal_root_yaw, direct_minimum))
+  {
+    path.push_back({goal_time, goal});
     minimum_fc_rp = std::min(minimum_fc_rp, direct_minimum);
     return true;
   }
 
-  std::vector<Eigen::VectorXd> detour;
-  if (!searchJointDetour(start.positions, goal.positions, goal_yaw + M_PI, deadline, detour) ||
-      detour.size() < 2)
+  std::vector<Eigen::VectorXd> bridge;
+  double bridge_minimum = kInfinity;
+  if (!planBridge(start.positions, goal, start_root_yaw, goal_root_yaw, deadline, bridge,
+                  bridge_minimum))
   {
     return false;
   }
 
-  std::vector<Eigen::VectorXd> shortcut;
-  shortcut.push_back(detour.front());
-  size_t current = 0;
-  while (current + 1 < detour.size())
+  std::vector<Eigen::VectorXd> chain;
+  chain.reserve(bridge.size() + 1);
+  chain.push_back(start.positions);
+  chain.insert(chain.end(), bridge.begin(), bridge.end());
+  const std::vector<double> ratios = chainRatios(chain);
+  for (size_t index = 1; index < chain.size(); ++index)
   {
-    size_t next = detour.size() - 1;
-    for (; next > current + 1; --next)
+    path.push_back({start.time + ratios[index] * (goal_time - start.time), chain[index]});
+  }
+  path.back().time = goal_time;
+  minimum_fc_rp = std::min(minimum_fc_rp, bridge_minimum);
+  ++bridge_count;
+  return true;
+}
+
+bool JointTrajectoryPlanner::planBridge(const Eigen::VectorXd& start,
+                                        const Eigen::VectorXd& goal,
+                                        double start_yaw,
+                                        double goal_yaw,
+                                        const Clock::time_point& deadline,
+                                        std::vector<Eigen::VectorXd>& path,
+                                        double& minimum_fc_rp)
+{
+  path.clear();
+  // The bridge budget is bounded both by its own share and by the plan deadline
+  // that every validation loop below also honours.
+  const Clock::time_point bridge_deadline =
+      std::min(deadline, Clock::now() + toDuration(config_.bridge_timeout));
+  const Clock::time_point outer_deadline = deadline_;
+  deadline_ = std::min(outer_deadline, bridge_deadline);
+  struct DeadlineGuard
+  {
+    ~DeadlineGuard() { *slot = value; }
+    Clock::time_point* slot;
+    Clock::time_point value;
+  } guard{&deadline_, outer_deadline};
+
+  // Structured detours first: a chain of single-joint folds crosses the thin
+  // infeasible shells that a straight joint-space interpolation cannot.
+  for (const std::vector<Eigen::VectorXd>& chain : bridgeChains(start, goal))
+  {
+    if (budgetExpired())
     {
-      double ignored_minimum = std::numeric_limits<double>::infinity();
-      if (directEdgeIsSafe(detour[current], detour[next], goal_yaw + M_PI, goal_yaw + M_PI,
-                           ignored_minimum))
-      {
-        break;
-      }
+      break;
     }
-    shortcut.push_back(detour[next]);
-    current = next;
+    double chain_minimum = kInfinity;
+    if (!chainIsSafe(chain, start_yaw, goal_yaw, chain_minimum))
+    {
+      continue;
+    }
+    path.assign(chain.begin() + 1, chain.end());
+    minimum_fc_rp = std::min(minimum_fc_rp, chain_minimum);
+    return true;
   }
 
-  std::vector<double> cumulative(shortcut.size(), 0.0);
-  for (size_t index = 1; index < shortcut.size(); ++index)
+  std::vector<Eigen::VectorXd> detour;
+  if (!searchJointDetour(start, goal, goal_yaw, deadline_, detour) || detour.size() < 2)
   {
-    cumulative[index] = cumulative[index - 1] + (shortcut[index] - shortcut[index - 1]).norm();
+    return false;
   }
-  const double total = cumulative.back();
-  for (size_t index = 1; index < shortcut.size(); ++index)
+  const std::vector<Eigen::VectorXd> shortcut = shortcutChain(detour, goal_yaw);
+  double shortcut_minimum = kInfinity;
+  if (shortcut.size() < 2 || !chainIsSafe(shortcut, start_yaw, goal_yaw, shortcut_minimum))
   {
-    const double ratio = total > kEpsilon ? cumulative[index] / total :
-                                           static_cast<double>(index) / (shortcut.size() - 1);
-    const double waypoint_yaw = interpolateYaw(start_yaw, goal_yaw, ratio);
-    double edge_minimum = minimum_fc_rp;
-    if (!directEdgeIsSafe(shortcut[index - 1], shortcut[index],
-                          interpolateYaw(start_yaw, goal_yaw,
-                                         total > kEpsilon ? cumulative[index - 1] / total : 0.0) + M_PI,
-                          waypoint_yaw + M_PI, edge_minimum))
+    return false;
+  }
+  path.assign(shortcut.begin() + 1, shortcut.end());
+  minimum_fc_rp = std::min(minimum_fc_rp, shortcut_minimum);
+  return true;
+}
+
+std::vector<std::vector<Eigen::VectorXd>> JointTrajectoryPlanner::bridgeChains(
+    const Eigen::VectorXd& start, const Eigen::VectorXd& goal) const
+{
+  // Folding both endpoints out to the joint limits before re-folding moves the
+  // search away from the marginal shapes that border the infeasible interval.
+  const Eigen::VectorXd deep_start = deepFold(start, start);
+  const Eigen::VectorXd deep_goal = deepFold(goal, goal);
+  const std::vector<std::vector<int>> orders = jointOrders(start, goal);
+  // Each entry is (key configurations, how many joint orders to expand it with).
+  // Direct staircases come first because they deviate least from the nominal
+  // shape; the deep-fold detours are the expensive last resort.
+  const std::vector<std::pair<std::vector<Eigen::VectorXd>, size_t>> key_chains = {
+      {{start, goal}, orders.size()},
+      {{start, deep_start, goal}, 2},
+      {{start, deep_goal, goal}, 2},
+      {{start, deep_start, deep_goal, goal}, 2}};
+
+  std::vector<std::vector<Eigen::VectorXd>> chains;
+  for (const auto& entry : key_chains)
+  {
+    for (size_t index = 0; index < std::min(entry.second, orders.size()); ++index)
+    {
+      std::vector<Eigen::VectorXd> chain = expandChain(entry.first, orders[index]);
+      if (chain.size() > 2)
+      {
+        chains.push_back(std::move(chain));
+      }
+    }
+  }
+  return chains;
+}
+
+std::vector<std::vector<int>> JointTrajectoryPlanner::jointOrders(const Eigen::VectorXd& start,
+                                                                  const Eigen::VectorXd& goal) const
+{
+  const int joint_count = static_cast<int>(start.size());
+  std::vector<int> forward(static_cast<size_t>(joint_count));
+  std::iota(forward.begin(), forward.end(), 0);
+  const Eigen::VectorXd travel = (goal - start).cwiseAbs();
+
+  std::vector<int> descending = forward;
+  std::stable_sort(descending.begin(), descending.end(),
+                   [&travel](int lhs, int rhs) { return travel(lhs) > travel(rhs); });
+  std::vector<int> ascending(descending.rbegin(), descending.rend());
+  std::vector<int> reverse(forward.rbegin(), forward.rend());
+
+  // The DRAGON yaw joints dominate the in-plane shape, so re-folding them before
+  // the pitch joints is the detour that keeps the body furthest from collapse.
+  std::vector<int> yaw_first;
+  std::vector<int> pitch_first;
+  if (!yaw_joint_indices_.empty() && !pitch_joint_indices_.empty())
+  {
+    for (const int index : descending)
+    {
+      if (std::find(yaw_joint_indices_.begin(), yaw_joint_indices_.end(), index) !=
+          yaw_joint_indices_.end())
+      {
+        yaw_first.push_back(index);
+      }
+    }
+    for (const int index : descending)
+    {
+      if (std::find(yaw_joint_indices_.begin(), yaw_joint_indices_.end(), index) ==
+          yaw_joint_indices_.end())
+      {
+        yaw_first.push_back(index);
+      }
+    }
+    pitch_first.assign(yaw_first.rbegin(), yaw_first.rend());
+  }
+
+  std::vector<std::vector<int>> orders{descending};
+  if (!yaw_first.empty()) orders.push_back(yaw_first);
+  orders.push_back(ascending);
+  orders.push_back(forward);
+  orders.push_back(reverse);
+  if (!pitch_first.empty()) orders.push_back(pitch_first);
+  return orders;
+}
+
+std::vector<Eigen::VectorXd> JointTrajectoryPlanner::expandChain(
+    const std::vector<Eigen::VectorXd>& keys, const std::vector<int>& order)
+{
+  std::vector<Eigen::VectorXd> chain;
+  if (keys.empty())
+  {
+    return chain;
+  }
+  chain.push_back(keys.front());
+  for (size_t key = 1; key < keys.size(); ++key)
+  {
+    Eigen::VectorXd current = chain.back();
+    for (const int joint : order)
+    {
+      if (joint < 0 || joint >= current.size() ||
+          std::abs(keys[key](joint) - current(joint)) <= kEpsilon)
+      {
+        continue;
+      }
+      current(joint) = keys[key](joint);
+      chain.push_back(current);
+    }
+    if ((chain.back() - keys[key]).cwiseAbs().maxCoeff() > kEpsilon)
+    {
+      chain.push_back(keys[key]);
+    }
+  }
+  return chain;
+}
+
+Eigen::VectorXd JointTrajectoryPlanner::deepFold(const Eigen::VectorXd& reference,
+                                                 const Eigen::VectorXd& sign_source) const
+{
+  Eigen::VectorXd folded = reference;
+  for (const int joint : yaw_joint_indices_)
+  {
+    if (joint < 0 || joint >= folded.size() || joint >= fold_magnitude_.size())
+    {
+      continue;
+    }
+    folded(joint) = sign_source(joint) >= 0.0 ? fold_magnitude_(joint) : -fold_magnitude_(joint);
+  }
+  return folded;
+}
+
+bool JointTrajectoryPlanner::chainIsSafe(const std::vector<Eigen::VectorXd>& chain,
+                                         double start_yaw, double goal_yaw,
+                                         double& minimum_fc_rp)
+{
+  if (chain.size() < 2)
+  {
+    return false;
+  }
+  const std::vector<double> ratios = chainRatios(chain);
+  // Vertices first: one evaluation each rejects most hopeless chains before the
+  // far more expensive dense edge validation runs.
+  for (size_t index = 0; index < chain.size(); ++index)
+  {
+    multilink_copilot::StabilityMetrics metrics;
+    if (budgetExpired() ||
+        !configurationIsSafe(chain[index], interpolateYaw(start_yaw, goal_yaw, ratios[index]),
+                             &metrics))
+    {
+      return false;
+    }
+    minimum_fc_rp = std::min(minimum_fc_rp, metrics.fc_rp_min);
+  }
+  for (size_t index = 1; index < chain.size(); ++index)
+  {
+    double edge_minimum = kInfinity;
+    if (!edgeInteriorIsSafe(chain[index - 1], chain[index],
+                            interpolateYaw(start_yaw, goal_yaw, ratios[index - 1]),
+                            interpolateYaw(start_yaw, goal_yaw, ratios[index]),
+                            config_.validity_resolution, edge_minimum))
     {
       return false;
     }
     minimum_fc_rp = std::min(minimum_fc_rp, edge_minimum);
-    path.push_back({start.time + ratio * (goal.time - start.time), shortcut[index]});
   }
-  path.back().time = goal.time;
   return true;
+}
+
+std::vector<Eigen::VectorXd> JointTrajectoryPlanner::shortcutChain(
+    const std::vector<Eigen::VectorXd>& chain, double root_yaw)
+{
+  std::vector<Eigen::VectorXd> shortcut;
+  if (chain.empty())
+  {
+    return shortcut;
+  }
+  const double coarse_resolution = kSearchResolutionFactor * config_.validity_resolution;
+  shortcut.push_back(chain.front());
+  size_t current = 0;
+  while (current + 1 < chain.size())
+  {
+    size_t next = chain.size() - 1;
+    for (; next > current + 1 && !budgetExpired(); --next)
+    {
+      double ignored = kInfinity;
+      if (edgeInteriorIsSafe(chain[current], chain[next], root_yaw, root_yaw, coarse_resolution,
+                             ignored))
+      {
+        break;
+      }
+    }
+    shortcut.push_back(chain[next]);
+    current = next;
+  }
+  return shortcut;
 }
 
 bool JointTrajectoryPlanner::directEdgeIsSafe(const Eigen::VectorXd& start,
@@ -414,14 +958,37 @@ bool JointTrajectoryPlanner::directEdgeIsSafe(const Eigen::VectorXd& start,
                                               double goal_yaw,
                                               double& minimum_fc_rp)
 {
-  if (start.size() != goal.size())
+  multilink_copilot::StabilityMetrics start_metrics;
+  multilink_copilot::StabilityMetrics goal_metrics;
+  if (!configurationIsSafe(start, start_yaw, &start_metrics) ||
+      !configurationIsSafe(goal, goal_yaw, &goal_metrics))
+  {
+    return false;
+  }
+  minimum_fc_rp = std::min(minimum_fc_rp, std::min(start_metrics.fc_rp_min, goal_metrics.fc_rp_min));
+  return edgeInteriorIsSafe(start, goal, start_yaw, goal_yaw, config_.validity_resolution,
+                            minimum_fc_rp);
+}
+
+bool JointTrajectoryPlanner::edgeInteriorIsSafe(const Eigen::VectorXd& start,
+                                                const Eigen::VectorXd& goal,
+                                                double start_yaw,
+                                                double goal_yaw,
+                                                double resolution,
+                                                double& minimum_fc_rp)
+{
+  if (start.size() != goal.size() || resolution <= 0.0)
   {
     return false;
   }
   const double maximum_delta = start.size() > 0 ? (goal - start).cwiseAbs().maxCoeff() : 0.0;
-  const int subdivisions = std::max(1, static_cast<int>(std::ceil(maximum_delta / config_.validity_resolution)));
-  for (int index = 0; index <= subdivisions; ++index)
+  const int subdivisions = std::max(1, static_cast<int>(std::ceil(maximum_delta / resolution)));
+  for (int index = 1; index < subdivisions; ++index)
   {
+    if (budgetExpired())
+    {
+      return false;
+    }
     const double ratio = static_cast<double>(index) / subdivisions;
     const Eigen::VectorXd joints = start + ratio * (goal - start);
     multilink_copilot::StabilityMetrics metrics;
@@ -434,15 +1001,20 @@ bool JointTrajectoryPlanner::directEdgeIsSafe(const Eigen::VectorXd& start,
   return true;
 }
 
+bool JointTrajectoryPlanner::budgetExpired() const
+{
+  return Clock::now() >= deadline_;
+}
+
 bool JointTrajectoryPlanner::searchJointDetour(
     const Eigen::VectorXd& start,
     const Eigen::VectorXd& goal,
     double yaw,
-    const std::chrono::steady_clock::time_point& deadline,
+    const Clock::time_point& deadline,
     std::vector<Eigen::VectorXd>& path)
 {
   path.clear();
-  const double remaining = std::chrono::duration<double>(deadline - std::chrono::steady_clock::now()).count();
+  const double remaining = std::chrono::duration<double>(deadline - Clock::now()).count();
   if (remaining <= 0.0)
   {
     return false;
@@ -459,6 +1031,18 @@ bool JointTrajectoryPlanner::searchJointDetour(
   }
   space->setBounds(bounds);
 
+  std::vector<std::vector<double>> anchors(static_cast<size_t>(start.size()));
+  for (int index = 0; index < start.size(); ++index)
+  {
+    anchors[static_cast<size_t>(index)] = {start(index), goal(index), fold_magnitude_(index),
+                                           -fold_magnitude_(index), 0.0};
+  }
+  const unsigned int seed = config_.random_seed;
+  space->setStateSamplerAllocator(
+      [anchors, seed](const ompl::base::StateSpace* state_space) -> ompl::base::StateSamplerPtr {
+        return std::make_shared<FoldBiasedSampler>(state_space, anchors, seed);
+      });
+
   ompl::geometric::SimpleSetup setup(space);
   setup.setStateValidityChecker([this, yaw](const ompl::base::State* state) {
     const auto* vector_state = state->as<ompl::base::RealVectorStateSpace::StateType>();
@@ -469,8 +1053,11 @@ bool JointTrajectoryPlanner::searchJointDetour(
     }
     return configurationIsSafe(joints, yaw);
   });
+  // The returned path is re-validated at the full resolution, so the search itself
+  // can afford the coarser motion check that keeps it inside the online budget.
   const double extent = std::max(space->getMaximumExtent(), config_.validity_resolution);
-  setup.getSpaceInformation()->setStateValidityCheckingResolution(config_.validity_resolution / extent);
+  setup.getSpaceInformation()->setStateValidityCheckingResolution(
+      std::min(0.5, kSearchResolutionFactor * config_.validity_resolution / extent));
 
   ompl::base::ScopedState<> start_state(space);
   ompl::base::ScopedState<> goal_state(space);
@@ -481,9 +1068,11 @@ bool JointTrajectoryPlanner::searchJointDetour(
   }
   setup.setStartAndGoalStates(start_state, goal_state);
   auto planner = std::make_shared<ompl::geometric::RRTConnect>(setup.getSpaceInformation());
-  planner->setRange(std::max(0.1, 4.0 * config_.validity_resolution));
+  // Long extensions let one CONNECT step traverse a whole single-joint fold.
+  planner->setRange(std::max(M_PI_2, 0.25 * space->getMaximumExtent()));
   setup.setPlanner(planner);
-  const ompl::base::PlannerStatus status = setup.solve(remaining);
+  const ompl::base::PlannerStatus status =
+      setup.solve(std::chrono::duration<double>(deadline - Clock::now()).count());
   if (status != ompl::base::PlannerStatus::EXACT_SOLUTION)
   {
     return false;
@@ -517,21 +1106,58 @@ bool JointTrajectoryPlanner::configurationIsSafe(const Eigen::VectorXd& joints, 
   return valid;
 }
 
+double JointTrajectoryPlanner::stabilityMargin(const Eigen::VectorXd& joints, double yaw,
+                                               bool& safe, double& fc_rp_min)
+{
+  stability_evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(yaw));
+  multilink_copilot::StabilityMetrics metrics;
+  if (!stability_evaluator_->evaluate(joints, metrics))
+  {
+    safe = false;
+    fc_rp_min = 0.0;
+    return -kInfinity;
+  }
+  safe = metrics.safe;
+  fc_rp_min = metrics.fc_rp_min;
+  const multilink_copilot::StabilityConfig& limits = stability_evaluator_->config();
+  const auto normalized = [](double slack, double scale) {
+    return slack / std::max(std::abs(scale), 1e-6);
+  };
+  double margin = normalized(metrics.fc_rp_min - limits.fc_rp_min_threshold,
+                             limits.fc_rp_min_threshold);
+  if (limits.check_fc_t)
+  {
+    margin = std::min(margin, normalized(metrics.fc_t_min - limits.fc_t_min_threshold,
+                                         limits.fc_t_min_threshold));
+  }
+  margin = std::min(margin, normalized(metrics.static_thrust_min - limits.static_thrust_min,
+                                       limits.static_thrust_min));
+  margin = std::min(margin, normalized(limits.static_thrust_max - metrics.static_thrust_max,
+                                       limits.static_thrust_max));
+  margin = std::min(margin, normalized(metrics.overlap_clearance - limits.overlap_min_clearance,
+                                       limits.overlap_min_clearance));
+  if (limits.max_baselink_tilt > 0.0)
+  {
+    margin = std::min(margin, normalized(limits.max_baselink_tilt - metrics.baselink_tilt,
+                                         limits.max_baselink_tilt));
+  }
+  return std::isfinite(margin) ? margin : -kInfinity;
+}
+
 Eigen::VectorXd JointTrajectoryPlanner::projectedTerminal(const Eigen::VectorXd& desired,
                                                           const Eigen::VectorXd& current,
                                                           const Eigen::VectorXd& start,
-                                                          const NominalJointContext& context,
                                                           double yaw,
                                                           bool& success)
 {
   Eigen::VectorXd positive_fold = Eigen::VectorXd::Zero(desired.size());
   Eigen::VectorXd negative_fold = Eigen::VectorXd::Zero(desired.size());
-  for (const int yaw_index : context.yaw_joint_indices)
+  for (const int yaw_index : yaw_joint_indices_)
   {
-    if (yaw_index >= 0 && yaw_index < desired.size())
+    if (yaw_index >= 0 && yaw_index < desired.size() && yaw_index < fold_magnitude_.size())
     {
-      positive_fold(yaw_index) = M_PI_2;
-      negative_fold(yaw_index) = -M_PI_2;
+      positive_fold(yaw_index) = fold_magnitude_(yaw_index);
+      negative_fold(yaw_index) = -fold_magnitude_(yaw_index);
     }
   }
   stability_evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(yaw));

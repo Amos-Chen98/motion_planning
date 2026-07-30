@@ -1,32 +1,67 @@
 # Motion Primitive Planner Algorithm Design
 
-## Overview
+## Architecture
 
-Both nodes use the same `PlanningEnvironment` for accumulated-map maintenance, goal clamping, route search, horizon truncation, root primitive generation, and immutable binary occupancy snapshots. The searched route determines the local target and, when nonzero local-target velocity is enabled, its terminal-velocity direction; intermediate route points do not shape the root primitives. Both nodes also share DRAGON joint metadata, bounded trajectory history, nominal follow-the-leader prediction, stability configuration, candidate diagnostics, and one instantaneous whole-body collision checker. The root node retains GCOPTER trajectory handover and publication, while the whole-body node retains joint-space planning, activation/hold state, publisher ownership checks, and direct full-state output.
+The package provides two online planners built on the same root-motion and DRAGON feasibility model:
 
-## Shared Collision Model
+| Aspect | Root-link planner | Whole-body planner |
+| --- | --- | --- |
+| Output | GCOPTER polynomial trajectory executed by `traj_server` | Synchronized root and joint commands published as `FullStateTarget` |
+| Joint treatment | Predicts nominal follow-the-leader motion for candidate validation | Plans and executes a continuous joint trajectory |
+| Swept collision check | Uses the nominal predicted body shape | Uses the final time-scaled root and joint trajectories |
+| Planning failure | Keeps the active root trajectory | Enters a validated hover hold or keeps the current safe plan |
 
-For each instantaneous DRAGON configuration, the shared checker reconstructs the four link centerlines, samples each at intervals no greater than `VoxelWidth / 2`, and returns `true` on the first sample inside the binary obstacle map dilated by `DilateRadius`. The default `VoxelWidth=0.10 m` and `DilateRadius=0.20 m` approximate each link as a radius-`0.20 m` voxelized capsule. Both planners adaptively subdivide time until the conservative maximum whole-body displacement between collision checks is no greater than `VoxelWidth / 2`; the root-link planner checks interpolated nominal configurations, while the whole-body planner checks its final joint trajectory.
+Both modes share map handling, target clamping, route search, local-horizon selection, MINCO primitive generation, DRAGON model metadata, trajectory history, candidate diagnostics, and the instantaneous whole-body collision checker.
+
+## Shared Planning Pipeline
+
+1. The planner updates an accumulated or replaceable voxel map and obtains an immutable occupancy snapshot for each candidate evaluation.
+2. The global target is clamped to the valid map region. A route search produces a collision-free root route, which is truncated at `PlanningHorizon` to obtain the local target.
+3. `PrimitiveGenerator` creates a direct MINCO primitive and configurable midpoint-offset alternatives. The route's intermediate search points select the local target but do not constrain the polynomial.
+4. Candidates are checked for whole-body swept collision and DRAGON flight feasibility.
+5. The best feasible candidate is activated or published; if none is feasible, the mode-specific failure policy is applied.
+
+### Root Primitive Boundary Conditions
+
+Every primitive preserves the planner-provided root position, velocity, and acceleration at handover. The local target always has zero acceleration. `ZeroLocalTargetVel` selects between a zero terminal velocity and a tangent-aligned cruise velocity for non-terminal local targets; a global terminal target has zero velocity. Candidate durations are enlarged when necessary to satisfy the configured root-velocity limit.
+
+### Collision and Flight-Feasibility Checks
+
+For an instantaneous DRAGON configuration, the shared collision checker reconstructs every link centerline and samples it against the dilated binary occupancy map at a spacing derived from the voxel resolution. Swept checks adaptively subdivide each time interval from a conservative bound on root translation, body yaw, and joint motion. The root-link planner evaluates the nominal follow-the-leader body, while the whole-body planner evaluates the final planned body.
+
+Flight-feasibility evaluation covers joint limits, static-thrust bounds, roll/pitch feasible-control margin (`fc_rp_min`), rotor clearance, and baselink tilt. In root-link mode, `PredictionDt` controls nominal stability evaluation only; collision sampling is governed independently by command intervals and the adaptive displacement bound.
 
 ## Root-Link Planner
 
-The planner searches toward the global goal and selects a local target by truncating the searched route at the planning horizon. It then generates the nominal root primitive as one unconstrained-interior MINCO segment directly between the current PVA state and the local-target PVA state, without using the route's intermediate obstacle-avoidance points. By default, every local target has zero desired velocity. Setting `ZeroLocalTargetVel=false` restores the previous behavior in which a non-terminal local target uses `PrimitiveCruiseVelocity` along the final local-route tangent; the global target always has zero desired velocity. Nonzero endpoint velocity or acceleration can make this continuous optimum deviate temporarily from the geometric chord. Alternative candidates use one offset midpoint in the chord-normal plane; the default set contains the nominal trajectory and two four-direction offset rings.
+The root-link planner samples the active polynomial's position, velocity, and acceleration at handover when available; otherwise it uses the latest odometry position with zero initial derivatives. It predicts the nominal joint sequence from root history, rejects candidates with collision or flight-feasibility violations, and ranks feasible candidates by root-path length and then jerk.
 
-Each candidate predicts the full body with the shared follow-the-leader predictor, checks swept-body collisions and the same joint-limit, feasible-control, thrust, rotor-clearance, and baselink-tilt constraints used by the whole-body planner, then selects the shortest and smoothest feasible trajectory. If no candidate is feasible, the active trajectory is retained and planning is retried on the next input update.
+When `AllowCopilotStabilityProjectionFallback` is enabled and no nominally feasible candidate exists, a candidate whose only violation is insufficient `fc_rp_min` may be delegated to downstream Copilot projection. Fallback candidates are ranked by path length, nominal joint motion, stability margin, and jerk. The projected body can differ from the collision-checked nominal body, so this fallback is appropriate only when the environment is sufficiently open or the projected shape is checked elsewhere.
 
-`PredictionDt` controls only nominal stability evaluation; collision sampling is independently determined from command-rate nominal intervals and the adaptive whole-body displacement bound.
-
-`AllowCopilotStabilityProjectionFallback` is disabled by default. When enabled, a candidate rejected only for insufficient nominal `fc_rp_min` may be projected to a stable configuration by Copilot. Because the projected body can differ from the collision-checked shape, use this option only in free space or when projected-shape collision checking is provided separately.
-
-Both launch files first load `config/common_motion_primitive_planner.yaml`, then their mode-specific configuration. Shared parameter names and ROS topics remain identical between the two nodes. The `replan_trigger_ratio` launch argument maps to `ReplanTriggerRatio` and defaults to `0.5`; the removed `replan_hz` and `ReplanHz` interfaces are not accepted. The `zero_local_target_vel` launch argument maps to the shared `ZeroLocalTargetVel` private parameter and defaults to `true`; `MaxBaselinkTilt` defaults to `1.20 rad` in both modes.
+The selected polynomial is handed to `traj_server`. A failed planning attempt does not replace the active trajectory.
 
 ## Whole-Body Planner
 
-For every root primitive, the whole-body node plans and revalidates a continuous joint trajectory. It first uses nominal follow-the-leader motion, connects infeasible intervals with OMPL RRT-Connect, projects an infeasible terminal target to the nearest stable fold when necessary, and slows the root trajectory to meet joint-velocity and 40 Hz command-step limits.
+### Planning and Activation
 
-Only candidates with a fully feasible joint trajectory and collision-free swept body may execute. Candidates are ranked by minimum duration, minimum joint motion, and minimum root jerk. The node publishes root and joint commands at 40 Hz, holds the latest validated command at zero velocity after a planning failure, and keeps retrying from updated inputs until a replacement plan becomes available.
+Planning runs on a dedicated worker so expensive candidate evaluation cannot block command publication. A request predicts the root and joint state at the configured activation time by sampling the current active plan and extending its trajectory history. Concurrent requests are coalesced, and target sequence checks prevent a result for an obsolete goal from being activated.
 
-The whole-body planner exclusively owns `full_state_target`; do not run it with output from `traj_server` or `multilink_copilot`.
+For each root candidate, the planner constructs a continuous joint trajectory, time-scales the synchronized root and joint motion, and rechecks the final swept body against the occupancy snapshot. Feasible candidates are ranked by duration, joint motion, and root jerk. The selected plan remains pending until its activation time, then becomes the active command source.
+
+### Joint-Trajectory Construction and Repair
+
+The nominal follow-the-leader sequence is sampled and divided into feasible runs. If the measured start configuration is infeasible, the planner first attempts to project it to a nearby safe fold; failure to obtain a safe start rejects the candidate.
+
+**Anchor selection.** A bridge first tries the feasible samples bordering an infeasible interval, then progressively backs off to higher-margin samples within the configured window. This trades a small deviation from nominal motion for endpoints with enough feasible space for a connection.
+
+**Structured bridge.** The planner first tests direct connections, then deterministic staircase detours that change one joint at a time. It also tries routes through deep-fold configurations to move away from low-control-authority shapes during fold reversal. Every vertex and edge interior is validated against the same flight-feasibility constraints.
+
+**Sampling fallback.** If structured detours fail, OMPL RRT-Connect searches between the backed-off anchors with a fold-biased sampler. The resulting path is shortened and revalidated at full resolution before it can be used.
+
+**Graceful degradation.** If no bridge reaches a later feasible run, the last validated joint shape is held across that interval and nominal tracking resumes when reachable. An infeasible terminal shape is projected toward a safe fold when possible; otherwise the final validated shape is held. Held shapes remain part of the swept-collision check.
+
+**Timing.** Candidate and bridge searches obey their configured deadlines. The completed joint path time-scales the root trajectory to satisfy joint-velocity and command-step limits, so command continuity is enforced on the trajectory that will actually execute.
+
+The whole-body planner exclusively owns `full_state_target` and must not run with another full-state producer such as `multilink_copilot`. The root `traj_server` pipeline should also remain inactive in whole-body mode because it creates a competing root-command path.
 
 ## Replanning and Execution Lifecycle
 
@@ -41,14 +76,19 @@ There is no periodic replanning timer. A plan is terminal when route generation 
 
 After a failed attempt, retries remain event driven. The root-link planner keeps its previous trajectory. The whole-body planner uses the last validated command as a zero-velocity hover hold for generation or evaluation failures; a plan that misses its activation deadline is discarded while the existing safe state remains active.
 
+## Safety Boundaries
 
-## RViz Candidate Markers
+- Root-link mode collision-checks the nominal follow-the-leader shape, not a shape later modified by Copilot. Enabling stability projection therefore weakens the coupling between the checked body and the commanded body.
+- Keeping an old trajectory or hover hold after planning failure is a continuity fallback, not a dynamic-obstacle avoidance guarantee. Fast environmental changes require an independent emergency or tracking-safety layer.
+- Whole-body mode checks its final planned articulated motion, but correctness still depends on the occupancy map, state estimates, model calibration, and command tracking.
+
+## Diagnostics
 
 `/candidate_markers` publishes all root-link candidates as a `visualization_msgs/MarkerArray`. Colors indicate the evaluation result:
 
 - **Green:** selected feasible candidate.
 - **Cyan:** feasible but not selected.
-- **Orange:** requires downstream `fc_rp_min` projection or fails another flight-feasibility check.
+- **Orange:** requires stability projection, fails a stability check, or fails joint planning.
 - **Magenta:** rejected because the nominal joint configuration violates a joint limit.
 - **Red:** rejected because of predicted whole-body collision, trajectory-generation failure, or another non-feasible status.
 
