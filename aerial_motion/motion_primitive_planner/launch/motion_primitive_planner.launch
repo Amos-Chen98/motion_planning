@@ -41,12 +41,21 @@
         <arg name="flu_odom_topic" value="$(arg odom_topic)" />
     </include>
 
+    <include file="$(find voxel_mapping)/launch/voxel_mapping.launch">
+        <arg name="robot_ns" value="$(arg robot_ns)" />
+        <arg name="node_name" value="$(arg node_name)_voxel_mapping" />
+        <arg name="world_frame_id" value="$(arg world_frame_id)" />
+        <arg name="pcl_topic" value="$(arg pcl_topic)" />
+        <arg name="voxel_width" value="$(arg voxel_width)" />
+        <arg name="map_bound" value="$(arg map_bound)" />
+        <arg name="use_accumulated_map" value="$(arg use_accumulated_map)" />
+    </include>
+
     <group ns="$(arg robot_ns)">
         <node pkg="motion_primitive_planner" type="motion_primitive_planner_node"
               name="$(arg node_name)" output="screen">
             <rosparam file="$(find motion_primitive_planner)/config/common_motion_primitive_planner.yaml" command="load" />
             <rosparam file="$(find motion_primitive_planner)/config/motion_primitive_planner.yaml" command="load" />
-            <remap from="pcl_topic" to="$(arg pcl_topic)" />
             <remap from="target" to="$(arg target_topic)" />
             <remap from="odom" to="$(arg odom_topic)" />
             <remap from="joint_states" to="$(arg joint_states_topic)" />
@@ -59,7 +68,6 @@
             <param name="MaxVelMag" value="$(arg max_vel_mag)" />
             <param name="ReplanTriggerRatio" value="$(arg replan_trigger_ratio)" />
             <param name="Verbose" value="$(arg verbose)" />
-            <param name="UseAccumulatedMap" value="$(arg use_accumulated_map)" />
             <param name="GoalTolerance" value="$(arg goal_tolerance)" />
             <param name="PlanningHorizon" value="$(arg planning_horizon)" />
             <param name="ZeroLocalTargetVel" value="$(arg zero_local_target_vel)" />

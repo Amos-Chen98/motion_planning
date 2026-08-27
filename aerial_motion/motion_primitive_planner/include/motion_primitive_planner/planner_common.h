@@ -23,7 +23,6 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace motion_primitive_planner
@@ -47,7 +46,6 @@ struct SharedPlannerConfig
   gcopter_planner::CommonPlannerConfig common;
   PrimitiveConfig primitive;
   double replan_trigger_ratio = 0.5;
-  bool use_accumulated_map = true;
   double goal_tolerance = 0.2;
   double planning_horizon = 3.0;
   bool zero_local_target_vel = true;
@@ -183,12 +181,11 @@ class PlanningEnvironment
 public:
   explicit PlanningEnvironment(const SharedPlannerConfig& config);
 
-  void updateMap(const std::vector<Eigen::Vector3d>& points);
+  void replaceMap(const std::vector<Eigen::Vector3d>& occupied_voxel_centers);
   Eigen::Vector3d clampTarget(const Eigen::Vector3d& requested, double clearance) const;
   PrimitiveBatch generate(const RootState& start, const Eigen::Vector3d& target);
 
   bool occupied(const Eigen::Vector3d& point) const;
-  std::vector<Eigen::Vector3d> occupiedVoxelCenters() const;
   double voxelScale() const;
   Eigen::Vector3d mapOrigin() const;
   Eigen::Vector3d mapCorner() const;
@@ -199,14 +196,9 @@ public:
                                        std::vector<Eigen::Vector3d>& local_route);
 
 private:
-  void rebuildMap();
-  std::vector<Eigen::Vector3i> occupiedVoxels(
-      const gcopter_planner::PlannerBackend& backend) const;
-
   SharedPlannerConfig config_;
   std::shared_ptr<gcopter_planner::PlannerBackend> backend_;
   PrimitiveGenerator generator_;
-  std::unordered_set<long> occupied_voxel_keys_;
 };
 
 struct CandidateVisualization

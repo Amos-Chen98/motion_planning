@@ -11,7 +11,6 @@ RelCostTol: 1.0e-5
 
 # Shared online planning and root motion primitive configuration.
 ReplanTriggerRatio: 0.5
-UseAccumulatedMap: true
 GoalTolerance: 0.2
 PlanningHorizon: 3.0
 CandidateCount: 9

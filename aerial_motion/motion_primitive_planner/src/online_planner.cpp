@@ -8,7 +8,6 @@
 #include <pluginlib/class_loader.h>
 #include <sensor_msgs/JointState.h>
 #include <sensor_msgs/PointCloud2.h>
-#include <sensor_msgs/point_cloud2_iterator.h>
 
 #include <chrono>
 #include <cmath>
@@ -46,10 +45,8 @@ public:
     , replan_trigger_(config.shared.replan_trigger_ratio)
   {
     initializeRobotModel();
-    ROS_INFO("Motion primitive map starts as free space and will be updated when point clouds arrive.");
-    occupied_voxel_map_pub_ =
-        nh_.advertise<sensor_msgs::PointCloud2>("voxelmap/occupied", 1, true);
-    map_sub_ = nh_.subscribe("pcl_topic", 1, &OnlinePlanner::mapCallback, this,
+    ROS_INFO("Motion primitive collision map starts as free space and will follow voxel snapshots.");
+    map_sub_ = nh_.subscribe("voxelmap/occupied", 1, &OnlinePlanner::mapCallback, this,
                              ros::TransportHints().tcpNoDelay());
     target_sub_ = nh_.subscribe("target", 1, &OnlinePlanner::targetCallback, this,
                                 ros::TransportHints().tcpNoDelay());
@@ -88,44 +85,18 @@ private:
 
   void mapCallback(const sensor_msgs::PointCloud2::ConstPtr& message)
   {
-    std::vector<Eigen::Vector3d> points;
+    std::vector<Eigen::Vector3d> occupied_voxel_centers;
     std::string error;
-    if (!ros_interface_.pointCloudToWorld(*message, points, &error))
+    if (!ros_interface_.pointCloudToWorld(*message, occupied_voxel_centers, &error))
     {
       if (error != "point-cloud transform is unavailable")
       {
-        ROS_WARN_THROTTLE(1.0, "Invalid local point cloud: %s", error.c_str());
+        ROS_WARN_THROTTLE(1.0, "Invalid occupied voxel map: %s", error.c_str());
       }
       return;
     }
-    environment_.updateMap(points);
-    publishOccupiedVoxelMap(message->header.stamp);
+    environment_.replaceMap(occupied_voxel_centers);
     retryPlanningIfPending();
-  }
-
-  void publishOccupiedVoxelMap(const ros::Time& source_stamp)
-  {
-    const std::vector<Eigen::Vector3d> centers = environment_.occupiedVoxelCenters();
-    sensor_msgs::PointCloud2 message;
-    message.header.frame_id = config_.shared.common.worldFrameId;
-    message.header.stamp = source_stamp.isZero() ? ros::Time::now() : source_stamp;
-    sensor_msgs::PointCloud2Modifier modifier(message);
-    modifier.setPointCloud2FieldsByString(1, "xyz");
-    modifier.resize(centers.size());
-    sensor_msgs::PointCloud2Iterator<float> x(message, "x");
-    sensor_msgs::PointCloud2Iterator<float> y(message, "y");
-    sensor_msgs::PointCloud2Iterator<float> z(message, "z");
-    for (const Eigen::Vector3d& center : centers)
-    {
-      *x = static_cast<float>(center.x());
-      *y = static_cast<float>(center.y());
-      *z = static_cast<float>(center.z());
-      ++x;
-      ++y;
-      ++z;
-    }
-    message.is_dense = true;
-    occupied_voxel_map_pub_.publish(message);
   }
 
   void targetCallback(const geometry_msgs::PoseStamped::ConstPtr& message)
@@ -346,7 +317,6 @@ private:
   ros::Subscriber target_sub_;
   ros::Subscriber joint_state_sub_;
   ros::Subscriber executed_command_sub_;
-  ros::Publisher occupied_voxel_map_pub_;
 
   double executed_yaw_ = 0.0;
   bool executed_command_received_ = false;

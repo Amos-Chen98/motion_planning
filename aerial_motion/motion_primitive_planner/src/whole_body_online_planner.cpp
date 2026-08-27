@@ -121,7 +121,7 @@ public:
     , replan_trigger_(config.shared.replan_trigger_ratio)
   {
     initializeRobotModels();
-    map_sub_ = nh_.subscribe("pcl_topic", 1, &WholeBodyOnlinePlanner::mapCallback, this,
+    map_sub_ = nh_.subscribe("voxelmap/occupied", 1, &WholeBodyOnlinePlanner::mapCallback, this,
                              ros::TransportHints().tcpNoDelay());
     target_sub_ = nh_.subscribe("target", 1, &WholeBodyOnlinePlanner::targetCallback, this,
                                 ros::TransportHints().tcpNoDelay());
@@ -234,19 +234,19 @@ private:
 
   void mapCallback(const sensor_msgs::PointCloud2::ConstPtr& message)
   {
-    std::vector<Eigen::Vector3d> points;
+    std::vector<Eigen::Vector3d> occupied_voxel_centers;
     std::string error;
-    if (!ros_interface_.pointCloudToWorld(*message, points, &error))
+    if (!ros_interface_.pointCloudToWorld(*message, occupied_voxel_centers, &error))
     {
       if (error != "point-cloud transform is unavailable")
       {
-        ROS_WARN_THROTTLE(1.0, "Invalid point cloud: %s", error.c_str());
+        ROS_WARN_THROTTLE(1.0, "Invalid occupied voxel map: %s", error.c_str());
       }
       return;
     }
     {
       std::lock_guard<std::mutex> lock(map_mutex_);
-      environment_.updateMap(points);
+      environment_.replaceMap(occupied_voxel_centers);
     }
     retryPlanningIfPending();
   }

@@ -7,7 +7,6 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cmath>
 #include <deque>
 #include <limits>
@@ -35,7 +34,7 @@ Trajectory<5> linearTrajectory(const Eigen::Vector3d& start,
       std::vector<Piece<5>::CoefficientMat>{coefficients});
 }
 
-SharedPlannerConfig validSharedConfig(bool accumulated = true)
+SharedPlannerConfig validSharedConfig()
 {
   SharedPlannerConfig config;
   config.common.worldFrameId = "world";
@@ -57,7 +56,6 @@ SharedPlannerConfig validSharedConfig(bool accumulated = true)
   config.primitive.max_velocity = 0.5;
   config.primitive.cruise_velocity = 0.3;
   config.primitive.minimum_piece_duration = 0.2;
-  config.use_accumulated_map = accumulated;
   config.planning_horizon = 1.5;
   config.validateOrThrow();
   return config;
@@ -817,58 +815,27 @@ TEST(NominalJointPredictor, PreservesHandoverStateAndUsesSharedFollowerGeometry)
   EXPECT_TRUE(samples.back().joints.allFinite());
 }
 
-TEST(PlanningEnvironment, AccumulatesOrReplacesMapVoxels)
+TEST(PlanningEnvironment, ReplacesCollisionMapSnapshots)
 {
-  PlanningEnvironment accumulated(validSharedConfig(true));
   const Eigen::Vector3d first(-0.5, 0.0, 1.0);
   const Eigen::Vector3d second(0.5, 0.0, 1.0);
-  accumulated.updateMap({first});
-  accumulated.updateMap({second});
-  EXPECT_TRUE(accumulated.occupied(first));
-  EXPECT_TRUE(accumulated.occupied(second));
-
-  PlanningEnvironment latest(validSharedConfig(false));
-  latest.updateMap({first});
-  latest.updateMap({second});
-  EXPECT_FALSE(latest.occupied(first));
-  EXPECT_TRUE(latest.occupied(second));
-}
-
-TEST(PlanningEnvironment, ExportsUniqueRawOccupiedVoxelCentersWithoutInflation)
-{
-  SharedPlannerConfig config = validSharedConfig();
-  config.common.dilateRadius = 0.2;
-  PlanningEnvironment environment(config);
-  environment.updateMap({Eigen::Vector3d(-0.46, 0.0, 1.0),
-                         Eigen::Vector3d(-0.44, 0.0, 1.0),
-                         Eigen::Vector3d(0.26, 0.0, 1.0)});
-
-  const std::vector<Eigen::Vector3d> centers = environment.occupiedVoxelCenters();
-  ASSERT_EQ(centers.size(), 2u);
-  const auto contains = [&centers](const Eigen::Vector3d& expected) {
-    return std::any_of(centers.begin(), centers.end(), [&expected](const Eigen::Vector3d& center) {
-      return center.isApprox(expected, 1e-12);
-    });
-  };
-  const Eigen::Vector3d first_center(-0.45, 0.05, 1.05);
-  const Eigen::Vector3d second_center(0.25, 0.05, 1.05);
-  EXPECT_TRUE(contains(first_center));
-  EXPECT_TRUE(contains(second_center));
-
-  const Eigen::Vector3d inflated_neighbor = first_center + Eigen::Vector3d(0.0, 0.1, 0.0);
-  EXPECT_TRUE(environment.occupied(inflated_neighbor));
-  EXPECT_FALSE(contains(inflated_neighbor));
+  PlanningEnvironment environment(validSharedConfig());
+  environment.replaceMap({first});
+  EXPECT_TRUE(environment.occupied(first));
+  environment.replaceMap({second});
+  EXPECT_FALSE(environment.occupied(first));
+  EXPECT_TRUE(environment.occupied(second));
 }
 
 TEST(PlanningEnvironment, PreservesImmutableOccupancySnapshotsAcrossMapUpdates)
 {
-  PlanningEnvironment environment(validSharedConfig(false));
+  PlanningEnvironment environment(validSharedConfig());
   const Eigen::Vector3d first(-0.5, 0.0, 1.0);
   const Eigen::Vector3d second(0.5, 0.0, 1.0);
-  environment.updateMap({first});
+  environment.replaceMap({first});
   const std::shared_ptr<const gcopter_planner::PlannerBackend> first_snapshot =
       environment.occupancySnapshot();
-  environment.updateMap({second});
+  environment.replaceMap({second});
   const std::shared_ptr<const gcopter_planner::PlannerBackend> second_snapshot =
       environment.occupancySnapshot();
 

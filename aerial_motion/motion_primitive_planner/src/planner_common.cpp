@@ -66,7 +66,6 @@ void FollowerConfig::validateOrThrow() const
 SharedPlannerConfig::SharedPlannerConfig(const ros::NodeHandle& private_nh) : common(private_nh)
 {
   private_nh.param("ReplanTriggerRatio", replan_trigger_ratio, replan_trigger_ratio);
-  private_nh.param("UseAccumulatedMap", use_accumulated_map, use_accumulated_map);
   private_nh.param("GoalTolerance", goal_tolerance, goal_tolerance);
   private_nh.param("PlanningHorizon", planning_horizon, planning_horizon);
   private_nh.param("ZeroLocalTargetVel", zero_local_target_vel, zero_local_target_vel);
@@ -338,45 +337,16 @@ std::vector<NominalJointSample> NominalJointPredictor::predict(
 PlanningEnvironment::PlanningEnvironment(const SharedPlannerConfig& config)
   : config_(config), generator_(config.primitive)
 {
-  rebuildMap();
+  replaceMap({});
 }
 
-void PlanningEnvironment::rebuildMap()
+void PlanningEnvironment::replaceMap(
+    const std::vector<Eigen::Vector3d>& occupied_voxel_centers)
 {
   std::shared_ptr<gcopter_planner::PlannerBackend> backend(
       new gcopter_planner::PlannerBackend(config_.common));
-  backend->setMapVoxels(occupiedVoxels(*backend));
+  backend->setMapPoints(occupied_voxel_centers);
   std::atomic_store(&backend_, backend);
-}
-
-void PlanningEnvironment::updateMap(const std::vector<Eigen::Vector3d>& points)
-{
-  if (!config_.use_accumulated_map)
-  {
-    occupied_voxel_keys_.clear();
-  }
-  const std::shared_ptr<const gcopter_planner::PlannerBackend> backend = occupancySnapshot();
-  for (const Eigen::Vector3d& point : points)
-  {
-    const long key = backend->voxelKey(point);
-    if (key >= 0)
-    {
-      occupied_voxel_keys_.insert(key);
-    }
-  }
-  rebuildMap();
-}
-
-std::vector<Eigen::Vector3i> PlanningEnvironment::occupiedVoxels(
-    const gcopter_planner::PlannerBackend& backend) const
-{
-  std::vector<Eigen::Vector3i> occupied;
-  occupied.reserve(occupied_voxel_keys_.size());
-  for (const long key : occupied_voxel_keys_)
-  {
-    occupied.push_back(backend.voxelIdFromKey(key));
-  }
-  return occupied;
 }
 
 std::shared_ptr<const gcopter_planner::PlannerBackend>
@@ -388,21 +358,6 @@ PlanningEnvironment::occupancySnapshot() const
 bool PlanningEnvironment::occupied(const Eigen::Vector3d& point) const
 {
   return occupancySnapshot()->query(point);
-}
-
-std::vector<Eigen::Vector3d> PlanningEnvironment::occupiedVoxelCenters() const
-{
-  const std::shared_ptr<const gcopter_planner::PlannerBackend> backend = occupancySnapshot();
-  const double scale = backend->voxelScale();
-  const Eigen::Vector3d origin = backend->mapOrigin();
-  std::vector<Eigen::Vector3d> centers;
-  centers.reserve(occupied_voxel_keys_.size());
-  for (const long key : occupied_voxel_keys_)
-  {
-    const Eigen::Vector3i id = backend->voxelIdFromKey(key);
-    centers.push_back(origin + scale * (id.cast<double>() + Eigen::Vector3d::Constant(0.5)));
-  }
-  return centers;
 }
 
 double PlanningEnvironment::voxelScale() const
