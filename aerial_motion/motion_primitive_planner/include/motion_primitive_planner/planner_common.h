@@ -188,6 +188,7 @@ public:
   PrimitiveBatch generate(const RootState& start, const Eigen::Vector3d& target);
 
   bool occupied(const Eigen::Vector3d& point) const;
+  std::vector<Eigen::Vector3d> occupiedVoxelCenters() const;
   double voxelScale() const;
   Eigen::Vector3d mapOrigin() const;
   Eigen::Vector3d mapCorner() const;

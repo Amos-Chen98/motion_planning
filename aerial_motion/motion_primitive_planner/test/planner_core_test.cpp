@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <deque>
 #include <limits>
@@ -831,6 +832,32 @@ TEST(PlanningEnvironment, AccumulatesOrReplacesMapVoxels)
   latest.updateMap({second});
   EXPECT_FALSE(latest.occupied(first));
   EXPECT_TRUE(latest.occupied(second));
+}
+
+TEST(PlanningEnvironment, ExportsUniqueRawOccupiedVoxelCentersWithoutInflation)
+{
+  SharedPlannerConfig config = validSharedConfig();
+  config.common.dilateRadius = 0.2;
+  PlanningEnvironment environment(config);
+  environment.updateMap({Eigen::Vector3d(-0.46, 0.0, 1.0),
+                         Eigen::Vector3d(-0.44, 0.0, 1.0),
+                         Eigen::Vector3d(0.26, 0.0, 1.0)});
+
+  const std::vector<Eigen::Vector3d> centers = environment.occupiedVoxelCenters();
+  ASSERT_EQ(centers.size(), 2u);
+  const auto contains = [&centers](const Eigen::Vector3d& expected) {
+    return std::any_of(centers.begin(), centers.end(), [&expected](const Eigen::Vector3d& center) {
+      return center.isApprox(expected, 1e-12);
+    });
+  };
+  const Eigen::Vector3d first_center(-0.45, 0.05, 1.05);
+  const Eigen::Vector3d second_center(0.25, 0.05, 1.05);
+  EXPECT_TRUE(contains(first_center));
+  EXPECT_TRUE(contains(second_center));
+
+  const Eigen::Vector3d inflated_neighbor = first_center + Eigen::Vector3d(0.0, 0.1, 0.0);
+  EXPECT_TRUE(environment.occupied(inflated_neighbor));
+  EXPECT_FALSE(contains(inflated_neighbor));
 }
 
 TEST(PlanningEnvironment, PreservesImmutableOccupancySnapshotsAcrossMapUpdates)

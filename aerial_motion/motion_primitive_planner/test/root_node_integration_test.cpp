@@ -36,6 +36,11 @@ protected:
     received_selection_ = std::isfinite(message->data);
   }
 
+  void occupiedVoxelMapCallback(const sensor_msgs::PointCloud2::ConstPtr& message)
+  {
+    occupied_voxel_maps_.push_back(*message);
+  }
+
   static sensor_msgs::PointCloud2 blockingCloud()
   {
     std::vector<Eigen::Vector3d> points;
@@ -82,6 +87,7 @@ protected:
 
   std::vector<gcopter::PolyTraj> trajectories_;
   std::vector<geometry_msgs::PoseStamped> commands_;
+  std::vector<sensor_msgs::PointCloud2> occupied_voxel_maps_;
   double selected_minimum_fc_rp_ = 0.0;
   bool received_selection_ = false;
 };
@@ -98,6 +104,11 @@ TEST_F(RootNodeIntegration, PublishesTrajectoryAndKeepsItWhenReplanningFails)
   const ros::Subscriber fc_subscriber = nh.subscribe<std_msgs::Float64>(
       "/dragon/selected_min_fc_rp", 10,
       [this](const std_msgs::Float64::ConstPtr& message) { minimumFcCallback(message); });
+  const ros::Subscriber voxel_map_subscriber = nh.subscribe<sensor_msgs::PointCloud2>(
+      "/dragon/voxelmap/occupied", 10,
+      [this](const sensor_msgs::PointCloud2::ConstPtr& message) {
+        occupiedVoxelMapCallback(message);
+      });
   const ros::Publisher odom_publisher = nh.advertise<nav_msgs::Odometry>("/dragon/root/flu_odom", 10);
   const ros::Subscriber root_tail_subscriber = nh.subscribe<geometry_msgs::PoseStamped>(
       "/dragon/root/tail_pose", 10,
@@ -176,6 +187,35 @@ TEST_F(RootNodeIntegration, PublishesTrajectoryAndKeepsItWhenReplanningFails)
     ros::spinOnce();
     rate.sleep();
   }
+  ASSERT_FALSE(occupied_voxel_maps_.empty());
+  const sensor_msgs::PointCloud2& occupied_map = occupied_voxel_maps_.back();
+  EXPECT_EQ(occupied_map.header.frame_id, "world");
+  EXPECT_EQ(occupied_map.header.stamp, cloud.header.stamp);
+  EXPECT_EQ(occupied_map.height, 1u);
+  EXPECT_GT(occupied_map.width, 0u);
+  EXPECT_TRUE(occupied_map.is_dense);
+  ASSERT_EQ(occupied_map.fields.size(), 3u);
+  EXPECT_EQ(occupied_map.fields[0].name, "x");
+  EXPECT_EQ(occupied_map.fields[1].name, "y");
+  EXPECT_EQ(occupied_map.fields[2].name, "z");
+  for (const sensor_msgs::PointField& field : occupied_map.fields)
+  {
+    EXPECT_EQ(field.datatype, sensor_msgs::PointField::FLOAT32);
+    EXPECT_EQ(field.count, 1u);
+  }
+  sensor_msgs::PointCloud2ConstIterator<float> occupied_x(occupied_map, "x");
+  sensor_msgs::PointCloud2ConstIterator<float> occupied_y(occupied_map, "y");
+  sensor_msgs::PointCloud2ConstIterator<float> occupied_z(occupied_map, "z");
+  size_t occupied_point_count = 0;
+  for (; occupied_x != occupied_x.end(); ++occupied_x, ++occupied_y, ++occupied_z)
+  {
+    EXPECT_TRUE(std::isfinite(*occupied_x));
+    EXPECT_TRUE(std::isfinite(*occupied_y));
+    EXPECT_TRUE(std::isfinite(*occupied_z));
+    ++occupied_point_count;
+  }
+  EXPECT_EQ(occupied_point_count,
+            static_cast<size_t>(occupied_map.width) * occupied_map.height);
 
   const size_t trajectory_count = trajectories_.size();
   const size_t command_count = commands_.size();
@@ -193,15 +233,21 @@ TEST_F(RootNodeIntegration, PublishesTrajectoryAndKeepsItWhenReplanningFails)
 
   sensor_msgs::PointCloud2 clear_cloud = emptyCloud();
   clear_cloud.header.stamp = ros::Time::now();
+  const size_t occupied_map_count = occupied_voxel_maps_.size();
   cloud_publisher.publish(clear_cloud);
   const ros::WallTime recovery_wait = ros::WallTime::now();
-  while (ros::ok() && trajectories_.size() == trajectory_count &&
+  while (ros::ok() &&
+         (trajectories_.size() == trajectory_count ||
+          occupied_voxel_maps_.size() == occupied_map_count) &&
          (ros::WallTime::now() - recovery_wait).toSec() < 5.0)
   {
     ros::spinOnce();
     rate.sleep();
   }
   EXPECT_GT(trajectories_.size(), trajectory_count);
+  ASSERT_GT(occupied_voxel_maps_.size(), occupied_map_count);
+  EXPECT_EQ(occupied_voxel_maps_.back().width, 0u);
+  EXPECT_EQ(occupied_voxel_maps_.back().height, 1u);
 }
 }  // namespace
 }  // namespace motion_primitive_planner

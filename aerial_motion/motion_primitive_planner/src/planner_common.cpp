@@ -390,6 +390,21 @@ bool PlanningEnvironment::occupied(const Eigen::Vector3d& point) const
   return occupancySnapshot()->query(point);
 }
 
+std::vector<Eigen::Vector3d> PlanningEnvironment::occupiedVoxelCenters() const
+{
+  const std::shared_ptr<const gcopter_planner::PlannerBackend> backend = occupancySnapshot();
+  const double scale = backend->voxelScale();
+  const Eigen::Vector3d origin = backend->mapOrigin();
+  std::vector<Eigen::Vector3d> centers;
+  centers.reserve(occupied_voxel_keys_.size());
+  for (const long key : occupied_voxel_keys_)
+  {
+    const Eigen::Vector3i id = backend->voxelIdFromKey(key);
+    centers.push_back(origin + scale * (id.cast<double>() + Eigen::Vector3d::Constant(0.5)));
+  }
+  return centers;
+}
+
 double PlanningEnvironment::voxelScale() const
 {
   return occupancySnapshot()->voxelScale();
