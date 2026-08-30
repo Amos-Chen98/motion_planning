@@ -364,116 +364,50 @@ TEST(WholeBodyCollision, TreatsAConfigurationOutsideTheMapAsCollision)
   EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
 }
 
-TEST(WholeBodyCollision, ComputesAdaptiveTemporalSubdivisionsFromRootAndAngularMotion)
-{
-  const Eigen::VectorXd no_joint_motion = Eigen::VectorXd::Zero(0);
-  EXPECT_EQ(wholeBodyMotionSubdivisionCount(
-                0.0, 0.0, 0.0, 0.0, no_joint_motion, 0.125),
-            1);
-  EXPECT_EQ(wholeBodyMotionSubdivisionCount(
-                0.375, 1.0, 0.0, 0.0, no_joint_motion, 0.125),
-            3);
-  EXPECT_EQ(wholeBodyMotionSubdivisionCount(
-                0.0, 0.0, 2.0, 0.25, no_joint_motion, 0.125),
-            4);
-
-  Eigen::VectorXd joint_delta(2);
-  joint_delta << 0.25, -0.125;
-  EXPECT_EQ(wholeBodyMotionSubdivisionCount(
-                0.0, 0.0, 2.0, 0.0, joint_delta, 0.125),
-            6);
-  EXPECT_EQ(wholeBodyMotionSubdivisionCount(
-                0.125, 1.0, 0.0, 0.0, no_joint_motion, 0.125),
-            1);
-  EXPECT_EQ(wholeBodyMotionSubdivisionCount(
-                0.126, 1.0, 0.0, 0.0, no_joint_motion, 0.125),
-            2);
-}
-
 TEST(WholeBodyCollision, UsesTheShortestYawDeltaAcrossTheWrapBoundary)
 {
   EXPECT_NEAR(shortestYawDelta(M_PI - 0.1, -M_PI + 0.1), 0.2, 1e-12);
   EXPECT_NEAR(shortestYawDelta(-M_PI + 0.1, M_PI - 0.1), -0.2, 1e-12);
 }
 
-TEST(RootCandidateCollision, DetectsIntermediateRootTranslation)
+TEST(NominalJointPredictor, UsesUniformFixedTimeSamplesIncludingEndpoints)
 {
-  const Trajectory<5> trajectory =
-      linearTrajectory(Eigen::Vector3d(0.0, 0.0, 1.0),
-                       Eigen::Vector3d(0.0, 1.0, 0.0), 1.0);
-  NominalJointSample start;
-  start.time = 0.0;
-  start.yaw = 0.0;
-  start.root_position = trajectory.getPos(start.time);
-  NominalJointSample end = start;
-  end.time = 1.0;
-  end.root_position = trajectory.getPos(end.time);
+  FollowerConfig follower;
+  follower.publish_yaw_command = false;
+  NominalJointContext context;
+  context.link_num = 1;
+  context.link_length = 1.0;
+  const Eigen::VectorXd start_joints = Eigen::VectorXd::Zero(1);
+  const NominalJointPredictor predictor(follower);
 
-  DragonCollisionGeometry geometry;
-  geometry.link_num = 1;
-  geometry.link_length = 1.0;
-  const Eigen::Vector3d obstacle(0.0, 0.5, 1.0);
-  const auto occupied = [&obstacle](const Eigen::Vector3d& point) {
-    return (point - obstacle).norm() < 0.02;
+  const auto samples_for = [&](double duration, double sample_dt) {
+    return predictor.predict(
+        linearTrajectory(Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitX(), duration),
+        context, start_joints, 0.0, sample_dt);
   };
 
-  EXPECT_TRUE(nominalWholeBodyIntervalCollides(
-      trajectory, start, end, 1.0, geometry, 0.05, occupied));
-}
+  const std::vector<NominalJointSample> divisible = samples_for(1.0, 0.25);
+  ASSERT_EQ(divisible.size(), 5u);
+  for (size_t index = 0; index < divisible.size(); ++index)
+  {
+    EXPECT_NEAR(divisible[index].time, 0.25 * index, 1e-12);
+  }
 
-TEST(RootCandidateCollision, DetectsIntermediateShortestPathYawRotation)
-{
-  const Trajectory<5> trajectory =
-      linearTrajectory(Eigen::Vector3d(0.0, 0.0, 1.0),
-                       Eigen::Vector3d::Zero(), 1.0);
-  NominalJointSample start;
-  start.time = 0.0;
-  start.yaw = 0.0;
-  start.root_position = trajectory.getPos(start.time);
-  NominalJointSample end = start;
-  end.time = 1.0;
-  end.yaw = M_PI_2;
+  const std::vector<NominalJointSample> non_divisible = samples_for(1.0, 0.30);
+  ASSERT_EQ(non_divisible.size(), 5u);
+  EXPECT_DOUBLE_EQ(non_divisible.front().time, 0.0);
+  EXPECT_DOUBLE_EQ(non_divisible.back().time, 1.0);
+  const double interval = non_divisible[1].time - non_divisible[0].time;
+  EXPECT_LE(interval, 0.30);
+  for (size_t index = 2; index < non_divisible.size(); ++index)
+  {
+    EXPECT_NEAR(non_divisible[index].time - non_divisible[index - 1].time,
+                interval, 1e-12);
+  }
 
-  DragonCollisionGeometry geometry;
-  geometry.link_num = 1;
-  geometry.link_length = 1.0;
-  const Eigen::Vector3d obstacle(0.5 / std::sqrt(2.0),
-                                 0.5 / std::sqrt(2.0), 1.0);
-  const auto occupied = [&obstacle](const Eigen::Vector3d& point) {
-    return (point - obstacle).norm() < 0.03;
-  };
-
-  EXPECT_TRUE(nominalWholeBodyIntervalCollides(
-      trajectory, start, end, 0.0, geometry, 0.05, occupied));
-}
-
-TEST(RootCandidateCollision, DetectsIntermediateJointRotation)
-{
-  const Trajectory<5> trajectory =
-      linearTrajectory(Eigen::Vector3d(0.0, 0.0, 1.0),
-                       Eigen::Vector3d::Zero(), 1.0);
-  NominalJointSample start;
-  start.time = 0.0;
-  start.yaw = 0.0;
-  start.root_position = trajectory.getPos(start.time);
-  start.joints = Eigen::Vector2d::Zero();
-  NominalJointSample end = start;
-  end.time = 1.0;
-  end.joints(1) = M_PI_2;
-
-  DragonCollisionGeometry geometry;
-  geometry.link_num = 2;
-  geometry.link_length = 1.0;
-  geometry.pitch_joint_indices = {0};
-  geometry.yaw_joint_indices = {1};
-  const Eigen::Vector3d obstacle(-0.5 / std::sqrt(2.0),
-                                 -0.5 / std::sqrt(2.0), 1.0);
-  const auto occupied = [&obstacle](const Eigen::Vector3d& point) {
-    return (point - obstacle).norm() < 0.03;
-  };
-
-  EXPECT_TRUE(nominalWholeBodyIntervalCollides(
-      trajectory, start, end, 0.0, geometry, 0.05, occupied));
+  const std::vector<NominalJointSample> zero_duration = samples_for(0.0, 0.25);
+  ASSERT_EQ(zero_duration.size(), 1u);
+  EXPECT_DOUBLE_EQ(zero_duration.front().time, 0.0);
 }
 
 TEST(FollowTheLeaderGeometry, CurvedHistoryProducesCurvedNominalShape)

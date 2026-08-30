@@ -35,7 +35,7 @@ namespace
 constexpr char kRobotModelPlugin[] = "dragon/hydrus_like_robot_model";
 constexpr double kEpsilon = 1e-6;
 //! Wall-clock reserve kept between the end of candidate evaluation and activation.
-//! It absorbs the last candidate's swept-collision check and diagnostics.
+//! It absorbs the last candidate's sampled collision check and diagnostics.
 constexpr double kActivationSafetyMargin = 0.20;
 
 enum class PlanAttemptResult
@@ -332,7 +332,6 @@ private:
     const double duration = root.getTotalDuration();
     const double command_dt = 1.0 / config_.joint.follower.command_hz;
     const double spatial_resolution = 0.5 * occupancy->voxelScale();
-    const double body_length = static_cast<double>(model_info_->linkNum()) * model_info_->linkLength();
     const auto occupied = [&occupancy](const Eigen::Vector3d& point) {
       return occupancy->query(point);
     };
@@ -347,61 +346,21 @@ private:
       return wholeBodyCollides(configuration, collision_geometry_, spatial_resolution, occupied);
     };
 
-    if (collides_at_time(0.0))
+    if (!std::isfinite(duration) || duration < 0.0)
     {
       return true;
     }
-    std::vector<double> breakpoints;
-    breakpoints.reserve(static_cast<size_t>(std::ceil(duration / command_dt)) +
-                        joints.joint_waypoints.size() + joints.yaw_waypoints.size() + 2);
-    breakpoints.push_back(0.0);
-    for (double time = command_dt; time < duration; time += command_dt)
+    const int sample_count = duration > kEpsilon
+                                 ? std::max(1, static_cast<int>(std::ceil(duration / command_dt)))
+                                 : 0;
+    for (int sample = 0; sample <= sample_count; ++sample)
     {
-      breakpoints.push_back(time);
-    }
-    for (const TimedJointWaypoint& waypoint : joints.joint_waypoints)
-    {
-      if (waypoint.time > 0.0 && waypoint.time < duration)
+      const double time = sample_count > 0
+                              ? duration * static_cast<double>(sample) / sample_count
+                              : 0.0;
+      if (collides_at_time(time))
       {
-        breakpoints.push_back(waypoint.time);
-      }
-    }
-    for (const TimedYawWaypoint& waypoint : joints.yaw_waypoints)
-    {
-      if (waypoint.time > 0.0 && waypoint.time < duration)
-      {
-        breakpoints.push_back(waypoint.time);
-      }
-    }
-    breakpoints.push_back(duration);
-    std::sort(breakpoints.begin(), breakpoints.end());
-    breakpoints.erase(std::unique(breakpoints.begin(), breakpoints.end(),
-                                  [](double lhs, double rhs) {
-                                    return std::abs(lhs - rhs) <= kEpsilon;
-                                  }),
-                      breakpoints.end());
-
-    for (size_t interval = 1; interval < breakpoints.size(); ++interval)
-    {
-      const double start_time = breakpoints[interval - 1];
-      const double end_time = breakpoints[interval];
-      // The root path can curve between command samples, so the endpoint chord is not a
-      // conservative swept-distance bound. Primitive generation enforces max_velocity.
-      const double yaw_delta =
-          shortestYawDelta(joints.yaw(start_time), joints.yaw(end_time));
-      const Eigen::VectorXd q_delta =
-          joints.jointPositions(end_time) - joints.jointPositions(start_time);
-      const int subdivisions = wholeBodyMotionSubdivisionCount(
-          end_time - start_time, config_.shared.primitive.max_velocity,
-          body_length, yaw_delta, q_delta, spatial_resolution);
-      for (int subdivision = 1; subdivision <= subdivisions; ++subdivision)
-      {
-        const double time = start_time + static_cast<double>(subdivision) / subdivisions *
-                                             (end_time - start_time);
-        if (collides_at_time(time))
-        {
-          return true;
-        }
+        return true;
       }
     }
     return false;
@@ -662,7 +621,7 @@ private:
       if (wholeBodyTrajectoryCollides(candidate.scaled_root, candidate.joints, occupancy))
       {
         candidate.status = CandidateStatus::kCollision;
-        candidate.detail = "whole-body swept collision";
+        candidate.detail = "whole-body sampled collision";
         continue;
       }
       candidate.status = CandidateStatus::kFeasible;

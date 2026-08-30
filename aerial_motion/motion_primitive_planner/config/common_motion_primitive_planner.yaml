@@ -17,7 +17,7 @@ CandidateCount: 9
 MaxPrimitiveOffset: 0.8
 MinimumPieceDuration: 0.20
 
-# Shared follow-the-leader prediction configuration.
+# Shared command publication, follow-the-leader prediction, and collision-sampling configuration.
 CommandHz: 40.0
 TrajectorySampleInterval: 0.05
 TrajectoryBufferMaxLength: 10.0

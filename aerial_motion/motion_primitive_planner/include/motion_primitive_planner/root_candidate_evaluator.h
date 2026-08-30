@@ -12,21 +12,11 @@ namespace motion_primitive_planner
 bool isOnlyFcRpViolation(const multilink_copilot::StabilityMetrics& metrics,
                          const multilink_copilot::StabilityConfig& config);
 
-bool nominalWholeBodyIntervalCollides(
-    const Trajectory<5>& root_trajectory,
-    const NominalJointSample& start,
-    const NominalJointSample& end,
-    double maximum_root_velocity,
-    const DragonCollisionGeometry& geometry,
-    double sample_spacing,
-    const std::function<bool(const Eigen::Vector3d&)>& occupied);
-
 class RootCandidateEvaluator
 {
 public:
   RootCandidateEvaluator(const FollowerConfig& follower_config,
                          double prediction_dt,
-                         double maximum_root_velocity,
                          bool allow_stability_projection_fallback,
                          const DragonModelInfo& model,
                          const std::shared_ptr<multilink_copilot::StabilityEvaluator>& stability_evaluator,
@@ -40,7 +30,6 @@ public:
 private:
   FollowerConfig follower_config_;
   double prediction_dt_ = 0.10;
-  double maximum_root_velocity_ = 0.0;
   bool allow_stability_projection_fallback_ = false;
   DragonCollisionGeometry collision_geometry_;
   std::shared_ptr<multilink_copilot::StabilityEvaluator> stability_evaluator_;

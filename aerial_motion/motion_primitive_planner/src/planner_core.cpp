@@ -413,37 +413,6 @@ double shortestYawDelta(double start_yaw, double end_yaw)
   return std::remainder(end_yaw - start_yaw, 2.0 * M_PI);
 }
 
-int wholeBodyMotionSubdivisionCount(double interval_duration,
-                                    double maximum_root_velocity,
-                                    double body_length,
-                                    double yaw_delta,
-                                    const Eigen::VectorXd& joint_delta,
-                                    double spatial_resolution)
-{
-  if (!std::isfinite(interval_duration) || interval_duration < 0.0 ||
-      !std::isfinite(maximum_root_velocity) || maximum_root_velocity < 0.0 ||
-      !std::isfinite(body_length) || body_length < 0.0 ||
-      !std::isfinite(yaw_delta) || !joint_delta.allFinite() ||
-      !std::isfinite(spatial_resolution) || spatial_resolution <= 0.0)
-  {
-    throw std::invalid_argument("Invalid whole-body motion subdivision input");
-  }
-  const double angular_delta =
-      std::abs(yaw_delta) + (joint_delta.size() > 0 ? joint_delta.cwiseAbs().sum() : 0.0);
-  const double displacement_bound =
-      maximum_root_velocity * interval_duration + body_length * angular_delta;
-  if (!std::isfinite(displacement_bound))
-  {
-    throw std::overflow_error("Whole-body motion displacement bound overflowed");
-  }
-  const double subdivisions = std::ceil(displacement_bound / spatial_resolution);
-  if (subdivisions > static_cast<double>(std::numeric_limits<int>::max()))
-  {
-    throw std::overflow_error("Whole-body motion subdivision count overflowed");
-  }
-  return std::max(1, static_cast<int>(subdivisions));
-}
-
 const char* candidateStatusName(CandidateStatus status)
 {
   switch (status)

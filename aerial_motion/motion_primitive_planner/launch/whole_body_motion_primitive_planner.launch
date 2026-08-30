@@ -27,7 +27,7 @@
     <arg name="joint_planning_timeout" default="0.15" />
     <arg name="joint_validity_resolution" default="0.025" />
     <arg name="joint_planner_seed" default="1" />
-    <arg name="max_joint_velocity" default="4.0" />
+    <arg name="max_joint_velocity" default="0.2" />
     <arg name="max_joint_command_step" default="0.10" />
     <arg name="joint_motion_cost_weight" default="0.25" />
     <arg name="tracking_error_cost_weight" default="6.0" />

@@ -285,7 +285,13 @@ std::vector<NominalJointSample> NominalJointPredictor::predict(
   Eigen::VectorXd predicted_joints = start_joints;
   double yaw = start_yaw;
   const double duration = root_trajectory.getTotalDuration();
-  const int sample_count = std::max(1, static_cast<int>(std::ceil(duration / sample_dt)));
+  if (!std::isfinite(duration) || duration < 0.0)
+  {
+    return samples;
+  }
+  const int sample_count = duration > kEpsilon
+                               ? std::max(1, static_cast<int>(std::ceil(duration / sample_dt)))
+                               : 0;
   const double required_history = static_cast<double>(context.link_num - 1) * context.link_length;
   const Eigen::Vector3d initial_root_tail = root_trajectory.getPos(0.0);
   const Eigen::Matrix3d initial_root_rotation =
@@ -295,7 +301,9 @@ std::vector<NominalJointSample> NominalJointPredictor::predict(
   double previous_time = 0.0;
   for (int sample_index = 0; sample_index <= sample_count; ++sample_index)
   {
-    const double time = duration * static_cast<double>(sample_index) / sample_count;
+    const double time = sample_count > 0
+                            ? duration * static_cast<double>(sample_index) / sample_count
+                            : 0.0;
     const Eigen::Vector3d position = root_trajectory.getPos(time);
     const Eigen::Vector3d velocity = root_trajectory.getVel(time);
     if (sample_index > 0)
