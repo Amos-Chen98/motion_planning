@@ -46,7 +46,7 @@ protected:
     primitive_.minimum_piece_duration = 0.2;
   }
 
-  //! Mirrors config/whole_body_motion_primitive_planner.yaml.
+  //! Uses a faster shared angular limit to keep the exhaustive bridge tests short.
   JointPlannerConfig jointConfig(unsigned int seed) const
   {
     JointPlannerConfig config;
@@ -54,11 +54,10 @@ protected:
     config.follower.trajectory_sample_interval = 0.05;
     config.follower.trajectory_buffer_max_length = 10.0;
     config.follower.ik_singularity_threshold = 0.10;
-    config.follower.max_yaw_rate = 1.5;
+    config.follower.max_angular_vel = 4.0;
     config.reference_dt = 0.10;
     config.planning_timeout = 0.15;
     config.validity_resolution = 0.025;
-    config.max_joint_velocity = 4.0;
     config.max_joint_command_step = 0.10;
     config.random_seed = seed;
     return config;
@@ -110,7 +109,9 @@ protected:
       {
         const double ratio = static_cast<double>(sample) / subdivisions;
         const double time = before.time + ratio * interval;
-        evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(result.yaw(time) + M_PI));
+        const Eigen::Quaterniond rotation(result.rootLinkRotation(time));
+        evaluator_->setRootLinkRotation(KDL::Rotation::Quaternion(
+            rotation.x(), rotation.y(), rotation.z(), rotation.w()));
         multilink_copilot::StabilityMetrics metrics;
         ASSERT_TRUE(evaluator_->evaluate(result.jointPositions(time), metrics));
         EXPECT_TRUE(metrics.safe) << "unsafe timed path at t=" << time;
@@ -118,34 +119,52 @@ protected:
                   evaluator_->config().fc_rp_min_threshold);
       }
     }
-    for (const TimedYawWaypoint& waypoint : result.yaw_waypoints)
+    for (const TimedRootAttitudeWaypoint& waypoint : result.attitude_waypoints)
     {
       if (waypoint.time + 1e-12 <
           result.joint_waypoints[first_safe_waypoint].time)
       {
         continue;
       }
-      evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(waypoint.yaw + M_PI));
+      const Eigen::Quaterniond rotation(linkRotation(waypoint.attitude));
+      evaluator_->setRootLinkRotation(KDL::Rotation::Quaternion(
+          rotation.x(), rotation.y(), rotation.z(), rotation.w()));
       multilink_copilot::StabilityMetrics metrics;
       ASSERT_TRUE(evaluator_->evaluate(result.jointPositions(waypoint.time), metrics));
-      EXPECT_TRUE(metrics.safe) << "unsafe path at yaw breakpoint t=" << waypoint.time;
+      EXPECT_TRUE(metrics.safe) << "unsafe path at attitude breakpoint t=" << waypoint.time;
     }
   }
 
   void expectArcLengthTiming(const JointPlanResult& result) const
   {
     ASSERT_GE(result.joint_waypoints.size(), 2u);
-    std::vector<double> cumulative(result.joint_waypoints.size(), 0.0);
-    for (size_t index = 1; index < result.joint_waypoints.size(); ++index)
+    size_t path_start = 0;
+    if (result.root_translation_delay > 1e-9)
     {
-      cumulative[index] = cumulative[index - 1] +
-                          (result.joint_waypoints[index].positions -
-                           result.joint_waypoints[index - 1].positions).norm();
+      while (path_start + 1 < result.joint_waypoints.size() &&
+             result.joint_waypoints[path_start].time + 1e-9 <
+                 result.root_translation_delay)
+      {
+        ++path_start;
+      }
+      ASSERT_NEAR(result.joint_waypoints[path_start].time,
+                  result.root_translation_delay, 1e-8);
+    }
+    ASSERT_LT(path_start, result.joint_waypoints.size() - 1);
+    std::vector<double> cumulative(result.joint_waypoints.size() - path_start, 0.0);
+    for (size_t index = path_start + 1; index < result.joint_waypoints.size(); ++index)
+    {
+      cumulative[index - path_start] = cumulative[index - path_start - 1] +
+          (result.joint_waypoints[index].positions -
+           result.joint_waypoints[index - 1].positions).norm();
     }
     ASSERT_GT(cumulative.back(), 1e-9);
-    for (size_t index = 0; index < result.joint_waypoints.size(); ++index)
+    const double path_start_time = result.joint_waypoints[path_start].time;
+    for (size_t index = path_start; index < result.joint_waypoints.size(); ++index)
     {
-      const double expected_time = result.duration * cumulative[index] / cumulative.back();
+      const double expected_time = path_start_time +
+          (result.duration - path_start_time) *
+              cumulative[index - path_start] / cumulative.back();
       EXPECT_NEAR(result.joint_waypoints[index].time, expected_time, 1e-8);
     }
   }
@@ -240,6 +259,122 @@ TEST_F(WholeBodyJointBridge, PlansEveryFreeSpaceTargetDirection)
               1000.0 * slowest_batch);
   EXPECT_EQ(planned, total) << first_failure;
   EXPECT_LT(slowest_batch, 1.5 * kBatchBudget);
+}
+
+TEST_F(WholeBodyJointBridge, AllocatesCompoundYawPitchBeforeStationaryTranslation)
+{
+  const Eigen::Vector3d start_position(0.0, 0.0, 1.0);
+  const Eigen::Vector3d target_position(2.0, 0.5, 1.4);
+  Eigen::VectorXd start_joints(6);
+  start_joints << 0.0, M_PI_2, 0.0, M_PI_2, 0.0, M_PI_2;
+  JointPlannerConfig config = jointConfig(71);
+  config.planning_timeout = 1.0;
+  TrajectoryHistory history(config.follower);
+  history.append(start_position);
+  const NominalJointContext context = makeNominalJointContext(history, *info_);
+  Eigen::Matrix3d initial_state = Eigen::Matrix3d::Zero();
+  initial_state.col(0) = start_position;
+  Eigen::Matrix3d final_state = Eigen::Matrix3d::Zero();
+  final_state.col(0) = target_position;
+  const std::vector<Candidate> candidates =
+      PrimitiveGenerator(primitive_).generate(initial_state, final_state);
+
+  JointPlanResult result;
+  for (size_t index = 0; index < candidates.size() && !result.success; ++index)
+  {
+    JointTrajectoryPlanner planner(config, evaluator_);
+    result = planner.plan(candidates[index].trajectory, context, start_joints,
+                          RootAttitude(), 1.0);
+  }
+  ASSERT_TRUE(result.success) << result.detail;
+  ASSERT_GT(result.root_translation_delay, 0.0);
+  const RootAttitude allocated = result.attitude(result.root_translation_delay);
+  EXPECT_GT(std::abs(allocated.yaw), 1e-3);
+  EXPECT_GT(std::abs(allocated.pitch), 1e-3);
+
+  for (const TimedJointWaypoint& waypoint : result.joint_waypoints)
+  {
+    if (waypoint.time > result.root_translation_delay + 1e-9)
+    {
+      break;
+    }
+    for (int index = 2; index < waypoint.positions.size(); ++index)
+    {
+      EXPECT_NEAR(waypoint.positions(index), start_joints(index), 1e-10);
+    }
+  }
+  const std::vector<double>& lower = model_->getLinkJointLowerLimits();
+  const std::vector<double>& upper = model_->getLinkJointUpperLimits();
+  const Eigen::VectorXd expected_half =
+      JointTrajectoryPlanner::joint1PriorityConfiguration(
+          start_joints, 0, 1, lower, upper, RootAttitude(), allocated, 0.5);
+  EXPECT_TRUE(result.jointPositions(0.5 * result.root_translation_delay)
+                  .isApprox(expected_half, 1e-9));
+
+  const int samples = 100;
+  for (int sample = 0; sample < samples; ++sample)
+  {
+    const double time = result.root_translation_delay *
+                        (static_cast<double>(sample) + 0.5) / samples;
+    EXPECT_LE(std::abs(result.yawRate(time)), config.follower.max_angular_vel + 1e-9);
+    EXPECT_LE(std::abs(result.pitchRate(time)), config.follower.max_angular_vel + 1e-9);
+  }
+  for (size_t index = 1; index < result.joint_waypoints.size(); ++index)
+  {
+    if (result.joint_waypoints[index].time > result.root_translation_delay + 1e-9)
+    {
+      break;
+    }
+    const TimedJointWaypoint& before = result.joint_waypoints[index - 1];
+    const TimedJointWaypoint& after = result.joint_waypoints[index];
+    const double interval = after.time - before.time;
+    ASSERT_GT(interval, 0.0);
+    const double maximum_rate =
+        (after.positions - before.positions).cwiseAbs().maxCoeff() / interval;
+    EXPECT_LE(maximum_rate, config.follower.max_angular_vel + 1e-9);
+    EXPECT_LE(maximum_rate / config.follower.command_hz,
+              config.max_joint_command_step + 1e-9);
+  }
+}
+
+TEST_F(WholeBodyJointBridge, MovingRetargetKeepsRootBoundaryStateWithoutTimeScaling)
+{
+  const Eigen::Vector3d start_position(0.0, 0.0, 1.0);
+  Eigen::VectorXd start_joints(6);
+  start_joints << 0.0, M_PI_2, 0.0, M_PI_2, 0.0, M_PI_2;
+  JointPlannerConfig config = jointConfig(83);
+  config.planning_timeout = 1.0;
+  TrajectoryHistory history(config.follower);
+  history.append(start_position);
+  const NominalJointContext context = makeNominalJointContext(history, *info_);
+  Eigen::Matrix3d initial_state = Eigen::Matrix3d::Zero();
+  initial_state.col(0) = start_position;
+  initial_state.col(1) = Eigen::Vector3d(0.2, 0.0, 0.0);
+  initial_state.col(2) = Eigen::Vector3d(0.05, 0.0, 0.0);
+  Eigen::Matrix3d final_state = Eigen::Matrix3d::Zero();
+  final_state.col(0) = Eigen::Vector3d(3.0, 0.8, 1.3);
+  const std::vector<Candidate> candidates =
+      PrimitiveGenerator(primitive_).generate(initial_state, final_state);
+
+  JointPlanResult result;
+  const Candidate* selected = nullptr;
+  for (size_t index = 0; index < candidates.size() && !result.success; ++index)
+  {
+    JointTrajectoryPlanner planner(config, evaluator_);
+    result = planner.plan(candidates[index].trajectory, context, start_joints,
+                          RootAttitude(), 1.0);
+    if (result.success)
+    {
+      selected = &candidates[index];
+    }
+  }
+  ASSERT_TRUE(result.success) << result.detail;
+  ASSERT_NE(selected, nullptr);
+  EXPECT_DOUBLE_EQ(result.root_translation_delay, 0.0);
+  EXPECT_DOUBLE_EQ(result.time_scale, 1.0);
+  EXPECT_TRUE(selected->trajectory.getPos(0.0).isApprox(initial_state.col(0), 1e-9));
+  EXPECT_TRUE(selected->trajectory.getVel(0.0).isApprox(initial_state.col(1), 1e-9));
+  EXPECT_TRUE(selected->trajectory.getAcc(0.0).isApprox(initial_state.col(2), 1e-9));
 }
 
 // A straight interpolation between the mirrored folds crosses the infeasible
@@ -412,7 +547,7 @@ TEST_F(WholeBodyJointBridge, ProjectsTerminalAndMapsGlobalRrtAcrossTheRootHorizo
     ASSERT_GT(duration, 0.0);
     const double maximum_rate =
         (after.positions - before.positions).cwiseAbs().maxCoeff() / duration;
-    EXPECT_LE(maximum_rate, config.max_joint_velocity + 1e-9);
+    EXPECT_LE(maximum_rate, config.follower.max_angular_vel + 1e-9);
     EXPECT_LE(maximum_rate / config.follower.command_hz,
               config.max_joint_command_step + 1e-9);
   }
@@ -496,10 +631,9 @@ TEST_F(WholeBodyJointBridge, RejectsCandidateWhenTerminalProjectionFails)
 
   JointPlannerConfig config = jointConfig(47);
   config.planning_timeout = 1.0;
-  // With no yaw-rate clamp, a deliberately non-finite terminal velocity makes
-  // the terminal stability frame invalid and forces the shared QP to reject its
-  // otherwise safe reference. This exercises the candidate-level failure path.
-  config.follower.max_yaw_rate = 0.0;
+  // A deliberately non-finite terminal velocity makes the terminal stability
+  // frame invalid and forces the shared QP to reject its otherwise safe
+  // reference. This exercises the candidate-level failure path.
   TrajectoryHistory history(config.follower);
   history.append(start_position);
   const NominalJointContext context = makeNominalJointContext(history, *info_);
@@ -518,7 +652,7 @@ TEST_F(WholeBodyJointBridge, RejectsCandidateWhenTerminalProjectionFails)
   const JointPlanResult result =
       planner.plan(malformed_root, context, start_joints, 0.0, 1.0);
   EXPECT_FALSE(result.success);
-  EXPECT_EQ(result.detail, "terminal joint configuration could not be repaired");
+  EXPECT_EQ(result.detail, "failed to build nominal follow-the-leader joint samples");
 }
 }  // namespace
 }  // namespace motion_primitive_planner

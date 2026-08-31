@@ -29,7 +29,6 @@ struct JointPlannerConfig
   //! Total per-candidate joint-planning budget.
   double planning_timeout = 0.15;
   double validity_resolution = 0.025;
-  double max_joint_velocity = 4.0;
   double max_joint_command_step = 0.10;
   unsigned int random_seed = 1;
 };
@@ -40,19 +39,21 @@ struct TimedJointWaypoint
   Eigen::VectorXd positions;
 };
 
-struct TimedYawWaypoint
+struct TimedRootAttitudeWaypoint
 {
   double time = 0.0;
-  double yaw = 0.0;
+  RootAttitude attitude;
 };
 
 struct JointPlanResult
 {
   bool success = false;
   std::vector<TimedJointWaypoint> joint_waypoints;
-  std::vector<TimedYawWaypoint> yaw_waypoints;
+  std::vector<TimedRootAttitudeWaypoint> attitude_waypoints;
   double duration = 0.0;
   double time_scale = 1.0;
+  //! Duration for which the root-tail translation remains at trajectory time zero.
+  double root_translation_delay = 0.0;
   double minimum_fc_rp = 0.0;
   double joint_motion = 0.0;
   //! RMS distance over time and downstream link tails from the root-tail trace.
@@ -63,8 +64,13 @@ struct JointPlanResult
 
   Eigen::VectorXd jointPositions(double time) const;
   Eigen::VectorXd jointVelocities(double time) const;
+  RootAttitude attitude(double time) const;
+  Eigen::Matrix3d rootLinkRotation(double time) const;
+  Eigen::Vector3d angularVelocity(double time) const;
   double yaw(double time) const;
   double yawRate(double time) const;
+  double pitch(double time) const;
+  double pitchRate(double time) const;
 };
 
 class JointTrajectoryPlanner
@@ -78,8 +84,30 @@ public:
   JointPlanResult plan(const Trajectory<5>& root_trajectory,
                        const NominalJointContext& nominal_context,
                        const Eigen::VectorXd& start_joint_positions,
-                       double start_yaw,
+                       const RootAttitude& start_attitude,
                        double time_budget = 0.0);
+
+  JointPlanResult plan(const Trajectory<5>& root_trajectory,
+                       const NominalJointContext& nominal_context,
+                       const Eigen::VectorXd& start_joint_positions,
+                       double start_yaw,
+                       double time_budget = 0.0)
+  {
+    return plan(root_trajectory, nominal_context, start_joint_positions,
+                RootAttitude{start_yaw, 0.0}, time_budget);
+  }
+
+  //! Applies the deterministic joint1-priority prefix at a normalized attitude
+  //! progress. Only joint1 pitch/yaw may change; model limits are authoritative.
+  static Eigen::VectorXd joint1PriorityConfiguration(
+      const Eigen::VectorXd& start_joint_positions,
+      int joint1_pitch_index,
+      int joint1_yaw_index,
+      const std::vector<double>& lower_limits,
+      const std::vector<double>& upper_limits,
+      const RootAttitude& start_attitude,
+      const RootAttitude& goal_attitude,
+      double progress);
 
   bool planStableConnection(const Eigen::VectorXd& start_joint_positions,
                             const Eigen::VectorXd& goal_joint_positions,
@@ -94,21 +122,23 @@ private:
   struct NominalSample
   {
     double time = 0.0;
-    double yaw = 0.0;
+    RootAttitude attitude;
     Eigen::VectorXd joints;
   };
 
   std::vector<NominalSample> buildNominalSamples(const Trajectory<5>& root_trajectory,
                                                  const NominalJointContext& context,
                                                  const Eigen::VectorXd& start_joints,
-                                                 double start_yaw);
+                                                 const RootAttitude& start_attitude,
+                                                 double trajectory_start_time = 0.0,
+                                                 double output_time_offset = 0.0);
 
   bool chainIsSafe(const std::vector<Eigen::VectorXd>& chain, double start_yaw, double goal_yaw,
                    double& minimum_fc_rp);
   //! Greedy corner removal on a sampled path; the result is subsequently
-  //! re-validated against the complete time-varying root-yaw schedule.
+  //! re-validated against the complete time-varying root-attitude schedule.
   std::vector<Eigen::VectorXd> shortcutChain(const std::vector<Eigen::VectorXd>& chain,
-                                             double root_yaw);
+                                             const Eigen::Matrix3d& root_link_rotation);
 
   bool edgeInteriorIsSafe(const Eigen::VectorXd& start,
                           const Eigen::VectorXd& goal,
@@ -119,12 +149,19 @@ private:
   bool budgetExpired() const;
   bool searchJointPath(const Eigen::VectorXd& start,
                        const Eigen::VectorXd& goal,
-                       double yaw,
+                       const Eigen::Matrix3d& root_link_rotation,
                        const Clock::time_point& deadline,
                        std::vector<Eigen::VectorXd>& path);
   bool configurationIsSafe(const Eigen::VectorXd& joints, double yaw,
                            multilink_copilot::StabilityMetrics* metrics = nullptr);
-  static double nominalYawAt(const std::vector<NominalSample>& samples, double time);
+  bool configurationIsSafe(const Eigen::VectorXd& joints,
+                           const RootAttitude& attitude,
+                           multilink_copilot::StabilityMetrics* metrics = nullptr);
+  bool configurationIsSafe(const Eigen::VectorXd& joints,
+                           const Eigen::Matrix3d& root_link_rotation,
+                           multilink_copilot::StabilityMetrics* metrics = nullptr);
+  static RootAttitude nominalAttitudeAt(const std::vector<NominalSample>& samples,
+                                        double time);
   bool timedConfigurationPathIsSafe(const TimedJointWaypoint& start,
                                     const TimedJointWaypoint& goal,
                                     const std::vector<NominalSample>& nominal,
@@ -135,7 +172,7 @@ private:
                             JointPlanResult& result) const;
   bool repairEndpoint(const Eigen::VectorXd& desired,
                       const Eigen::VectorXd& reference,
-                      double yaw,
+                      const RootAttitude& attitude,
                       bool allow_unstable_seed,
                       Eigen::VectorXd& repaired);
 

@@ -23,7 +23,7 @@ TrajectorySampleInterval: 0.05
 TrajectoryBufferMaxLength: 10.0
 SnakeIkSingularityThreshold: 0.10
 PublishYawCommand: true
-MaxYawRate: 1.5
+MaxAngularVel: 1.0
 
 # Shared flight-feasibility constraints.
 FeasibilityTolerance: 1.0e-4

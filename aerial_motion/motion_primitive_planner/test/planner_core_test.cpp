@@ -78,6 +78,9 @@ TEST(SharedPlannerConfig, RejectsInvalidSharedAndFollowerParameters)
   FollowerConfig follower;
   follower.command_hz = 0.0;
   EXPECT_THROW(follower.validateOrThrow(), std::invalid_argument);
+  follower = FollowerConfig();
+  follower.max_angular_vel = -0.1;
+  EXPECT_THROW(follower.validateOrThrow(), std::invalid_argument);
 }
 
 TEST(TrajectoryReplanTrigger, FiresOnceAtConfiguredExecutionRatio)
@@ -653,28 +656,42 @@ TEST(WholeBodyCandidateSelector, ChargesWorkspaceTrackingError)
 
 TEST(FullStateConversion, ConvertsFluTailPoseAndTwistToRootLinkOrigin)
 {
+  const RootAttitude attitude{0.0, -M_PI / 6.0};
+  const Eigen::Matrix3d tail_rotation = fluRotation(attitude);
+  const Eigen::Vector3d angular_velocity = worldAngularVelocity(attitude, 0.5, -0.2);
   const RootCommandKinematics command = tailFluToRootLinkCommand(
-      Eigen::Vector3d(1.0, 2.0, 3.0), Eigen::Vector3d(0.4, -0.2, 0.1), 0.0, 0.5, 2.0);
-  EXPECT_NEAR(command.yaw, M_PI, 1e-12);
-  EXPECT_NEAR(command.yaw_rate, 0.5, 1e-12);
-  EXPECT_TRUE(command.position.isApprox(Eigen::Vector3d(3.0, 2.0, 3.0), 1e-12));
-  EXPECT_TRUE(command.linear_velocity.isApprox(Eigen::Vector3d(0.4, 0.8, 0.1), 1e-12));
+      Eigen::Vector3d(1.0, 2.0, 3.0), Eigen::Vector3d(0.4, -0.2, 0.1),
+      tail_rotation, angular_velocity, 2.0);
+  const Eigen::Matrix3d link_rotation = linkRotation(attitude);
+  const Eigen::Vector3d link_direction = link_rotation.col(0);
+  EXPECT_TRUE(command.orientation.toRotationMatrix().isApprox(link_rotation, 1e-12));
+  EXPECT_TRUE(command.angular_velocity.isApprox(angular_velocity, 1e-12));
+  EXPECT_TRUE(command.position.isApprox(
+      Eigen::Vector3d(1.0, 2.0, 3.0) - 2.0 * link_direction, 1e-12));
+  EXPECT_TRUE(command.linear_velocity.isApprox(
+      Eigen::Vector3d(0.4, -0.2, 0.1) -
+          2.0 * angular_velocity.cross(link_direction), 1e-12));
 }
 
-TEST(JointPlanResult, InterpolatesSynchronizedPositionVelocityAndYaw)
+TEST(JointPlanResult, InterpolatesSynchronizedPositionVelocityAndAttitude)
 {
   JointPlanResult result;
   result.success = true;
   result.duration = 2.0;
   result.joint_waypoints = {{0.0, Eigen::Vector2d(0.0, 0.0)},
                             {2.0, Eigen::Vector2d(2.0, -4.0)}};
-  result.yaw_waypoints = {{0.0, -0.5}, {2.0, 0.5}};
+  result.attitude_waypoints = {{0.0, RootAttitude{-0.5, -0.2}},
+                               {2.0, RootAttitude{0.5, 0.2}}};
   EXPECT_TRUE(result.jointPositions(1.0).isApprox(Eigen::Vector2d(1.0, -2.0), 1e-12));
   EXPECT_TRUE(result.jointVelocities(1.0).isApprox(Eigen::Vector2d(1.0, -2.0), 1e-12));
   EXPECT_NEAR(result.yaw(1.0), 0.0, 1e-12);
   EXPECT_NEAR(result.yawRate(1.0), 0.5, 1e-12);
+  EXPECT_NEAR(result.pitch(1.0), 0.0, 1e-12);
+  EXPECT_NEAR(result.pitchRate(1.0), 0.2, 1e-12);
+  EXPECT_TRUE(result.angularVelocity(1.0).isApprox(Eigen::Vector3d(0.0, 0.2, 0.5), 1e-12));
   EXPECT_TRUE(result.jointVelocities(2.0).isZero(1e-12));
   EXPECT_NEAR(result.yawRate(2.0), 0.0, 1e-12);
+  EXPECT_NEAR(result.pitchRate(2.0), 0.0, 1e-12);
 }
 
 TEST(JointPlanResult, InterpolatesYawAcrossWrapBoundaryOnShortestArc)
@@ -682,12 +699,14 @@ TEST(JointPlanResult, InterpolatesYawAcrossWrapBoundaryOnShortestArc)
   JointPlanResult result;
   result.success = true;
   result.duration = 2.0;
-  result.yaw_waypoints = {{0.0, M_PI - 0.1}, {2.0, -M_PI + 0.1}};
+  result.attitude_waypoints = {{0.0, RootAttitude{M_PI - 0.1, 0.0}},
+                               {2.0, RootAttitude{-M_PI + 0.1, 0.0}}};
 
   EXPECT_NEAR(result.yaw(1.0), M_PI, 1e-12);
   EXPECT_NEAR(result.yawRate(1.0), 0.1, 1e-12);
 
-  result.yaw_waypoints = {{0.0, -M_PI + 0.1}, {2.0, M_PI - 0.1}};
+  result.attitude_waypoints = {{0.0, RootAttitude{-M_PI + 0.1, 0.0}},
+                               {2.0, RootAttitude{M_PI - 0.1, 0.0}}};
   EXPECT_NEAR(result.yaw(1.0), -M_PI, 1e-12);
   EXPECT_NEAR(result.yawRate(1.0), -0.1, 1e-12);
 }
@@ -710,10 +729,130 @@ TEST(TrajectoryHistory, SamplesAndTrimsByArcLength)
 TEST(FollowerYaw, RespectsRateLimitAndPublishSwitch)
 {
   FollowerConfig config;
-  config.max_yaw_rate = 1.0;
+  config.max_angular_vel = 1.0;
   EXPECT_NEAR(advanceYaw(0.0, Eigen::Vector3d(0.0, 1.0, 0.0), 0.1, config), 0.1, 1e-12);
   config.publish_yaw_command = false;
   EXPECT_NEAR(advanceYaw(0.4, Eigen::Vector3d(0.0, 1.0, 0.0), 1.0, config), 0.4, 1e-12);
+}
+
+TEST(RootAttitude, ConvertsThreeDimensionalTangentAndHandlesDegenerateVelocity)
+{
+  const RootAttitude fallback{0.7, 0.2};
+  RootAttitude target = tangentAttitude(Eigen::Vector3d(0.0, 2.0, 0.0), fallback);
+  EXPECT_NEAR(target.yaw, M_PI_2, 1e-12);
+  EXPECT_NEAR(target.pitch, 0.0, 1e-12);
+
+  target = tangentAttitude(Eigen::Vector3d(1.0, 0.0, 1.0), fallback);
+  EXPECT_NEAR(target.yaw, 0.0, 1e-12);
+  EXPECT_NEAR(target.pitch, -M_PI_4, 1e-12);
+
+  target = tangentAttitude(Eigen::Vector3d(0.0, 0.0, 1.0), fallback);
+  EXPECT_NEAR(target.yaw, fallback.yaw, 1e-12);
+  EXPECT_NEAR(target.pitch, -M_PI_2, 1e-12);
+
+  target = tangentAttitude(Eigen::Vector3d(1e-4, 0.0, 0.0), fallback);
+  EXPECT_NEAR(target.yaw, fallback.yaw, 1e-12);
+  EXPECT_NEAR(target.pitch, fallback.pitch, 1e-12);
+}
+
+TEST(RootAttitude, AdvancesYawAndPitchWithSharedAngularVelocityLimit)
+{
+  FollowerConfig config;
+  config.max_angular_vel = 0.5;
+  const RootAttitude advanced = advanceRootAttitude(
+      RootAttitude{0.0, 0.0}, Eigen::Vector3d(0.0, 1.0, 1.0), 0.1,
+      config, true);
+  EXPECT_NEAR(advanced.yaw, 0.05, 1e-12);
+  EXPECT_NEAR(advanced.pitch, -0.05, 1e-12);
+}
+
+TEST(Joint1PriorityAllocation, KeepsDownstreamEndpointsFixedBeforeSaturation)
+{
+  Eigen::VectorXd start = Eigen::VectorXd::Zero(6);
+  start(0) = 0.4;
+  start(1) = 0.3;
+  start(3) = -0.2;
+  start(5) = 0.5;
+  const std::vector<double> lower(6, -2.0);
+  const std::vector<double> upper(6, 2.0);
+  const std::vector<int> pitch_indices{0, 2, 4};
+  const std::vector<int> yaw_indices{1, 3, 5};
+  const Eigen::Vector3d tail(0.2, -0.3, 1.1);
+
+  Eigen::VectorXd yaw_start_joints = start;
+  yaw_start_joints(0) = 0.0;
+  const RootAttitude yaw_start{0.0, 0.0};
+  const RootAttitude yaw_goal{0.2, 0.0};
+  const Eigen::VectorXd yaw_joints =
+      JointTrajectoryPlanner::joint1PriorityConfiguration(
+          yaw_start_joints, 0, 1, lower, upper, yaw_start, yaw_goal, 1.0);
+  EXPECT_NEAR(yaw_joints(1), yaw_start_joints(1) - 0.2, 1e-12);
+  for (int index : {0, 2, 3, 4, 5})
+  {
+    EXPECT_DOUBLE_EQ(yaw_joints(index), yaw_start_joints(index));
+  }
+  const std::vector<Eigen::Vector3d> yaw_before = linkEndpoints(
+      tail, linkRotation(yaw_start), yaw_start_joints,
+      pitch_indices, yaw_indices, 4, 0.6);
+  const std::vector<Eigen::Vector3d> yaw_after = linkEndpoints(
+      tail, linkRotation(yaw_goal), yaw_joints, pitch_indices, yaw_indices, 4, 0.6);
+  ASSERT_EQ(yaw_before.size(), yaw_after.size());
+  for (size_t index = 2; index < yaw_before.size(); ++index)
+  {
+    EXPECT_TRUE(yaw_after[index].isApprox(yaw_before[index], 1e-12));
+  }
+
+  Eigen::VectorXd pitch_start_joints = start;
+  pitch_start_joints(1) = 0.0;
+  const RootAttitude pitch_start{0.0, -0.1};
+  const RootAttitude pitch_goal{0.0, 0.2};
+  const Eigen::VectorXd pitch_joints =
+      JointTrajectoryPlanner::joint1PriorityConfiguration(
+          pitch_start_joints, 0, 1, lower, upper,
+          pitch_start, pitch_goal, 1.0);
+  EXPECT_NEAR(pitch_joints(0), pitch_start_joints(0) + 0.3, 1e-12);
+  for (int index : {1, 2, 3, 4, 5})
+  {
+    EXPECT_DOUBLE_EQ(pitch_joints(index), pitch_start_joints(index));
+  }
+  const std::vector<Eigen::Vector3d> pitch_before = linkEndpoints(
+      tail, linkRotation(pitch_start), pitch_start_joints,
+      pitch_indices, yaw_indices, 4, 0.6);
+  const std::vector<Eigen::Vector3d> pitch_after = linkEndpoints(
+      tail, linkRotation(pitch_goal), pitch_joints,
+      pitch_indices, yaw_indices, 4, 0.6);
+  ASSERT_EQ(pitch_before.size(), pitch_after.size());
+  for (size_t index = 2; index < pitch_before.size(); ++index)
+  {
+    EXPECT_TRUE(pitch_after[index].isApprox(pitch_before[index], 1e-12));
+  }
+}
+
+TEST(Joint1PriorityAllocation, SaturatesEachAxisAndLeavesOtherJointsUnchanged)
+{
+  Eigen::VectorXd start = Eigen::VectorXd::Zero(6);
+  start(0) = 0.4;
+  start(1) = 0.2;
+  const std::vector<double> lower(6, -0.5);
+  const std::vector<double> upper(6, 0.5);
+  const RootAttitude attitude_start{0.0, 0.0};
+  const RootAttitude attitude_goal{1.0, 0.4};
+
+  const Eigen::VectorXd halfway =
+      JointTrajectoryPlanner::joint1PriorityConfiguration(
+          start, 0, 1, lower, upper, attitude_start, attitude_goal, 0.5);
+  EXPECT_NEAR(halfway(0), 0.5, 1e-12);
+  EXPECT_NEAR(halfway(1), -0.3, 1e-12);
+
+  const Eigen::VectorXd complete =
+      JointTrajectoryPlanner::joint1PriorityConfiguration(
+          start, 0, 1, lower, upper, attitude_start, attitude_goal, 1.0);
+  EXPECT_NEAR(complete(0), 0.5, 1e-12);
+  EXPECT_NEAR(complete(1), -0.5, 1e-12);
+  for (int index = 2; index < complete.size(); ++index)
+  {
+    EXPECT_DOUBLE_EQ(complete(index), start(index));
+  }
 }
 
 TEST(NominalJointPredictor, PreservesHandoverStateAndUsesSharedFollowerGeometry)

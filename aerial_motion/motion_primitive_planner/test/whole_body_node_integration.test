@@ -12,5 +12,5 @@
         <arg name="use_accumulated_map" value="false" />
     </include>
     <test test-name="whole_body_node_integration_test" pkg="motion_primitive_planner"
-          type="whole_body_node_integration_test" time-limit="60.0" />
+          type="whole_body_node_integration_test" time-limit="90.0" />
 </launch>

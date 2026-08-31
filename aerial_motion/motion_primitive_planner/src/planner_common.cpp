@@ -45,7 +45,7 @@ FollowerConfig FollowerConfig::fromRos(const ros::NodeHandle& private_nh)
                    config.trajectory_buffer_max_length);
   private_nh.param("SnakeIkSingularityThreshold", config.ik_singularity_threshold,
                    config.ik_singularity_threshold);
-  private_nh.param("MaxYawRate", config.max_yaw_rate, config.max_yaw_rate);
+  private_nh.param("MaxAngularVel", config.max_angular_vel, config.max_angular_vel);
   private_nh.param("PublishYawCommand", config.publish_yaw_command, config.publish_yaw_command);
   config.validateOrThrow();
   return config;
@@ -57,7 +57,7 @@ void FollowerConfig::validateOrThrow() const
       !std::isfinite(trajectory_sample_interval) || trajectory_sample_interval <= 0.0 ||
       !std::isfinite(trajectory_buffer_max_length) || trajectory_buffer_max_length <= 0.0 ||
       !std::isfinite(ik_singularity_threshold) || ik_singularity_threshold < 0.0 ||
-      !std::isfinite(max_yaw_rate) || max_yaw_rate < 0.0)
+      !std::isfinite(max_angular_vel) || max_angular_vel <= 0.0)
   {
     throw std::invalid_argument("Invalid follow-the-leader configuration");
   }
@@ -132,6 +132,104 @@ double yawFromQuaternion(const geometry_msgs::Quaternion& quaternion)
   return yawFromQuaternion(Eigen::Quaterniond(quaternion.w, quaternion.x, quaternion.y, quaternion.z));
 }
 
+RootAttitude rootAttitudeFromQuaternion(const Eigen::Quaterniond& quaternion)
+{
+  RootAttitude attitude;
+  if (quaternion.norm() < kEpsilon)
+  {
+    return attitude;
+  }
+  const Eigen::Quaterniond q = quaternion.normalized();
+  attitude.yaw = yawFromQuaternion(q);
+  const double sine_pitch = 2.0 * (q.w() * q.y() - q.z() * q.x());
+  attitude.pitch = std::asin(std::max(-1.0, std::min(1.0, sine_pitch)));
+  return attitude;
+}
+
+RootAttitude rootAttitudeFromQuaternion(const geometry_msgs::Quaternion& quaternion)
+{
+  return rootAttitudeFromQuaternion(
+      Eigen::Quaterniond(quaternion.w, quaternion.x, quaternion.y, quaternion.z));
+}
+
+RootAttitude tangentAttitude(const Eigen::Vector3d& velocity,
+                             const RootAttitude& fallback)
+{
+  RootAttitude target = fallback;
+  if (!velocity.allFinite() || velocity.norm() <= 1e-3)
+  {
+    return target;
+  }
+  const double horizontal_speed = velocity.head<2>().norm();
+  if (horizontal_speed > 1e-6)
+  {
+    target.yaw = std::atan2(velocity.y(), velocity.x());
+  }
+  target.pitch = -std::atan2(velocity.z(), horizontal_speed);
+  return target;
+}
+
+RootAttitude interpolateRootAttitude(const RootAttitude& start,
+                                     const RootAttitude& goal,
+                                     double ratio)
+{
+  const double clamped_ratio = std::max(0.0, std::min(1.0, ratio));
+  RootAttitude result;
+  result.yaw = start.yaw + clamped_ratio * shortestYawDelta(start.yaw, goal.yaw);
+  result.pitch = start.pitch + clamped_ratio * (goal.pitch - start.pitch);
+  return result;
+}
+
+RootAttitude advanceRootAttitude(const RootAttitude& current,
+                                 const Eigen::Vector3d& velocity,
+                                 double dt,
+                                 const FollowerConfig& config,
+                                 bool command_pitch)
+{
+  if (dt <= 0.0 || velocity.norm() <= 1e-3)
+  {
+    return current;
+  }
+  RootAttitude target = tangentAttitude(velocity, current);
+  RootAttitude result = current;
+  if (config.publish_yaw_command)
+  {
+    double yaw_delta = shortestYawDelta(current.yaw, target.yaw);
+    const double limit = config.max_angular_vel * dt;
+    yaw_delta = std::max(-limit, std::min(limit, yaw_delta));
+    result.yaw = std::remainder(current.yaw + yaw_delta, 2.0 * M_PI);
+  }
+  if (command_pitch)
+  {
+    double pitch_delta = target.pitch - current.pitch;
+    const double limit = config.max_angular_vel * dt;
+    pitch_delta = std::max(-limit, std::min(limit, pitch_delta));
+    result.pitch = current.pitch + pitch_delta;
+  }
+  return result;
+}
+
+Eigen::Matrix3d fluRotation(const RootAttitude& attitude)
+{
+  return (Eigen::AngleAxisd(attitude.yaw, Eigen::Vector3d::UnitZ()) *
+          Eigen::AngleAxisd(attitude.pitch, Eigen::Vector3d::UnitY())).toRotationMatrix();
+}
+
+Eigen::Matrix3d linkRotation(const RootAttitude& attitude)
+{
+  return fluRotation(attitude) *
+      Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+}
+
+Eigen::Vector3d worldAngularVelocity(const RootAttitude& attitude,
+                                     double yaw_rate,
+                                     double pitch_rate)
+{
+  return Eigen::Vector3d(-pitch_rate * std::sin(attitude.yaw),
+                         pitch_rate * std::cos(attitude.yaw),
+                         yaw_rate);
+}
+
 double advanceYaw(double current_yaw, const Eigen::Vector3d& velocity, double dt,
                   const FollowerConfig& config)
 {
@@ -140,11 +238,8 @@ double advanceYaw(double current_yaw, const Eigen::Vector3d& velocity, double dt
     return current_yaw;
   }
   double difference = std::remainder(std::atan2(velocity.y(), velocity.x()) - current_yaw, 2.0 * M_PI);
-  if (config.max_yaw_rate > 0.0)
-  {
-    const double limit = config.max_yaw_rate * dt;
-    difference = std::max(-limit, std::min(limit, difference));
-  }
+  const double limit = config.max_angular_vel * dt;
+  difference = std::max(-limit, std::min(limit, difference));
   return std::remainder(current_yaw + difference, 2.0 * M_PI);
 }
 
@@ -274,41 +369,61 @@ std::vector<NominalJointSample> NominalJointPredictor::predict(
     const Trajectory<5>& root_trajectory, const NominalJointContext& context,
     const Eigen::VectorXd& start_joints, double start_yaw, double sample_dt) const
 {
+  return predict(root_trajectory, context, start_joints,
+                 RootAttitude{start_yaw, 0.0}, sample_dt, false);
+}
+
+std::vector<NominalJointSample> NominalJointPredictor::predict(
+    const Trajectory<5>& root_trajectory, const NominalJointContext& context,
+    const Eigen::VectorXd& start_joints, const RootAttitude& start_attitude,
+    double sample_dt, bool command_pitch, double trajectory_start_time,
+    double output_time_offset) const
+{
   std::vector<NominalJointSample> samples;
   if (root_trajectory.getPieceNum() <= 0 || sample_dt <= 0.0 || context.link_num <= 0 ||
-      context.link_length <= 0.0 || start_joints.size() <= 0)
+      context.link_length <= 0.0 || start_joints.size() <= 0 ||
+      trajectory_start_time < 0.0 || output_time_offset < 0.0)
   {
     return samples;
   }
 
   TrajectoryHistory history = context.executed_history;
   Eigen::VectorXd predicted_joints = start_joints;
-  double yaw = start_yaw;
+  RootAttitude attitude = start_attitude;
   const double duration = root_trajectory.getTotalDuration();
-  if (!std::isfinite(duration) || duration < 0.0)
+  if (!std::isfinite(duration) || duration < 0.0 || trajectory_start_time > duration + kEpsilon)
   {
     return samples;
   }
-  const int sample_count = duration > kEpsilon
-                               ? std::max(1, static_cast<int>(std::ceil(duration / sample_dt)))
+  const double remaining_duration = std::max(0.0, duration - trajectory_start_time);
+  const int sample_count = remaining_duration > kEpsilon
+                               ? std::max(1, static_cast<int>(std::ceil(remaining_duration / sample_dt)))
                                : 0;
   const double required_history = static_cast<double>(context.link_num - 1) * context.link_length;
-  const Eigen::Vector3d initial_root_tail = root_trajectory.getPos(0.0);
-  const Eigen::Matrix3d initial_root_rotation =
-      Eigen::AngleAxisd(start_yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  const Eigen::Vector3d initial_root_tail = root_trajectory.getPos(trajectory_start_time);
+  const Eigen::Matrix3d initial_root_rotation = linkRotation(start_attitude);
   samples.reserve(static_cast<size_t>(sample_count + 1));
 
-  double previous_time = 0.0;
+  double previous_trajectory_time = trajectory_start_time;
   for (int sample_index = 0; sample_index <= sample_count; ++sample_index)
   {
-    const double time = sample_count > 0
-                            ? duration * static_cast<double>(sample_index) / sample_count
-                            : 0.0;
-    const Eigen::Vector3d position = root_trajectory.getPos(time);
-    const Eigen::Vector3d velocity = root_trajectory.getVel(time);
+    const double trajectory_time = sample_count > 0
+                                       ? trajectory_start_time + remaining_duration *
+                                           static_cast<double>(sample_index) / sample_count
+                                       : trajectory_start_time;
+    const double output_time = output_time_offset + trajectory_time - trajectory_start_time;
+    const Eigen::Vector3d position = root_trajectory.getPos(trajectory_time);
+    const Eigen::Vector3d velocity = root_trajectory.getVel(trajectory_time);
+    if (!position.allFinite() || !velocity.allFinite())
+    {
+      samples.clear();
+      return samples;
+    }
     if (sample_index > 0)
     {
-      yaw = advanceYaw(yaw, velocity, time - previous_time, config_);
+      attitude = advanceRootAttitude(attitude, velocity,
+                                    trajectory_time - previous_trajectory_time,
+                                    config_, command_pitch);
     }
     const bool history_changed = history.append(position);
 
@@ -316,8 +431,7 @@ std::vector<NominalJointSample> NominalJointPredictor::predict(
     // later samples use the same FTL reconstruction in both planner modes.
     if (sample_index > 0)
     {
-      const Eigen::Matrix3d root_rotation =
-          Eigen::AngleAxisd(yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+      const Eigen::Matrix3d root_rotation = linkRotation(attitude);
       const std::deque<multilink_copilot::TrajectoryPoint> nominal_history =
           history.arcLength() < required_history
               ? multilink_copilot::follow_the_leader::prependCurrentBodyMorphology(
@@ -336,8 +450,9 @@ std::vector<NominalJointSample> NominalJointPredictor::predict(
             config_.ik_singularity_threshold, predicted_joints);
       }
     }
-    samples.push_back({time, yaw, position, predicted_joints, history_changed});
-    previous_time = time;
+    samples.push_back({output_time, attitude.yaw, attitude.pitch, position,
+                       predicted_joints, history_changed});
+    previous_trajectory_time = trajectory_time;
   }
   return samples;
 }

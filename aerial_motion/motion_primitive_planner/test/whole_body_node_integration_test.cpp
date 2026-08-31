@@ -46,6 +46,8 @@ protected:
         std::pow(message->root_state.twist.twist.linear.x, 2) +
         std::pow(message->root_state.twist.twist.linear.y, 2) +
         std::pow(message->root_state.twist.twist.linear.z, 2) +
+        std::pow(message->root_state.twist.twist.angular.x, 2) +
+        std::pow(message->root_state.twist.twist.angular.y, 2) +
         std::pow(message->root_state.twist.twist.angular.z, 2));
     bool stopped = root_speed < 1e-6;
     for (const double velocity : message->joint_state.velocity)
@@ -212,7 +214,7 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
   int selections_after_first_goal = 0;
   ros::WallTime blocking_cloud_wall_time;
   ros::WallTime second_goal_wall_time;
-  while (ros::ok() && (ros::WallTime::now() - start).toSec() < 30.0)
+  while (ros::ok() && (ros::WallTime::now() - start).toSec() < 60.0)
   {
     const ros::WallTime now = ros::WallTime::now();
     if (!first_goal_published && (now - start).toSec() > 1.0)

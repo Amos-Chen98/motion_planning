@@ -4,7 +4,6 @@ JointReferenceDt: 0.10
 JointPlanningTimeout: 0.15
 JointValidityResolution: 0.025
 JointPlannerSeed: 1
-MaxJointVelocity: 4.0
 MaxJointCommandStep: 0.10
 # Equivalent seconds charged per radian when ranking feasible whole-body plans.
 JointMotionCostWeight: 0.25

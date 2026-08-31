@@ -51,8 +51,10 @@ public:
         nhPriv.param("GravAcc", gravAcc, 9.8);
         nhPriv.param("CommandHz", commandHz, 40.0);
         nhPriv.param("PublishYawCommand", publishYawCommand, false);
-        // Upper bound on commanded yaw rate [rad/s]; <= 0 disables limiting.
+        // The root-only motion-primitive launch supplies the shared angular limit;
+        // keep MaxYawRate as a compatibility fallback for standalone GCOPTER launches.
         nhPriv.param("MaxYawRate", maxYawRate, 0.0);
+        nhPriv.param("MaxAngularVel", maxYawRate, maxYawRate);
         nhPriv.param<std::string>("WorldFrameId", worldFrameId, "world");
 
         flatmap.reset(gravAcc);

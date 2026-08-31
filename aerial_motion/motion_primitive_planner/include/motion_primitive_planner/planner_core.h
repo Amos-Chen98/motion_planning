@@ -81,8 +81,8 @@ struct RootCommandKinematics
 {
   Eigen::Vector3d position = Eigen::Vector3d::Zero();
   Eigen::Vector3d linear_velocity = Eigen::Vector3d::Zero();
-  double yaw = 0.0;
-  double yaw_rate = 0.0;
+  Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
+  Eigen::Vector3d angular_velocity = Eigen::Vector3d::Zero();
 };
 
 class TrajectoryReplanTrigger
@@ -141,8 +141,8 @@ int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& can
 
 RootCommandKinematics tailFluToRootLinkCommand(const Eigen::Vector3d& tail_position,
                                                 const Eigen::Vector3d& tail_velocity,
-                                                double tail_yaw,
-                                                double tail_yaw_rate,
+                                                const Eigen::Matrix3d& tail_flu_rotation,
+                                                const Eigen::Vector3d& angular_velocity,
                                                 double link_length);
 
 std::vector<Eigen::Vector3d> linkEndpoints(const Eigen::Vector3d& link1_tail,

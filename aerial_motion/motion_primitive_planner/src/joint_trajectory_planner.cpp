@@ -38,19 +38,19 @@ size_t upperWaypointIndex(const std::vector<Waypoint>& waypoints, double time)
   return static_cast<size_t>(std::distance(waypoints.begin(), upper));
 }
 
-double interpolateYaw(double start, double goal, double ratio)
-{
-  return start + ratio * shortestYawDelta(start, goal);
-}
-
 std::chrono::steady_clock::duration toDuration(double seconds)
 {
   return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
       std::chrono::duration<double>(seconds));
 }
 
+double interpolateYaw(double start, double goal, double ratio)
+{
+  return start + ratio * shortestYawDelta(start, goal);
+}
+
 //! Normalized distances of the chain vertices along the chain, used both for
-//! root-yaw interpolation and for time allocation.
+//! root-attitude interpolation and for time allocation.
 std::vector<double> chainRatios(const std::vector<Eigen::VectorXd>& chain)
 {
   std::vector<double> ratios(chain.size(), 0.0);
@@ -179,43 +179,86 @@ Eigen::VectorXd JointPlanResult::jointVelocities(double time) const
   return (after.positions - before.positions) / duration;
 }
 
-double JointPlanResult::yaw(double time) const
+RootAttitude JointPlanResult::attitude(double time) const
 {
-  if (yaw_waypoints.empty())
+  if (attitude_waypoints.empty())
   {
-    return 0.0;
+    return RootAttitude();
   }
-  if (time <= yaw_waypoints.front().time)
+  if (time <= attitude_waypoints.front().time)
   {
-    return yaw_waypoints.front().yaw;
+    return attitude_waypoints.front().attitude;
   }
-  const size_t upper = upperWaypointIndex(yaw_waypoints, time);
-  if (upper >= yaw_waypoints.size())
+  const size_t upper = upperWaypointIndex(attitude_waypoints, time);
+  if (upper >= attitude_waypoints.size())
   {
-    return yaw_waypoints.back().yaw;
+    return attitude_waypoints.back().attitude;
   }
-  const TimedYawWaypoint& before = yaw_waypoints[upper - 1];
-  const TimedYawWaypoint& after = yaw_waypoints[upper];
+  const TimedRootAttitudeWaypoint& before = attitude_waypoints[upper - 1];
+  const TimedRootAttitudeWaypoint& after = attitude_waypoints[upper];
   const double duration = after.time - before.time;
   const double ratio = duration > kEpsilon ? (time - before.time) / duration : 1.0;
-  return interpolateYaw(before.yaw, after.yaw, ratio);
+  return interpolateRootAttitude(before.attitude, after.attitude, ratio);
+}
+
+Eigen::Matrix3d JointPlanResult::rootLinkRotation(double time) const
+{
+  return linkRotation(attitude(time));
+}
+
+Eigen::Vector3d JointPlanResult::angularVelocity(double time) const
+{
+  if (attitude_waypoints.empty())
+  {
+    return Eigen::Vector3d::Zero();
+  }
+  const size_t upper = upperWaypointIndex(attitude_waypoints, time);
+  if (upper == 0 || upper >= attitude_waypoints.size())
+  {
+    return Eigen::Vector3d::Zero();
+  }
+  const TimedRootAttitudeWaypoint& before = attitude_waypoints[upper - 1];
+  const TimedRootAttitudeWaypoint& after = attitude_waypoints[upper];
+  const double duration = after.time - before.time;
+  if (duration <= kEpsilon)
+  {
+    return Eigen::Vector3d::Zero();
+  }
+  const double yaw_rate = shortestYawDelta(before.attitude.yaw, after.attitude.yaw) / duration;
+  const double pitch_rate = (after.attitude.pitch - before.attitude.pitch) / duration;
+  return worldAngularVelocity(attitude(time), yaw_rate, pitch_rate);
+}
+
+double JointPlanResult::yaw(double time) const
+{
+  return attitude(time).yaw;
 }
 
 double JointPlanResult::yawRate(double time) const
 {
-  if (yaw_waypoints.empty())
+  return angularVelocity(time).z();
+}
+
+double JointPlanResult::pitch(double time) const
+{
+  return attitude(time).pitch;
+}
+
+double JointPlanResult::pitchRate(double time) const
+{
+  if (attitude_waypoints.empty())
   {
     return 0.0;
   }
-  const size_t upper = upperWaypointIndex(yaw_waypoints, time);
-  if (upper == 0 || upper >= yaw_waypoints.size())
+  const size_t upper = upperWaypointIndex(attitude_waypoints, time);
+  if (upper == 0 || upper >= attitude_waypoints.size())
   {
     return 0.0;
   }
-  const TimedYawWaypoint& before = yaw_waypoints[upper - 1];
-  const TimedYawWaypoint& after = yaw_waypoints[upper];
+  const TimedRootAttitudeWaypoint& before = attitude_waypoints[upper - 1];
+  const TimedRootAttitudeWaypoint& after = attitude_waypoints[upper];
   const double duration = after.time - before.time;
-  return duration > kEpsilon ? shortestYawDelta(before.yaw, after.yaw) / duration : 0.0;
+  return duration > kEpsilon ? (after.attitude.pitch - before.attitude.pitch) / duration : 0.0;
 }
 
 JointTrajectoryPlanner::JointTrajectoryPlanner(
@@ -225,18 +268,54 @@ JointTrajectoryPlanner::JointTrajectoryPlanner(
 {
   if (!stability_evaluator_ || config_.reference_dt <= 0.0 ||
       config_.planning_timeout <= 0.0 || config_.validity_resolution <= 0.0 ||
-      config_.max_joint_velocity <= 0.0 || config_.max_joint_command_step <= 0.0 ||
-      config_.follower.command_hz <= 0.0)
+      config_.max_joint_command_step <= 0.0 ||
+      config_.follower.command_hz <= 0.0 || config_.follower.max_angular_vel <= 0.0)
   {
     throw std::invalid_argument("Invalid joint trajectory planner configuration");
   }
   seedOmplOnce(config_.random_seed);
 }
 
+Eigen::VectorXd JointTrajectoryPlanner::joint1PriorityConfiguration(
+    const Eigen::VectorXd& start_joints,
+    int joint1_pitch,
+    int joint1_yaw,
+    const std::vector<double>& lower,
+    const std::vector<double>& upper,
+    const RootAttitude& start_attitude,
+    const RootAttitude& goal_attitude,
+    double progress)
+{
+  if (joint1_pitch < 0 || joint1_pitch >= start_joints.size() ||
+      joint1_yaw < 0 || joint1_yaw >= start_joints.size() ||
+      lower.size() != static_cast<size_t>(start_joints.size()) ||
+      upper.size() != static_cast<size_t>(start_joints.size()))
+  {
+    return Eigen::VectorXd();
+  }
+  const double clamped_progress = std::max(0.0, std::min(1.0, progress));
+  const RootAttitude attitude = interpolateRootAttitude(
+      start_attitude, goal_attitude, clamped_progress);
+  Eigen::VectorXd joints = start_joints;
+  const double pitch_delta = attitude.pitch - start_attitude.pitch;
+  const double yaw_delta = shortestYawDelta(start_attitude.yaw, attitude.yaw);
+  // The root link points opposite the FLU x axis. Consequently a root pitch is
+  // cancelled by the same signed joint1 pitch, whereas yaw remains opposite.
+  joints(joint1_pitch) = std::max(
+      lower[static_cast<size_t>(joint1_pitch)],
+      std::min(upper[static_cast<size_t>(joint1_pitch)],
+               start_joints(joint1_pitch) + pitch_delta));
+  joints(joint1_yaw) = std::max(
+      lower[static_cast<size_t>(joint1_yaw)],
+      std::min(upper[static_cast<size_t>(joint1_yaw)],
+               start_joints(joint1_yaw) - yaw_delta));
+  return joints;
+}
+
 JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajectory,
                                              const NominalJointContext& context,
                                              const Eigen::VectorXd& start_joints,
-                                             double start_yaw,
+                                             const RootAttitude& start_attitude,
                                              double time_budget)
 {
   JointPlanResult result;
@@ -251,14 +330,20 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
                                             config_.planning_timeout;
   deadline_ = Clock::now() + toDuration(budget);
   const Clock::time_point deadline = deadline_;
+  const double root_duration = root_trajectory.getTotalDuration();
+  if (!std::isfinite(root_duration) || root_duration <= kEpsilon)
+  {
+    result.detail = "invalid root trajectory duration";
+    return result;
+  }
 
   Eigen::VectorXd origin = start_joints;
   multilink_copilot::StabilityMetrics origin_metrics;
   bool repaired_start = false;
-  if (!configurationIsSafe(origin, start_yaw + M_PI, &origin_metrics))
+  if (!configurationIsSafe(origin, start_attitude, &origin_metrics))
   {
-    if (!repairEndpoint(start_joints, start_joints, start_yaw + M_PI, true, origin) ||
-        !configurationIsSafe(origin, start_yaw + M_PI, &origin_metrics))
+    if (!repairEndpoint(start_joints, start_joints, start_attitude, true, origin) ||
+        !configurationIsSafe(origin, start_attitude, &origin_metrics))
     {
       result.detail = "start joint configuration could not be repaired";
       return result;
@@ -266,12 +351,246 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
     repaired_start = true;
   }
 
-  // Re-seed follow-the-leader with the safe RRT origin. This makes the nominal
-  // terminal morphology consistent with the state from which this candidate is
-  // actually planned.
-  const std::vector<NominalSample> nominal =
-      buildNominalSamples(root_trajectory, context, origin, start_yaw);
-  if (nominal.size() < 2)
+  RootAttitude alignment_goal = start_attitude;
+  bool found_tangent = false;
+  const int tangent_sample_count = std::max(
+      1, static_cast<int>(std::ceil(root_duration / config_.reference_dt)));
+  for (int sample = 1; sample <= tangent_sample_count; ++sample)
+  {
+    const double time = root_duration * static_cast<double>(sample) / tangent_sample_count;
+    const Eigen::Vector3d velocity = root_trajectory.getVel(time);
+    if (velocity.norm() > 1e-3)
+    {
+      alignment_goal = tangentAttitude(velocity, start_attitude);
+      found_tangent = true;
+      break;
+    }
+  }
+  if (!found_tangent)
+  {
+    const Eigen::Vector3d chord = root_trajectory.getPos(root_duration) -
+                                  root_trajectory.getPos(0.0);
+    alignment_goal = tangentAttitude(chord, start_attitude);
+  }
+  if (!config_.follower.publish_yaw_command)
+  {
+    alignment_goal.yaw = start_attitude.yaw;
+  }
+
+  const double yaw_delta = shortestYawDelta(start_attitude.yaw, alignment_goal.yaw);
+  const double pitch_delta = alignment_goal.pitch - start_attitude.pitch;
+  const bool attitude_change = std::abs(yaw_delta) > kEpsilon ||
+                               std::abs(pitch_delta) > kEpsilon;
+
+  if (context.pitch_joint_indices.empty() || context.yaw_joint_indices.empty())
+  {
+    result.detail = "missing joint1 pitch/yaw mapping";
+    return result;
+  }
+  const int joint1_pitch = context.pitch_joint_indices.front();
+  const int joint1_yaw = context.yaw_joint_indices.front();
+  if (joint1_pitch < 0 || joint1_pitch >= origin.size() ||
+      joint1_yaw < 0 || joint1_yaw >= origin.size())
+  {
+    result.detail = "invalid joint1 pitch/yaw mapping";
+    return result;
+  }
+  const std::vector<double>& lower =
+      stability_evaluator_->robotModel()->getLinkJointLowerLimits();
+  const std::vector<double>& upper =
+      stability_evaluator_->robotModel()->getLinkJointUpperLimits();
+  if (lower.size() != static_cast<size_t>(origin.size()) ||
+      upper.size() != static_cast<size_t>(origin.size()))
+  {
+    result.detail = "invalid DRAGON joint limits";
+    return result;
+  }
+
+  const Eigen::VectorXd alignment_joints = joint1PriorityConfiguration(
+      origin, joint1_pitch, joint1_yaw, lower, upper,
+      start_attitude, alignment_goal, 1.0);
+  if (alignment_joints.size() != origin.size())
+  {
+    result.detail = "failed to allocate root attitude to joint1";
+    return result;
+  }
+
+  constexpr double kCommandStepSchedulingMargin = 0.99;
+  const double effective_joint_rate = std::min(
+      config_.follower.max_angular_vel,
+      kCommandStepSchedulingMargin * config_.max_joint_command_step *
+          config_.follower.command_hz);
+  double required_alignment_duration = 0.0;
+  if (std::abs(yaw_delta) > kEpsilon)
+  {
+    required_alignment_duration = std::max(
+        required_alignment_duration,
+        std::abs(yaw_delta) / config_.follower.max_angular_vel);
+    if (std::abs(alignment_joints(joint1_yaw) - origin(joint1_yaw)) > kEpsilon)
+    {
+      required_alignment_duration = std::max(
+          required_alignment_duration,
+          std::abs(alignment_joints(joint1_yaw) - origin(joint1_yaw)) /
+              effective_joint_rate);
+    }
+  }
+  if (std::abs(pitch_delta) > kEpsilon)
+  {
+    required_alignment_duration = std::max(
+        required_alignment_duration,
+        std::abs(pitch_delta) / config_.follower.max_angular_vel);
+    if (std::abs(alignment_joints(joint1_pitch) - origin(joint1_pitch)) > kEpsilon)
+    {
+      required_alignment_duration = std::max(
+          required_alignment_duration,
+          std::abs(alignment_joints(joint1_pitch) - origin(joint1_pitch)) /
+              effective_joint_rate);
+    }
+  }
+
+  const bool stationary_start = root_trajectory.getVel(0.0).norm() < 1e-3;
+  const double recovery_duration = repaired_start ? 1.0 / config_.follower.command_hz : 0.0;
+  double alignment_start_time = recovery_duration;
+  double alignment_end_time = recovery_duration;
+  double trajectory_start_time = 0.0;
+  double output_time_offset = 0.0;
+  double root_delay = 0.0;
+  if (attitude_change)
+  {
+    if (stationary_start)
+    {
+      alignment_end_time += std::max(required_alignment_duration,
+                                     1.0 / config_.follower.command_hz);
+      root_delay = alignment_end_time;
+      output_time_offset = root_delay;
+    }
+    else
+    {
+      alignment_end_time += std::max(required_alignment_duration,
+                                     1.0 / config_.follower.command_hz);
+      if (alignment_end_time >= root_duration - kEpsilon)
+      {
+        result.detail = "moving root trajectory is too short for joint1-priority allocation";
+        return result;
+      }
+      trajectory_start_time = alignment_end_time;
+      output_time_offset = trajectory_start_time;
+    }
+  }
+  else if (repaired_start && stationary_start)
+  {
+    root_delay = recovery_duration;
+    output_time_offset = root_delay;
+  }
+
+  result.joint_waypoints.reserve(8);
+  if (repaired_start)
+  {
+    result.joint_waypoints.push_back({0.0, start_joints});
+    result.joint_waypoints.push_back({recovery_duration, origin});
+  }
+  else
+  {
+    result.joint_waypoints.push_back({0.0, origin});
+  }
+  result.attitude_waypoints.push_back({0.0, start_attitude});
+  if (alignment_start_time > kEpsilon)
+  {
+    result.attitude_waypoints.push_back({alignment_start_time, start_attitude});
+  }
+
+  if (attitude_change)
+  {
+    std::vector<double> progress_values{0.0, 1.0};
+    const double absorbed_pitch = alignment_joints(joint1_pitch) - origin(joint1_pitch);
+    const double absorbed_yaw = origin(joint1_yaw) - alignment_joints(joint1_yaw);
+    if (std::abs(pitch_delta) > kEpsilon)
+    {
+      const double fraction = std::abs(absorbed_pitch / pitch_delta);
+      if (fraction > kEpsilon && fraction < 1.0 - kEpsilon)
+      {
+        progress_values.push_back(fraction);
+      }
+    }
+    if (std::abs(yaw_delta) > kEpsilon)
+    {
+      const double fraction = std::abs(absorbed_yaw / yaw_delta);
+      if (fraction > kEpsilon && fraction < 1.0 - kEpsilon)
+      {
+        progress_values.push_back(fraction);
+      }
+    }
+    std::sort(progress_values.begin(), progress_values.end());
+    progress_values.erase(std::unique(progress_values.begin(), progress_values.end(),
+                                      [](double lhs, double rhs) {
+                                        return std::abs(lhs - rhs) <= kEpsilon;
+                                      }),
+                          progress_values.end());
+    for (const double progress : progress_values)
+    {
+      if (progress <= kEpsilon)
+      {
+        continue;
+      }
+      const Eigen::VectorXd joints = joint1PriorityConfiguration(
+          origin, joint1_pitch, joint1_yaw, lower, upper,
+          start_attitude, alignment_goal, progress);
+      result.joint_waypoints.push_back(
+          {alignment_start_time + progress * (alignment_end_time - alignment_start_time),
+           joints});
+    }
+    result.attitude_waypoints.push_back({alignment_end_time, alignment_goal});
+  }
+
+  // Reject an infeasible deterministic prefix before invoking the global RRT.
+  // In particular, the RRT is never allowed to repair joint1 allocation by
+  // moving any other link joint during this interval.
+  double prefix_minimum_fc_rp = origin_metrics.fc_rp_min;
+  if (attitude_change)
+  {
+    std::vector<NominalSample> prefix_schedule;
+    prefix_schedule.reserve(result.attitude_waypoints.size());
+    for (const TimedRootAttitudeWaypoint& waypoint : result.attitude_waypoints)
+    {
+      prefix_schedule.push_back({waypoint.time, waypoint.attitude, Eigen::VectorXd()});
+    }
+    TimedJointWaypoint previous{alignment_start_time, origin};
+    for (const TimedJointWaypoint& waypoint : result.joint_waypoints)
+    {
+      if (waypoint.time <= alignment_start_time + kEpsilon)
+      {
+        continue;
+      }
+      if (!timedConfigurationPathIsSafe(previous, waypoint, prefix_schedule,
+                                        prefix_minimum_fc_rp))
+      {
+        result.detail = "joint1-priority interval is infeasible";
+        return result;
+      }
+      previous = waypoint;
+    }
+  }
+
+  NominalJointContext remaining_context = context;
+  if (!stationary_start && trajectory_start_time > kEpsilon)
+  {
+    const int history_samples = std::max(
+        1, static_cast<int>(std::ceil(trajectory_start_time /
+                                     config_.follower.trajectory_sample_interval)));
+    for (int sample = 1; sample <= history_samples; ++sample)
+    {
+      const double time = trajectory_start_time * static_cast<double>(sample) /
+                          history_samples;
+      remaining_context.executed_history.append(root_trajectory.getPos(time));
+    }
+  }
+
+  // Re-seed follow-the-leader at the end of the joint1-priority interval. The
+  // subsequent global RRT remains unchanged, but it cannot rewrite this prefix.
+  const std::vector<NominalSample> nominal = buildNominalSamples(
+      root_trajectory, remaining_context, alignment_joints, alignment_goal,
+      trajectory_start_time, output_time_offset);
+  if (nominal.empty())
   {
     result.detail = "failed to build nominal follow-the-leader joint samples";
     return result;
@@ -281,10 +600,11 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
   Eigen::VectorXd goal = terminal.joints;
   multilink_copilot::StabilityMetrics goal_metrics;
   bool repaired_goal = false;
-  if (!configurationIsSafe(goal, terminal.yaw + M_PI, &goal_metrics))
+  if (!configurationIsSafe(goal, terminal.attitude, &goal_metrics))
   {
-    if (!repairEndpoint(terminal.joints, origin, terminal.yaw + M_PI, false, goal) ||
-        !configurationIsSafe(goal, terminal.yaw + M_PI, &goal_metrics))
+    if (!repairEndpoint(terminal.joints, alignment_joints, terminal.attitude,
+                        false, goal) ||
+        !configurationIsSafe(goal, terminal.attitude, &goal_metrics))
     {
       result.detail = "terminal joint configuration could not be repaired";
       return result;
@@ -292,62 +612,78 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
     repaired_goal = true;
   }
 
-  // One global RRT-Connect replaces safe-run analysis and all local bridge
-  // heuristics. The fixed-yaw search is deliberately followed by the
-  // authoritative validation against the full time-varying yaw schedule below.
+  // One global RRT-Connect retains the existing whole-body morphology search,
+  // starting only after the deterministic joint1-priority interval.
   std::vector<Eigen::VectorXd> sampled_path;
-  if (!searchJointPath(origin, goal, terminal.yaw + M_PI, deadline, sampled_path) ||
-      sampled_path.size() < 2)
+  if ((alignment_joints - goal).norm() <= kEpsilon)
+  {
+    sampled_path = {alignment_joints, goal};
+  }
+  else if (!searchJointPath(alignment_joints, goal,
+                            linkRotation(terminal.attitude), deadline,
+                            sampled_path) || sampled_path.size() < 2)
   {
     result.detail = "global joint-space RRT failed";
     return result;
   }
   std::vector<Eigen::VectorXd> joint_path =
-      shortcutChain(sampled_path, terminal.yaw + M_PI);
+      shortcutChain(sampled_path, linkRotation(terminal.attitude));
   if (joint_path.size() < 2 || budgetExpired())
   {
     result.detail = "global joint-space RRT shortcut failed";
     return result;
   }
-  joint_path.front() = origin;
+  joint_path.front() = alignment_joints;
   joint_path.back() = goal;
 
-  std::vector<Eigen::VectorXd> output_path;
-  output_path.reserve(joint_path.size() + (repaired_start ? 1u : 0u));
-  if (repaired_start)
+  const double total_base_duration = root_delay + root_duration;
+  const double rrt_start_time = stationary_start ? root_delay : alignment_end_time;
+  if (total_base_duration <= rrt_start_time + kEpsilon &&
+      (alignment_joints - goal).norm() > kEpsilon)
   {
-    // Keep command continuity at the measured state. This recovery prefix is
-    // intentionally outside the strict flight-feasibility guarantee, but remains
-    // part of the final whole-body environmental collision sweep.
-    output_path.push_back(start_joints);
+    result.detail = "joint1-priority interval leaves no time for the global joint path";
+    return result;
   }
-  output_path.insert(output_path.end(), joint_path.begin(), joint_path.end());
-  const std::vector<double> path_ratios = chainRatios(output_path);
-  const double root_duration = root_trajectory.getTotalDuration();
-  result.joint_waypoints.reserve(output_path.size());
-  for (size_t index = 0; index < output_path.size(); ++index)
+  const std::vector<double> path_ratios = chainRatios(joint_path);
+  for (size_t index = 1; index < joint_path.size(); ++index)
   {
-    result.joint_waypoints.push_back({path_ratios[index] * root_duration, output_path[index]});
+    result.joint_waypoints.push_back(
+        {rrt_start_time + path_ratios[index] * (total_base_duration - rrt_start_time),
+         joint_path[index]});
   }
   result.joint_waypoints.front().time = 0.0;
-  result.joint_waypoints.back().time = root_duration;
+  result.joint_waypoints.back().time = total_base_duration;
 
-  result.yaw_waypoints.reserve(nominal.size());
   for (const NominalSample& sample : nominal)
   {
-    result.yaw_waypoints.push_back({sample.time, sample.yaw});
+    if (!result.attitude_waypoints.empty() &&
+        std::abs(result.attitude_waypoints.back().time - sample.time) <= kEpsilon)
+    {
+      result.attitude_waypoints.back().attitude = sample.attitude;
+    }
+    else
+    {
+      result.attitude_waypoints.push_back({sample.time, sample.attitude});
+    }
   }
 
-  result.minimum_fc_rp = std::min(origin_metrics.fc_rp_min, goal_metrics.fc_rp_min);
+  result.minimum_fc_rp = std::min(prefix_minimum_fc_rp, goal_metrics.fc_rp_min);
+  std::vector<NominalSample> complete_schedule;
+  complete_schedule.reserve(result.attitude_waypoints.size());
+  for (const TimedRootAttitudeWaypoint& waypoint : result.attitude_waypoints)
+  {
+    complete_schedule.push_back({waypoint.time, waypoint.attitude, Eigen::VectorXd()});
+  }
   const size_t safe_origin_index = repaired_start ? 1u : 0u;
   multilink_copilot::StabilityMetrics timed_origin_metrics;
   if (safe_origin_index >= result.joint_waypoints.size() ||
       !configurationIsSafe(
           result.joint_waypoints[safe_origin_index].positions,
-          nominalYawAt(nominal, result.joint_waypoints[safe_origin_index].time) + M_PI,
+          nominalAttitudeAt(complete_schedule,
+                            result.joint_waypoints[safe_origin_index].time),
           &timed_origin_metrics))
   {
-    result.detail = "repaired joint origin is infeasible under the root-yaw schedule";
+    result.detail = "repaired joint origin is infeasible under the root-attitude schedule";
     return result;
   }
   result.minimum_fc_rp =
@@ -356,11 +692,14 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
        index < result.joint_waypoints.size(); ++index)
   {
     if (!timedConfigurationPathIsSafe(result.joint_waypoints[index - 1],
-                                      result.joint_waypoints[index], nominal,
+                                      result.joint_waypoints[index], complete_schedule,
                                       result.minimum_fc_rp))
     {
       result.detail =
-          "global joint path is infeasible under the root-yaw schedule";
+          result.joint_waypoints[index].time <=
+                  alignment_end_time + kEpsilon ?
+              "joint1-priority interval is infeasible" :
+              "global joint path is infeasible under the root-attitude schedule";
       return result;
     }
   }
@@ -377,9 +716,8 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
     // Leave a small scheduling margin because ROS timer callbacks are not
     // perfectly periodic; an exactly saturated analytical step can otherwise
     // exceed the command-step limit when two publications are slightly late.
-    constexpr double kCommandStepSchedulingMargin = 0.99;
     const double required = std::max(
-        maximum_delta / config_.max_joint_velocity,
+        maximum_delta / config_.follower.max_angular_vel,
         maximum_delta /
             (kCommandStepSchedulingMargin * config_.max_joint_command_step *
              config_.follower.command_hz));
@@ -394,16 +732,41 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
     }
   }
 
+  for (size_t index = 1; index < result.attitude_waypoints.size(); ++index)
+  {
+    const TimedRootAttitudeWaypoint& before = result.attitude_waypoints[index - 1];
+    const TimedRootAttitudeWaypoint& after = result.attitude_waypoints[index];
+    const double available = after.time - before.time;
+    if (available <= kEpsilon)
+    {
+      continue;
+    }
+    time_scale = std::max(
+        time_scale,
+        std::abs(shortestYawDelta(before.attitude.yaw, after.attitude.yaw)) /
+            (config_.follower.max_angular_vel * available));
+    time_scale = std::max(
+        time_scale,
+        std::abs(after.attitude.pitch - before.attitude.pitch) /
+            (config_.follower.max_angular_vel * available));
+  }
+
   result.time_scale = std::max(1.0, time_scale);
+  if (!stationary_start && result.time_scale > 1.0 + kEpsilon)
+  {
+    result.detail = "moving retarget would violate root state continuity after time scaling";
+    return result;
+  }
   for (TimedJointWaypoint& waypoint : result.joint_waypoints)
   {
     waypoint.time *= result.time_scale;
   }
-  for (TimedYawWaypoint& waypoint : result.yaw_waypoints)
+  for (TimedRootAttitudeWaypoint& waypoint : result.attitude_waypoints)
   {
     waypoint.time *= result.time_scale;
   }
-  result.duration = root_trajectory.getTotalDuration() * result.time_scale;
+  result.root_translation_delay = root_delay * result.time_scale;
+  result.duration = total_base_duration * result.time_scale;
   if (!computeTrackingError(root_trajectory, context, nominal, result) ||
       budgetExpired())
   {
@@ -447,16 +810,18 @@ bool JointTrajectoryPlanner::planStableConnection(const Eigen::VectorXd& start,
     return false;
   }
   minimum_fc_rp = std::min(start_metrics.fc_rp_min, goal_metrics.fc_rp_min);
+  const Eigen::Matrix3d root_link_rotation =
+      Eigen::AngleAxisd(root_link_yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
 
   std::vector<Eigen::VectorXd> sampled_path;
-  if (!searchJointPath(start, goal, root_link_yaw, deadline_, sampled_path) ||
+  if (!searchJointPath(start, goal, root_link_rotation, deadline_, sampled_path) ||
       sampled_path.size() < 2)
   {
     if (failure_reason) *failure_reason = "global joint-space RRT failed";
     return false;
   }
 
-  path = shortcutChain(sampled_path, root_link_yaw);
+  path = shortcutChain(sampled_path, root_link_rotation);
   if (path.size() < 2 || budgetExpired())
   {
     path.clear();
@@ -481,15 +846,18 @@ std::vector<JointTrajectoryPlanner::NominalSample> JointTrajectoryPlanner::build
     const Trajectory<5>& root_trajectory,
     const NominalJointContext& context,
     const Eigen::VectorXd& start_joints,
-    double start_yaw)
+    const RootAttitude& start_attitude,
+    double trajectory_start_time,
+    double output_time_offset)
 {
   std::vector<NominalSample> samples;
   const std::vector<NominalJointSample> nominal = nominal_predictor_.predict(
-      root_trajectory, context, start_joints, start_yaw, config_.reference_dt);
+      root_trajectory, context, start_joints, start_attitude,
+      config_.reference_dt, true, trajectory_start_time, output_time_offset);
   samples.reserve(nominal.size());
   for (const NominalJointSample& sample : nominal)
   {
-    samples.push_back({sample.time, sample.yaw, sample.joints});
+    samples.push_back({sample.time, RootAttitude{sample.yaw, sample.pitch}, sample.joints});
   }
   return samples;
 }
@@ -532,7 +900,8 @@ bool JointTrajectoryPlanner::chainIsSafe(const std::vector<Eigen::VectorXd>& cha
 }
 
 std::vector<Eigen::VectorXd> JointTrajectoryPlanner::shortcutChain(
-    const std::vector<Eigen::VectorXd>& chain, double root_yaw)
+    const std::vector<Eigen::VectorXd>& chain,
+    const Eigen::Matrix3d& root_link_rotation)
 {
   std::vector<Eigen::VectorXd> shortcut;
   if (chain.empty())
@@ -548,8 +917,23 @@ std::vector<Eigen::VectorXd> JointTrajectoryPlanner::shortcutChain(
     for (; next > current + 1 && !budgetExpired(); --next)
     {
       double ignored = kInfinity;
-      if (edgeInteriorIsSafe(chain[current], chain[next], root_yaw, root_yaw, coarse_resolution,
-                             ignored))
+      const Eigen::VectorXd delta = chain[next] - chain[current];
+      const double maximum_delta = delta.size() > 0 ? delta.cwiseAbs().maxCoeff() : 0.0;
+      const int subdivisions = std::max(
+          1, static_cast<int>(std::ceil(maximum_delta / coarse_resolution)));
+      bool safe = true;
+      for (int subdivision = 1; subdivision < subdivisions; ++subdivision)
+      {
+        const double ratio = static_cast<double>(subdivision) / subdivisions;
+        if (budgetExpired() ||
+            !configurationIsSafe(chain[current] + ratio * delta,
+                                 root_link_rotation))
+        {
+          safe = false;
+          break;
+        }
+      }
+      if (safe)
       {
         break;
       }
@@ -599,7 +983,7 @@ bool JointTrajectoryPlanner::budgetExpired() const
 bool JointTrajectoryPlanner::searchJointPath(
     const Eigen::VectorXd& start,
     const Eigen::VectorXd& goal,
-    double yaw,
+    const Eigen::Matrix3d& root_link_rotation,
     const Clock::time_point& deadline,
     std::vector<Eigen::VectorXd>& path)
 {
@@ -628,14 +1012,14 @@ bool JointTrajectoryPlanner::searchJointPath(
       });
 
   ompl::geometric::SimpleSetup setup(space);
-  setup.setStateValidityChecker([this, yaw](const ompl::base::State* state) {
+  setup.setStateValidityChecker([this, root_link_rotation](const ompl::base::State* state) {
     const auto* vector_state = state->as<ompl::base::RealVectorStateSpace::StateType>();
     Eigen::VectorXd joints(stability_evaluator_->jointCount());
     for (int index = 0; index < joints.size(); ++index)
     {
       joints(index) = vector_state->values[index];
     }
-    return configurationIsSafe(joints, yaw);
+    return configurationIsSafe(joints, root_link_rotation);
   });
   // The returned path is re-validated at the full resolution, so the search itself
   // can afford the coarser motion check that keeps it inside the online budget.
@@ -684,7 +1068,24 @@ bool JointTrajectoryPlanner::searchJointPath(
 bool JointTrajectoryPlanner::configurationIsSafe(const Eigen::VectorXd& joints, double yaw,
                                                  multilink_copilot::StabilityMetrics* metrics)
 {
-  stability_evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(yaw));
+  return configurationIsSafe(
+      joints, Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix(), metrics);
+}
+
+bool JointTrajectoryPlanner::configurationIsSafe(
+    const Eigen::VectorXd& joints, const RootAttitude& attitude,
+    multilink_copilot::StabilityMetrics* metrics)
+{
+  return configurationIsSafe(joints, linkRotation(attitude), metrics);
+}
+
+bool JointTrajectoryPlanner::configurationIsSafe(
+    const Eigen::VectorXd& joints, const Eigen::Matrix3d& root_link_rotation,
+    multilink_copilot::StabilityMetrics* metrics)
+{
+  const Eigen::Quaterniond quaternion(root_link_rotation);
+  stability_evaluator_->setRootLinkRotation(KDL::Rotation::Quaternion(
+      quaternion.x(), quaternion.y(), quaternion.z(), quaternion.w()));
   multilink_copilot::StabilityMetrics evaluated;
   const bool valid = stability_evaluator_->evaluate(joints, evaluated) && evaluated.safe;
   if (metrics)
@@ -694,27 +1095,27 @@ bool JointTrajectoryPlanner::configurationIsSafe(const Eigen::VectorXd& joints, 
   return valid;
 }
 
-double JointTrajectoryPlanner::nominalYawAt(const std::vector<NominalSample>& samples,
-                                            double time)
+RootAttitude JointTrajectoryPlanner::nominalAttitudeAt(
+    const std::vector<NominalSample>& samples, double time)
 {
   if (samples.empty())
   {
-    return 0.0;
+    return RootAttitude();
   }
   if (time <= samples.front().time)
   {
-    return samples.front().yaw;
+    return samples.front().attitude;
   }
   const size_t upper = upperWaypointIndex(samples, time);
   if (upper >= samples.size())
   {
-    return samples.back().yaw;
+    return samples.back().attitude;
   }
   const NominalSample& before = samples[upper - 1];
   const NominalSample& after = samples[upper];
   const double duration = after.time - before.time;
   const double ratio = duration > kEpsilon ? (time - before.time) / duration : 1.0;
-  return interpolateYaw(before.yaw, after.yaw, ratio);
+  return interpolateRootAttitude(before.attitude, after.attitude, ratio);
 }
 
 bool JointTrajectoryPlanner::timedConfigurationPathIsSafe(
@@ -742,9 +1143,9 @@ bool JointTrajectoryPlanner::timedConfigurationPathIsSafe(
                                      joint_subdivisions);
   }
 
-  // The nominal yaw is piecewise linear. Add enough samples on every overlapping
-  // yaw segment that neither joint motion nor root-yaw motion can step over a
-  // thin infeasible shell.
+  // The root attitude is piecewise linear. Add enough samples on every
+  // overlapping segment that neither joint nor root-attitude motion can step
+  // over a thin infeasible shell.
   for (size_t index = 1; index < nominal.size(); ++index)
   {
     const double interval_start = std::max(start.time, nominal[index - 1].time);
@@ -753,17 +1154,19 @@ bool JointTrajectoryPlanner::timedConfigurationPathIsSafe(
     {
       continue;
     }
-    const double yaw_start = nominalYawAt(nominal, interval_start);
-    const double yaw_end = nominalYawAt(nominal, interval_end);
-    const int yaw_subdivisions = std::max(
+    const RootAttitude attitude_start = nominalAttitudeAt(nominal, interval_start);
+    const RootAttitude attitude_end = nominalAttitudeAt(nominal, interval_end);
+    const double attitude_delta = std::max(
+        std::abs(shortestYawDelta(attitude_start.yaw, attitude_end.yaw)),
+        std::abs(attitude_end.pitch - attitude_start.pitch));
+    const int attitude_subdivisions = std::max(
         1, static_cast<int>(std::ceil(
-               std::abs(shortestYawDelta(yaw_start, yaw_end)) /
-               config_.validity_resolution)));
-    for (int subdivision = 0; subdivision <= yaw_subdivisions; ++subdivision)
+               attitude_delta / config_.validity_resolution)));
+    for (int subdivision = 0; subdivision <= attitude_subdivisions; ++subdivision)
     {
       times.push_back(interval_start +
                       (interval_end - interval_start) *
-                          static_cast<double>(subdivision) / yaw_subdivisions);
+                          static_cast<double>(subdivision) / attitude_subdivisions);
     }
   }
 
@@ -784,7 +1187,7 @@ bool JointTrajectoryPlanner::timedConfigurationPathIsSafe(
     const Eigen::VectorXd joints =
         start.positions + ratio * (goal.positions - start.positions);
     multilink_copilot::StabilityMetrics metrics;
-    if (!configurationIsSafe(joints, nominalYawAt(nominal, time) + M_PI, &metrics))
+    if (!configurationIsSafe(joints, nominalAttitudeAt(nominal, time), &metrics))
     {
       return false;
     }
@@ -815,14 +1218,12 @@ bool JointTrajectoryPlanner::computeTrackingError(
   const double required_history =
       static_cast<double>(downstream_link_count) * context.link_length;
   const Eigen::Vector3d initial_root_tail = root_trajectory.getPos(0.0);
-  const Eigen::Matrix3d initial_root_rotation =
-      Eigen::AngleAxisd(nominal.front().yaw + M_PI,
-                        Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  const Eigen::Matrix3d initial_root_rotation = result.rootLinkRotation(0.0);
   const std::deque<multilink_copilot::TrajectoryPoint> initial_trace =
       context.executed_history.arcLength() < required_history
           ? multilink_copilot::follow_the_leader::prependCurrentBodyMorphology(
                 context.executed_history.points(), initial_root_tail,
-                initial_root_rotation, nominal.front().joints,
+                initial_root_rotation, result.jointPositions(0.0),
                 context.pitch_joint_indices, context.yaw_joint_indices,
                 context.link_num, context.link_length)
           : context.executed_history.points();
@@ -874,15 +1275,16 @@ bool JointTrajectoryPlanner::computeTrackingError(
     }
     const double scaled_time =
         result.duration * static_cast<double>(sample) / sample_count;
-    const double nominal_time = scaled_time / result.time_scale;
-    const Eigen::Vector3d root_position = root_trajectory.getPos(nominal_time);
+    const double root_time = std::max(
+        0.0, std::min(root_trajectory.getTotalDuration(),
+                      (scaled_time - result.root_translation_delay) /
+                          result.time_scale));
+    const Eigen::Vector3d root_position = root_trajectory.getPos(root_time);
     if ((trace.back() - root_position).norm() > kEpsilon)
     {
       trace.push_back(root_position);
     }
-    const Eigen::Matrix3d root_rotation =
-        Eigen::AngleAxisd(result.yaw(scaled_time) + M_PI,
-                          Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    const Eigen::Matrix3d root_rotation = result.rootLinkRotation(scaled_time);
     const std::vector<Eigen::Vector3d> actual_endpoints = linkEndpoints(
         root_position, root_rotation, result.jointPositions(scaled_time),
         context.pitch_joint_indices, context.yaw_joint_indices,
@@ -917,7 +1319,7 @@ bool JointTrajectoryPlanner::computeTrackingError(
 
 bool JointTrajectoryPlanner::repairEndpoint(const Eigen::VectorXd& desired,
                                             const Eigen::VectorXd& reference,
-                                            double yaw,
+                                            const RootAttitude& attitude,
                                             bool allow_unstable_seed,
                                             Eigen::VectorXd& repaired)
 {
@@ -928,16 +1330,18 @@ bool JointTrajectoryPlanner::repairEndpoint(const Eigen::VectorXd& desired,
   {
     return false;
   }
-  if (configurationIsSafe(desired, yaw))
+  if (configurationIsSafe(desired, attitude))
   {
     repaired = desired;
     return true;
   }
 
-  stability_evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(yaw));
+  const Eigen::Quaterniond quaternion(linkRotation(attitude));
+  stability_evaluator_->setRootLinkRotation(KDL::Rotation::Quaternion(
+      quaternion.x(), quaternion.y(), quaternion.z(), quaternion.w()));
   return stability_evaluator_->projectToSafe(
              desired, reference, repaired, allow_unstable_seed) &&
-         configurationIsSafe(repaired, yaw);
+         configurationIsSafe(repaired, attitude);
 }
 
 }  // namespace motion_primitive_planner

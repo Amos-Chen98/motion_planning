@@ -28,13 +28,19 @@
 namespace motion_primitive_planner
 {
 
+struct RootAttitude
+{
+  double yaw = 0.0;
+  double pitch = 0.0;
+};
+
 struct FollowerConfig
 {
   double command_hz = 40.0;
   double trajectory_sample_interval = 0.05;
   double trajectory_buffer_max_length = 10.0;
   double ik_singularity_threshold = 0.10;
-  double max_yaw_rate = 1.5;
+  double max_angular_vel = 0.2;
   bool publish_yaw_command = true;
 
   static FollowerConfig fromRos(const ros::NodeHandle& private_nh);
@@ -59,6 +65,23 @@ multilink_copilot::StabilityConfig loadStabilityConfig(const ros::NodeHandle& pr
 
 double yawFromQuaternion(const Eigen::Quaterniond& quaternion);
 double yawFromQuaternion(const geometry_msgs::Quaternion& quaternion);
+RootAttitude rootAttitudeFromQuaternion(const Eigen::Quaterniond& quaternion);
+RootAttitude rootAttitudeFromQuaternion(const geometry_msgs::Quaternion& quaternion);
+RootAttitude tangentAttitude(const Eigen::Vector3d& velocity,
+                             const RootAttitude& fallback);
+RootAttitude advanceRootAttitude(const RootAttitude& current,
+                                 const Eigen::Vector3d& velocity,
+                                 double dt,
+                                 const FollowerConfig& config,
+                                 bool command_pitch);
+RootAttitude interpolateRootAttitude(const RootAttitude& start,
+                                     const RootAttitude& goal,
+                                     double ratio);
+Eigen::Matrix3d fluRotation(const RootAttitude& attitude);
+Eigen::Matrix3d linkRotation(const RootAttitude& attitude);
+Eigen::Vector3d worldAngularVelocity(const RootAttitude& attitude,
+                                     double yaw_rate,
+                                     double pitch_rate);
 double advanceYaw(double current_yaw, const Eigen::Vector3d& velocity, double dt,
                   const FollowerConfig& config);
 
@@ -126,6 +149,7 @@ struct NominalJointSample
 {
   double time = 0.0;
   double yaw = 0.0;
+  double pitch = 0.0;
   Eigen::Vector3d root_position = Eigen::Vector3d::Zero();
   Eigen::VectorXd joints;
   bool history_changed = false;
@@ -144,6 +168,15 @@ public:
                                           const Eigen::VectorXd& start_joints,
                                           double start_yaw,
                                           double sample_dt) const;
+
+  std::vector<NominalJointSample> predict(const Trajectory<5>& root_trajectory,
+                                          const NominalJointContext& context,
+                                          const Eigen::VectorXd& start_joints,
+                                          const RootAttitude& start_attitude,
+                                          double sample_dt,
+                                          bool command_pitch,
+                                          double trajectory_start_time = 0.0,
+                                          double output_time_offset = 0.0) const;
 
 private:
   FollowerConfig config_;

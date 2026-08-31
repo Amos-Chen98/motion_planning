@@ -51,8 +51,8 @@ struct CommandState
   Eigen::Vector3d tail_position = Eigen::Vector3d::Zero();
   Eigen::Vector3d tail_velocity = Eigen::Vector3d::Zero();
   Eigen::Vector3d tail_acceleration = Eigen::Vector3d::Zero();
-  double yaw = 0.0;
-  double yaw_rate = 0.0;
+  RootAttitude attitude;
+  Eigen::Vector3d angular_velocity = Eigen::Vector3d::Zero();
   Eigen::VectorXd joint_positions;
   Eigen::VectorXd joint_velocities;
 };
@@ -69,7 +69,7 @@ struct ActivePlan
 
   double duration() const
   {
-    return hold ? std::numeric_limits<double>::infinity() : root_trajectory.getTotalDuration();
+    return hold ? std::numeric_limits<double>::infinity() : joint_plan.duration;
   }
 
   CommandState sample(const ros::Time& stamp) const
@@ -83,13 +83,25 @@ struct ActivePlan
     {
       return state;
     }
-    const double time = std::max(0.0, std::min((stamp - start_time).toSec(), root_trajectory.getTotalDuration()));
+    const double time = std::max(0.0, std::min((stamp - start_time).toSec(),
+                                               joint_plan.duration));
+    const double root_time = std::max(
+        0.0, std::min(root_trajectory.getTotalDuration(),
+                      time - joint_plan.root_translation_delay));
     state.valid = true;
-    state.tail_position = root_trajectory.getPos(time);
-    state.tail_velocity = root_trajectory.getVel(time);
-    state.tail_acceleration = root_trajectory.getAcc(time);
-    state.yaw = joint_plan.yaw(time);
-    state.yaw_rate = joint_plan.yawRate(time);
+    state.tail_position = root_trajectory.getPos(root_time);
+    if (time + kEpsilon < joint_plan.root_translation_delay)
+    {
+      state.tail_velocity.setZero();
+      state.tail_acceleration.setZero();
+    }
+    else
+    {
+      state.tail_velocity = root_trajectory.getVel(root_time);
+      state.tail_acceleration = root_trajectory.getAcc(root_time);
+    }
+    state.attitude = joint_plan.attitude(time);
+    state.angular_velocity = joint_plan.angularVelocity(time);
     state.joint_positions = joint_plan.jointPositions(time);
     state.joint_velocities = joint_plan.jointVelocities(time);
     return state;
@@ -301,8 +313,10 @@ private:
       latest_odom_state_.tail_velocity = Eigen::Vector3d(message->twist.twist.linear.x,
                                                          message->twist.twist.linear.y,
                                                          message->twist.twist.linear.z);
-      latest_odom_state_.yaw = yawFromQuaternion(message->pose.pose.orientation);
-      latest_odom_state_.yaw_rate = message->twist.twist.angular.z;
+      latest_odom_state_.attitude = rootAttitudeFromQuaternion(message->pose.pose.orientation);
+      latest_odom_state_.angular_velocity = Eigen::Vector3d(message->twist.twist.angular.x,
+                                                            message->twist.twist.angular.y,
+                                                            message->twist.twist.angular.z);
       odom_received_ = true;
     }
     retryPlanningIfPending();
@@ -329,7 +343,7 @@ private:
       const Trajectory<5>& root, const JointPlanResult& joints,
       const std::shared_ptr<const gcopter_planner::PlannerBackend>& occupancy) const
   {
-    const double duration = root.getTotalDuration();
+    const double duration = joints.duration;
     const double command_dt = 1.0 / config_.joint.follower.command_hz;
     const double spatial_resolution = 0.5 * occupancy->voxelScale();
     const auto occupied = [&occupancy](const Eigen::Vector3d& point) {
@@ -338,10 +352,11 @@ private:
 
     const auto collides_at_time = [&](double time) {
       WholeBodyConfiguration configuration;
-      configuration.link1_tail = root.getPos(time);
-      const double yaw = joints.yaw(time);
-      configuration.root_link_rotation =
-          Eigen::AngleAxisd(yaw + M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+      const double root_time = std::max(
+          0.0, std::min(root.getTotalDuration(),
+                        time - joints.root_translation_delay));
+      configuration.link1_tail = root.getPos(root_time);
+      configuration.root_link_rotation = joints.rootLinkRotation(time);
       configuration.joint_positions = joints.jointPositions(time);
       return wholeBodyCollides(configuration, collision_geometry_, spatial_resolution, occupied);
     };
@@ -608,7 +623,7 @@ private:
         continue;
       }
       candidate.joints = joint_planners_[index]->plan(candidate.root.trajectory, nominal_context,
-                                                      start.joint_positions, start.yaw,
+                                                      start.joint_positions, start.attitude,
                                                       joint_planning_budget);
       if (!candidate.joints.success)
       {
@@ -705,7 +720,9 @@ private:
     }
     if (!has_safe_command_history)
     {
-      stability_evaluators_.front()->setRootLinkRotation(KDL::Rotation::RotZ(state.yaw + M_PI));
+      const Eigen::Quaterniond quaternion(linkRotation(state.attitude));
+      stability_evaluators_.front()->setRootLinkRotation(KDL::Rotation::Quaternion(
+          quaternion.x(), quaternion.y(), quaternion.z(), quaternion.w()));
       multilink_copilot::StabilityMetrics metrics;
       if (!stability_evaluators_.front()->evaluate(state.joint_positions, metrics) || !metrics.safe)
       {
@@ -715,7 +732,7 @@ private:
     }
     state.tail_velocity.setZero();
     state.tail_acceleration.setZero();
-    state.yaw_rate = 0.0;
+    state.angular_velocity.setZero();
     state.joint_velocities = Eigen::VectorXd::Zero(state.joint_positions.size());
     std::shared_ptr<ActivePlan> hold(new ActivePlan);
     hold->start_time = ros::Time::now();
@@ -789,7 +806,7 @@ private:
     {
       state.tail_velocity.setZero();
       state.tail_acceleration.setZero();
-      state.yaw_rate = 0.0;
+      state.angular_velocity.setZero();
       state.joint_velocities = Eigen::VectorXd::Zero(state.joint_positions.size());
     }
     publishFullStateTarget(state, now);
@@ -821,7 +838,8 @@ private:
   void publishFullStateTarget(const CommandState& state, const ros::Time& stamp)
   {
     const RootCommandKinematics root = tailFluToRootLinkCommand(
-        state.tail_position, state.tail_velocity, state.yaw, state.yaw_rate,
+        state.tail_position, state.tail_velocity, fluRotation(state.attitude),
+        state.angular_velocity,
         model_info_->linkLength());
 
     aerial_robot_msgs::FullStateTarget message;
@@ -832,12 +850,16 @@ private:
     message.root_state.pose.pose.position.x = root.position.x();
     message.root_state.pose.pose.position.y = root.position.y();
     message.root_state.pose.pose.position.z = root.position.z();
-    message.root_state.pose.pose.orientation.z = std::sin(0.5 * root.yaw);
-    message.root_state.pose.pose.orientation.w = std::cos(0.5 * root.yaw);
+    message.root_state.pose.pose.orientation.x = root.orientation.x();
+    message.root_state.pose.pose.orientation.y = root.orientation.y();
+    message.root_state.pose.pose.orientation.z = root.orientation.z();
+    message.root_state.pose.pose.orientation.w = root.orientation.w();
     message.root_state.twist.twist.linear.x = root.linear_velocity.x();
     message.root_state.twist.twist.linear.y = root.linear_velocity.y();
     message.root_state.twist.twist.linear.z = root.linear_velocity.z();
-    message.root_state.twist.twist.angular.z = root.yaw_rate;
+    message.root_state.twist.twist.angular.x = root.angular_velocity.x();
+    message.root_state.twist.twist.angular.y = root.angular_velocity.y();
+    message.root_state.twist.twist.angular.z = root.angular_velocity.z();
     message.joint_state.header = message.header;
     message.joint_state.name = model_info_->jointNames();
     message.joint_state.position.resize(static_cast<size_t>(state.joint_positions.size()));
@@ -853,8 +875,11 @@ private:
     root_target.pose.position.x = state.tail_position.x();
     root_target.pose.position.y = state.tail_position.y();
     root_target.pose.position.z = state.tail_position.z();
-    root_target.pose.orientation.z = std::sin(0.5 * state.yaw);
-    root_target.pose.orientation.w = std::cos(0.5 * state.yaw);
+    const Eigen::Quaterniond tail_orientation(fluRotation(state.attitude));
+    root_target.pose.orientation.x = tail_orientation.x();
+    root_target.pose.orientation.y = tail_orientation.y();
+    root_target.pose.orientation.z = tail_orientation.z();
+    root_target.pose.orientation.w = tail_orientation.w();
 
     full_state_pub_.publish(message);
     root_target_pub_.publish(root_target);

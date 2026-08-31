@@ -321,15 +321,16 @@ int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& can
 
 RootCommandKinematics tailFluToRootLinkCommand(const Eigen::Vector3d& tail_position,
                                                 const Eigen::Vector3d& tail_velocity,
-                                                double tail_yaw,
-                                                double tail_yaw_rate,
+                                                const Eigen::Matrix3d& tail_flu_rotation,
+                                                const Eigen::Vector3d& angular_velocity,
                                                 double link_length)
 {
   RootCommandKinematics command;
-  command.yaw = tail_yaw + M_PI;
-  command.yaw_rate = tail_yaw_rate;
-  const Eigen::Vector3d link_direction(std::cos(command.yaw), std::sin(command.yaw), 0.0);
-  const Eigen::Vector3d angular_velocity(0.0, 0.0, tail_yaw_rate);
+  const Eigen::Matrix3d link_rotation = tail_flu_rotation *
+      Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  command.orientation = Eigen::Quaterniond(link_rotation).normalized();
+  command.angular_velocity = angular_velocity;
+  const Eigen::Vector3d link_direction = link_rotation.col(0);
   command.position = tail_position - link_length * link_direction;
   command.linear_velocity = tail_velocity - link_length * angular_velocity.cross(link_direction);
   return command;

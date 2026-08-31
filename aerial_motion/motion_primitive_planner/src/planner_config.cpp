@@ -31,7 +31,6 @@ WholeBodyPlannerConfig::WholeBodyPlannerConfig(const ros::NodeHandle& private_nh
   private_nh.param("JointReferenceDt", joint.reference_dt, joint.reference_dt);
   private_nh.param("JointPlanningTimeout", joint.planning_timeout, joint.planning_timeout);
   private_nh.param("JointValidityResolution", joint.validity_resolution, joint.validity_resolution);
-  private_nh.param("MaxJointVelocity", joint.max_joint_velocity, joint.max_joint_velocity);
   private_nh.param("MaxJointCommandStep", joint.max_joint_command_step, joint.max_joint_command_step);
   int random_seed = static_cast<int>(joint.random_seed);
   private_nh.param("JointPlannerSeed", random_seed, random_seed);
