@@ -30,9 +30,8 @@
     <arg name="voxel_width" default="0.10" />
     <arg name="dilate_radius" default="0.20" />
     <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
-    <arg name="use_fixed_target_height" default="false" />
+    <arg name="fix_target_height" default="false" />
     <arg name="target_height" default="1.0" />
-    <arg name="use_target_z" default="true" />
     <arg name="max_vel_mag" default="0.2" />
 
     <include file="$(find motion_primitive_planner)/launch/root_state_to_flu_odom.launch">
@@ -81,9 +80,8 @@
             <param name="MaxAngularVel" value="$(arg max_angular_vel)" />
             <param name="SnakeIkSingularityThreshold" value="$(arg snake_ik_singularity_threshold)" />
             <param name="CommandHz" value="$(arg command_hz)" />
-            <param name="UseFixedTargetHeight" value="$(arg use_fixed_target_height)" />
+            <param name="FixTargetHeight" value="$(arg fix_target_height)" />
             <param name="TargetHeight" value="$(arg target_height)" />
-            <param name="UseTargetZ" value="$(arg use_target_z)" />
         </node>
 
         <node pkg="gcopter" type="traj_server" name="$(arg node_name)_traj_server" output="screen">

@@ -37,9 +37,8 @@ struct CommonPlannerConfig
     double smoothingEps = 0.0;
     int integralIntervs = 0;
     double relCostTol = 0.0;
-    bool useFixedTargetHeight = false;
+    bool fixTargetHeight = false;
     double targetHeight = 1.0;
-    bool useTargetZ = false;
     bool showPolytopeCorridor = true;
 
     CommonPlannerConfig() = default;

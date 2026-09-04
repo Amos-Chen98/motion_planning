@@ -47,9 +47,8 @@ CommonPlannerConfig::CommonPlannerConfig(const ros::NodeHandle &nhPriv)
     nhPriv.param("SmoothingEps", smoothingEps, 0.0);
     nhPriv.param("IntegralIntervs", integralIntervs, 0);
     nhPriv.param("RelCostTol", relCostTol, 0.0);
-    nhPriv.param("UseFixedTargetHeight", useFixedTargetHeight, false);
+    nhPriv.param("FixTargetHeight", fixTargetHeight, false);
     nhPriv.param("TargetHeight", targetHeight, 1.0);
-    nhPriv.param("UseTargetZ", useTargetZ, false);
     nhPriv.param("ShowPolytopeCorridor", showPolytopeCorridor, true);
 }
 
@@ -141,18 +140,11 @@ void CommonPlannerConfig::validateOrThrow() const
 double CommonPlannerConfig::resolveTargetHeight(
     const geometry_msgs::PoseStamped &msg) const
 {
-    if (useFixedTargetHeight)
+    if (fixTargetHeight)
     {
         return targetHeight;
     }
-    if (useTargetZ)
-    {
-        return msg.pose.position.z;
-    }
-
-    return mapBound[4] + dilateRadius +
-           std::fabs(msg.pose.orientation.z) *
-               (mapBound[5] - mapBound[4] - 2.0 * dilateRadius);
+    return msg.pose.position.z;
 }
 
 PlannerBackend::PlannerBackend(const CommonPlannerConfig &config)

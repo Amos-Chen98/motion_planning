@@ -22,9 +22,8 @@
     <arg name="use_accumulated_map" default="true" />
     <arg name="goal_tolerance" default="0.2" />
     <arg name="planning_horizon" default="6.0" />
-    <arg name="use_fixed_target_height" default="false" />
+    <arg name="fix_target_height" default="false" />
     <arg name="target_height" default="1.0" />
-    <arg name="use_target_z" default="false" />
     <arg name="show_corridor" default="true" />
 
     <!-- Dynamic limits -->
@@ -49,9 +48,8 @@
             <param name="DilateRadius" type="double" value="$(arg dilate_radius)" />
             <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
             <param name="MaxVelMag" type="double" value="$(arg max_vel_mag)" />
-            <param name="UseFixedTargetHeight" type="bool" value="$(arg use_fixed_target_height)" />
+            <param name="FixTargetHeight" type="bool" value="$(arg fix_target_height)" />
             <param name="TargetHeight" type="double" value="$(arg target_height)" />
-            <param name="UseTargetZ" type="bool" value="$(arg use_target_z)" />
             <param name="ShowPolytopeCorridor" type="bool" value="$(arg show_corridor)" />
         </node>
     </group>
@@ -74,9 +72,8 @@
             <param name="UseAccumulatedMap" type="bool" value="$(arg use_accumulated_map)" />
             <param name="GoalTolerance" type="double" value="$(arg goal_tolerance)" />
             <param name="PlanningHorizon" type="double" value="$(arg planning_horizon)" />
-            <param name="UseFixedTargetHeight" type="bool" value="$(arg use_fixed_target_height)" />
+            <param name="FixTargetHeight" type="bool" value="$(arg fix_target_height)" />
             <param name="TargetHeight" type="double" value="$(arg target_height)" />
-            <param name="UseTargetZ" type="bool" value="$(arg use_target_z)" />
             <param name="ShowPolytopeCorridor" type="bool" value="$(arg show_corridor)" />
         </node>
     </group>

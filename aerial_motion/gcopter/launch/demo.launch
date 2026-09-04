@@ -43,9 +43,8 @@
 
     <!-- Closed-loop navigation options -->
     <arg name="command_hz" default="40.0" />
-    <arg name="use_fixed_target_height" default="false" />
+    <arg name="fix_target_height" default="false" />
     <arg name="target_height" default="1.0" />
-    <arg name="use_target_z" default="false" />
 
     <!-- Planning map overrides -->
     <arg name="voxel_width" default="0.25" />
@@ -126,9 +125,8 @@
         <arg name="use_accumulated_map" value="$(arg use_accumulated_map)" />
         <arg name="goal_tolerance" value="$(arg goal_tolerance)" />
         <arg name="planning_horizon" value="$(arg planning_horizon)" />
-        <arg name="use_fixed_target_height" value="$(arg use_fixed_target_height)" />
+        <arg name="fix_target_height" value="$(arg fix_target_height)" />
         <arg name="target_height" value="$(arg target_height)" />
-        <arg name="use_target_z" value="$(arg use_target_z)" />
         <arg name="show_corridor" value="$(arg show_corridor)" />
         <arg name="max_vel_mag" value="$(arg max_vel_mag)" />
         <arg name="voxel_width" value="$(arg voxel_width)" />

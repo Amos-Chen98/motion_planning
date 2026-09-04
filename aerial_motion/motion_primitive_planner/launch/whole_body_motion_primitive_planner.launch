@@ -46,9 +46,8 @@
     <!-- The dilated binary map represents each approximately 0.40 m-wide link capsule. -->
     <arg name="dilate_radius" default="0.20" />
     <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
-    <arg name="use_fixed_target_height" default="false" />
+    <arg name="fix_target_height" default="true" />
     <arg name="target_height" default="1.0" />
-    <arg name="use_target_z" default="true" />
     <arg name="max_vel_mag" default="1.0" />
 
     <include file="$(find motion_primitive_planner)/launch/root_state_to_flu_odom.launch">
@@ -109,9 +108,8 @@
         <param name="StaticThrustMax" value="$(arg static_thrust_max)" />
         <param name="OverlapMinClearance" value="$(arg overlap_min_clearance)" />
         <param name="MaxBaselinkTilt" value="$(arg max_baselink_tilt)" />
-        <param name="UseFixedTargetHeight" value="$(arg use_fixed_target_height)" />
+        <param name="FixTargetHeight" value="$(arg fix_target_height)" />
         <param name="TargetHeight" value="$(arg target_height)" />
-        <param name="UseTargetZ" value="$(arg use_target_z)" />
       </node>
     </group>
 </launch>

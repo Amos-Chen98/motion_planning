@@ -77,23 +77,18 @@ TEST(CommonPlannerConfigTest, ValidatesRequiredValues)
               config.validationError());
 }
 
-TEST(CommonPlannerConfigTest, ResolvesAllTargetHeightModes)
+TEST(CommonPlannerConfigTest, ResolvesTargetHeightModes)
 {
     gcopter_planner::CommonPlannerConfig config = validConfig();
     geometry_msgs::PoseStamped target;
     target.pose.position.z = 2.25;
-    target.pose.orientation.z = -0.5;
 
-    config.useFixedTargetHeight = true;
-    config.targetHeight = 1.75;
-    EXPECT_DOUBLE_EQ(1.75, config.resolveTargetHeight(target));
-
-    config.useFixedTargetHeight = false;
-    config.useTargetZ = true;
+    config.fixTargetHeight = false;
     EXPECT_DOUBLE_EQ(2.25, config.resolveTargetHeight(target));
 
-    config.useTargetZ = false;
-    EXPECT_DOUBLE_EQ(1.5, config.resolveTargetHeight(target));
+    config.fixTargetHeight = true;
+    config.targetHeight = 1.75;
+    EXPECT_DOUBLE_EQ(1.75, config.resolveTargetHeight(target));
 }
 
 TEST(PointCloudDecoderTest, SupportsReorderedFieldsPaddingAndInvalidPoints)

@@ -84,8 +84,7 @@ Common parameters:
 - `VoxelWidth`: voxel resolution.
 - `DilateRadius`: obstacle inflation radius.
 - `MapBound`: planning map bounds, formatted as `[xmin, xmax, ymin, ymax, zmin, zmax]`.
-- `UseFixedTargetHeight`, `TargetHeight`: fix goal height to `TargetHeight`.
-- `UseTargetZ`: use the target message's `position.z` as the goal height (for a 3D goal source such as an interactive marker). When neither `UseFixedTargetHeight` nor `UseTargetZ` is set, the height is derived from the RViz goal orientation.
+- `FixTargetHeight`, `TargetHeight`: use `TargetHeight` as the goal height when `FixTargetHeight` is enabled; otherwise use the target message's `position.z`.
 - `TimeoutRRT`: RRT search timeout.
 - `MaxVelMag`, `MaxBdrMag`, `MaxTiltAngle`: velocity, body-rate, and tilt constraints. Both modes verify the continuous optimized trajectory against `MaxVelMag` and time-scale any violating trajectory before publishing it.
 - `GravAcc`: gravitational acceleration.
