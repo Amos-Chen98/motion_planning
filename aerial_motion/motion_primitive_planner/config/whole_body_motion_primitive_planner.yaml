@@ -1,10 +1,15 @@
-# Per-candidate joint-space planning.
+# Whole-body online replanning and plan activation.
+ReplanTriggerRatio: 0.3
+PlanActivationLeadTime: 0.75
+
+# Per-candidate joint-space planning and command continuity.
 JointReferenceDt: 0.10
-# Per-candidate joint-space planning budget.
 JointPlanningTimeout: 0.15
 JointValidityResolution: 0.025
 JointPlannerSeed: 1
 MaxJointCommandStep: 0.10
+
+# Feasible whole-body candidate ranking.
 # Equivalent seconds charged per radian when ranking feasible whole-body plans.
 JointMotionCostWeight: 0.25
 # Equivalent seconds charged per metre of downstream-link tracking RMS.
@@ -16,6 +21,5 @@ StabilityQpJointStepLimit: 0.10
 StabilityQpRegularization: 0.001
 StabilityQpConvergenceTolerance: 0.001
 
-# Whole-body swept-volume selection and direct execution.
-PlanActivationLeadTime: 0.75
+# Whole-body frame integration.
 RootChildFrameId: root

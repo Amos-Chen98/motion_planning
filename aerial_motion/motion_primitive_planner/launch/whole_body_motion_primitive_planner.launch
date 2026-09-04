@@ -4,7 +4,6 @@
     <arg name="robot_ns" default="dragon" />
     <arg name="world_frame_id" default="world" />
     <arg name="root_child_frame_id" default="root" />
-    <arg name="pcl_topic" default="/$(arg robot_ns)/cloud_registered_body" />
     <arg name="target_topic" default="/move_base_simple/goal" />
     <arg name="root_pose_topic" default="/$(arg robot_ns)/root/tail_pose" />
     <arg name="odom_topic" default="/$(arg robot_ns)/root/flu_odom" />
@@ -12,43 +11,27 @@
     <arg name="full_state_target_topic" default="full_state_target" />
     <arg name="root_target_topic" default="/$(arg robot_ns)/root/target_pose" />
     <arg name="trajectory_topic" default="/planning/trajectory" />
+    <arg name="pcl_topic" default="/$(arg robot_ns)/cloud_registered_body" />
 
-    <arg name="command_hz" default="40.0" />
-    <arg name="replan_trigger_ratio" default="0.3" />
-    <arg name="verbose" default="true" />
-    <arg name="activation_lead_time" default="0.75" />
     <arg name="use_accumulated_map" default="true" />
-    <arg name="goal_tolerance" default="0.2" />
-    <arg name="planning_horizon" default="3.0" />
-    <arg name="zero_local_target_vel" default="true" />
-    <arg name="candidate_count" default="9" />
-    <arg name="max_primitive_offset" default="0.8" />
+    <arg name="voxel_width" default="0.10" />
+    <arg name="dilate_radius" default="0.20" />
+    <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
 
-    <arg name="joint_planning_timeout" default="0.15" />
-    <arg name="joint_validity_resolution" default="0.025" />
-    <arg name="joint_planner_seed" default="1" />
+    <arg name="planning_horizon" default="3.0" />
+    <arg name="max_vel_mag" default="1.0" />
     <arg name="max_angular_vel" default="1.0" />
-    <arg name="max_joint_command_step" default="0.10" />
-    <arg name="joint_motion_cost_weight" default="0.25" />
-    <arg name="tracking_error_cost_weight" default="6.0" />
     <arg name="publish_yaw_command" default="true" />
-    <arg name="snake_ik_singularity_threshold" default="0.10" />
 
     <arg name="stability_check_fc_t" default="false" />
     <arg name="fc_rp_min_threshold" default="3.2" />
     <arg name="fc_t_min_threshold" default="0.01" />
-    <arg name="static_thrust_min" default="2.0" />
-    <arg name="static_thrust_max" default="30.0" />
     <arg name="overlap_min_clearance" default="0.01" />
-    <arg name="max_baselink_tilt" default="1.20" />
 
-    <arg name="voxel_width" default="0.10" />
-    <!-- The dilated binary map represents each approximately 0.40 m-wide link capsule. -->
-    <arg name="dilate_radius" default="0.20" />
-    <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
     <arg name="fix_target_height" default="true" />
     <arg name="target_height" default="1.0" />
-    <arg name="max_vel_mag" default="1.0" />
+
+    <arg name="verbose" default="true" />
 
     <include file="$(find motion_primitive_planner)/launch/root_state_to_flu_odom.launch">
         <arg name="robot_ns" value="$(arg robot_ns)" />
@@ -82,34 +65,17 @@
         <param name="VoxelWidth" value="$(arg voxel_width)" />
         <param name="DilateRadius" value="$(arg dilate_radius)" />
         <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
-        <param name="MaxVelMag" value="$(arg max_vel_mag)" />
-        <param name="ReplanTriggerRatio" value="$(arg replan_trigger_ratio)" />
-        <param name="Verbose" value="$(arg verbose)" />
-        <param name="PlanActivationLeadTime" value="$(arg activation_lead_time)" />
-        <param name="GoalTolerance" value="$(arg goal_tolerance)" />
         <param name="PlanningHorizon" value="$(arg planning_horizon)" />
-        <param name="ZeroLocalTargetVel" value="$(arg zero_local_target_vel)" />
-        <param name="CandidateCount" value="$(arg candidate_count)" />
-        <param name="MaxPrimitiveOffset" value="$(arg max_primitive_offset)" />
-        <param name="JointPlanningTimeout" value="$(arg joint_planning_timeout)" />
-        <param name="JointValidityResolution" value="$(arg joint_validity_resolution)" />
-        <param name="JointPlannerSeed" value="$(arg joint_planner_seed)" />
+        <param name="MaxVelMag" value="$(arg max_vel_mag)" />
         <param name="MaxAngularVel" value="$(arg max_angular_vel)" />
-        <param name="MaxJointCommandStep" value="$(arg max_joint_command_step)" />
-        <param name="JointMotionCostWeight" value="$(arg joint_motion_cost_weight)" />
-        <param name="TrackingErrorCostWeight" value="$(arg tracking_error_cost_weight)" />
         <param name="PublishYawCommand" value="$(arg publish_yaw_command)" />
-        <param name="SnakeIkSingularityThreshold" value="$(arg snake_ik_singularity_threshold)" />
-        <param name="CommandHz" value="$(arg command_hz)" />
         <param name="StabilityCheckFcT" value="$(arg stability_check_fc_t)" />
         <param name="FcRpMinThreshold" value="$(arg fc_rp_min_threshold)" />
         <param name="FcTMinThreshold" value="$(arg fc_t_min_threshold)" />
-        <param name="StaticThrustMin" value="$(arg static_thrust_min)" />
-        <param name="StaticThrustMax" value="$(arg static_thrust_max)" />
         <param name="OverlapMinClearance" value="$(arg overlap_min_clearance)" />
-        <param name="MaxBaselinkTilt" value="$(arg max_baselink_tilt)" />
         <param name="FixTargetHeight" value="$(arg fix_target_height)" />
         <param name="TargetHeight" value="$(arg target_height)" />
+        <param name="Verbose" value="$(arg verbose)" />
       </node>
     </group>
 </launch>

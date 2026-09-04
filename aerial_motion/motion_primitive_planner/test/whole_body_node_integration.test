@@ -8,9 +8,9 @@
         <arg name="pcl_topic" value="/whole_body_planner_test/cloud" />
         <arg name="max_vel_mag" value="0.4" />
         <arg name="planning_horizon" value="0.6" />
-        <arg name="replan_trigger_ratio" value="0.5" />
         <arg name="use_accumulated_map" value="false" />
     </include>
+    <param name="/dragon/whole_body_motion_primitive_planner/ReplanTriggerRatio" value="0.5" />
     <test test-name="whole_body_node_integration_test" pkg="motion_primitive_planner"
           type="whole_body_node_integration_test" time-limit="90.0" />
 </launch>
