@@ -1,5 +1,4 @@
 #include <motion_primitive_planner/joint_trajectory_planner.h>
-#include <motion_primitive_planner/planner_core.h>
 
 #include <ompl/base/ScopedState.h>
 #include <ompl/base/StateSampler.h>
@@ -23,6 +22,7 @@ namespace motion_primitive_planner
 namespace
 {
 constexpr double kEpsilon = 1e-9;
+constexpr double kPredictionTimeTolerance = 1e-6;
 constexpr double kInfinity = std::numeric_limits<double>::infinity();
 //! Resolution relaxation used by the sampling-based search and its shortcut,
 //! whose output is always re-validated at the configured resolution.
@@ -135,6 +135,149 @@ void seedOmplOnce(unsigned int seed)
   std::call_once(flag, [seed]() { ompl::RNG::setSeed(seed); });
 }
 }  // namespace
+
+TrajectoryHistory::TrajectoryHistory(const FollowerConfig& config)
+  : sample_interval_(config.trajectory_sample_interval)
+  , maximum_length_(config.trajectory_buffer_max_length)
+{
+  config.validateOrThrow();
+}
+
+bool TrajectoryHistory::append(const Eigen::Vector3d& position)
+{
+  return append(position, sample_interval_, maximum_length_);
+}
+
+bool TrajectoryHistory::append(const Eigen::Vector3d& position, double sample_interval,
+                               double maximum_length)
+{
+  if (!position.allFinite() || sample_interval <= 0.0 || maximum_length <= 0.0)
+  {
+    return false;
+  }
+  if (points_.empty())
+  {
+    points_.push_back({position});
+    return true;
+  }
+  const double distance = (position - points_.back().position).norm();
+  if (distance < sample_interval)
+  {
+    return false;
+  }
+  points_.push_back({position});
+  arc_length_ += distance;
+  while (points_.size() > 1 && arc_length_ > maximum_length)
+  {
+    arc_length_ -= (points_[1].position - points_[0].position).norm();
+    points_.pop_front();
+  }
+  return true;
+}
+
+NominalJointContext makeNominalJointContext(const TrajectoryHistory& history,
+                                            const DragonModelInfo& model)
+{
+  NominalJointContext context;
+  context.executed_history = history;
+  context.link_num = model.linkNum();
+  context.link_length = model.linkLength();
+  context.pitch_joint_indices = model.pitchJointIndices();
+  context.yaw_joint_indices = model.yawJointIndices();
+  return context;
+}
+
+std::vector<NominalJointSample> NominalJointPredictor::predict(
+    const Trajectory<5>& root_trajectory, const NominalJointContext& context,
+    const Eigen::VectorXd& start_joints, double start_yaw, double sample_dt) const
+{
+  return predict(root_trajectory, context, start_joints,
+                 RootAttitude{start_yaw, 0.0}, sample_dt, false);
+}
+
+std::vector<NominalJointSample> NominalJointPredictor::predict(
+    const Trajectory<5>& root_trajectory, const NominalJointContext& context,
+    const Eigen::VectorXd& start_joints, const RootAttitude& start_attitude,
+    double sample_dt, bool command_pitch, double trajectory_start_time,
+    double output_time_offset) const
+{
+  std::vector<NominalJointSample> samples;
+  if (root_trajectory.getPieceNum() <= 0 || sample_dt <= 0.0 || context.link_num <= 0 ||
+      context.link_length <= 0.0 || start_joints.size() <= 0 ||
+      trajectory_start_time < 0.0 || output_time_offset < 0.0)
+  {
+    return samples;
+  }
+
+  TrajectoryHistory history = context.executed_history;
+  Eigen::VectorXd predicted_joints = start_joints;
+  RootAttitude attitude = start_attitude;
+  const double duration = root_trajectory.getTotalDuration();
+  if (!std::isfinite(duration) || duration < 0.0 || trajectory_start_time > duration + kPredictionTimeTolerance)
+  {
+    return samples;
+  }
+  const double remaining_duration = std::max(0.0, duration - trajectory_start_time);
+  const int sample_count = remaining_duration > kPredictionTimeTolerance
+                               ? std::max(1, static_cast<int>(std::ceil(remaining_duration / sample_dt)))
+                               : 0;
+  const double required_history = static_cast<double>(context.link_num - 1) * context.link_length;
+  const Eigen::Vector3d initial_root_tail = root_trajectory.getPos(trajectory_start_time);
+  const Eigen::Matrix3d initial_root_rotation = linkRotation(start_attitude);
+  samples.reserve(static_cast<size_t>(sample_count + 1));
+
+  double previous_trajectory_time = trajectory_start_time;
+  for (int sample_index = 0; sample_index <= sample_count; ++sample_index)
+  {
+    const double trajectory_time = sample_count > 0
+                                       ? trajectory_start_time + remaining_duration *
+                                           static_cast<double>(sample_index) / sample_count
+                                       : trajectory_start_time;
+    const double output_time = output_time_offset + trajectory_time - trajectory_start_time;
+    const Eigen::Vector3d position = root_trajectory.getPos(trajectory_time);
+    const Eigen::Vector3d velocity = root_trajectory.getVel(trajectory_time);
+    if (!position.allFinite() || !velocity.allFinite())
+    {
+      samples.clear();
+      return samples;
+    }
+    if (sample_index > 0)
+    {
+      attitude = advanceRootAttitude(attitude, velocity,
+                                    trajectory_time - previous_trajectory_time,
+                                    config_, command_pitch);
+    }
+    const bool history_changed = history.append(position);
+
+    // Preserve the measured/commanded state exactly at the handover sample.  All
+    // later samples reconstruct the nominal follow-the-leader configuration.
+    if (sample_index > 0)
+    {
+      const Eigen::Matrix3d root_rotation = linkRotation(attitude);
+      const std::deque<multilink_copilot::TrajectoryPoint> nominal_history =
+          history.arcLength() < required_history
+              ? multilink_copilot::follow_the_leader::prependCurrentBodyMorphology(
+                    history.points(), initial_root_tail, initial_root_rotation, start_joints,
+                    context.pitch_joint_indices, context.yaw_joint_indices,
+                    context.link_num, context.link_length)
+              : history.points();
+      const std::vector<Eigen::Vector3d> targets =
+          multilink_copilot::follow_the_leader::computeTargetPositions(
+              nominal_history, position, context.link_num, context.link_length);
+      if (!targets.empty())
+      {
+        predicted_joints = multilink_copilot::follow_the_leader::computeJointAngles(
+            targets, position, root_rotation, context.pitch_joint_indices,
+            context.yaw_joint_indices, predicted_joints.size(),
+            config_.ik_singularity_threshold, predicted_joints);
+      }
+    }
+    samples.push_back({output_time, attitude.yaw, attitude.pitch, position,
+                       predicted_joints, history_changed});
+    previous_trajectory_time = trajectory_time;
+  }
+  return samples;
+}
 
 Eigen::VectorXd JointPlanResult::jointPositions(double time) const
 {
@@ -266,13 +409,11 @@ JointTrajectoryPlanner::JointTrajectoryPlanner(
     const std::shared_ptr<multilink_copilot::StabilityEvaluator>& stability_evaluator)
   : config_(config), stability_evaluator_(stability_evaluator), nominal_predictor_(config.follower)
 {
-  if (!stability_evaluator_ || config_.reference_dt <= 0.0 ||
-      config_.planning_timeout <= 0.0 || config_.validity_resolution <= 0.0 ||
-      config_.max_joint_command_step <= 0.0 ||
-      config_.follower.command_hz <= 0.0 || config_.follower.max_angular_vel <= 0.0)
+  if (!stability_evaluator_)
   {
     throw std::invalid_argument("Invalid joint trajectory planner configuration");
   }
+  config_.validateOrThrow();
   seedOmplOnce(config_.random_seed);
 }
 

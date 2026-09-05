@@ -1,6 +1,0 @@
-# Nominal stability evaluation period. Collision checks use the fixed CommandHz time grid.
-PredictionDt: 0.10
-
-# Keep false unless a downstream multilink_copilot performs the joint-space
-# stability projection.  The Naraha free-space integration launch enables it.
-AllowCopilotStabilityProjectionFallback: false

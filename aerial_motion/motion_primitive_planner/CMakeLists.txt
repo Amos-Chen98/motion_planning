@@ -35,10 +35,10 @@ catkin_package(
 include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${OMPL_INCLUDE_DIRS})
 
 add_library(motion_primitive_planner_core
-  src/planner_core.cpp
-  src/planner_common.cpp
+  src/root_primitive_generator.cpp
+  src/dragon_geometry.cpp
+  src/whole_body_planner.cpp
   src/planner_config.cpp
-  src/root_candidate_evaluator.cpp
   src/joint_trajectory_planner.cpp
 )
 if(TARGET ompl::ompl)
@@ -49,11 +49,7 @@ endif()
 target_link_libraries(motion_primitive_planner_core ${catkin_LIBRARIES} ${MOTION_PRIMITIVE_OMPL_TARGET})
 add_dependencies(motion_primitive_planner_core ${catkin_EXPORTED_TARGETS})
 
-add_executable(motion_primitive_planner_node src/online_planner.cpp)
-target_link_libraries(motion_primitive_planner_node motion_primitive_planner_core ${catkin_LIBRARIES})
-add_dependencies(motion_primitive_planner_node ${catkin_EXPORTED_TARGETS})
-
-add_executable(whole_body_motion_primitive_planner_node src/whole_body_online_planner.cpp)
+add_executable(whole_body_motion_primitive_planner_node src/whole_body_planner_node.cpp)
 target_link_libraries(whole_body_motion_primitive_planner_node
   motion_primitive_planner_core
   ${catkin_LIBRARIES}
@@ -90,17 +86,9 @@ if(CATKIN_ENABLE_TESTING)
     target_link_libraries(whole_body_node_integration_test ${catkin_LIBRARIES})
     add_dependencies(whole_body_node_integration_test ${catkin_EXPORTED_TARGETS})
   endif()
-  add_rostest_gtest(root_node_integration_test
-    test/root_node_integration.test
-    test/root_node_integration_test.cpp
-  )
-  if(TARGET root_node_integration_test)
-    target_link_libraries(root_node_integration_test ${catkin_LIBRARIES})
-    add_dependencies(root_node_integration_test ${catkin_EXPORTED_TARGETS})
-  endif()
 endif()
 
-install(TARGETS motion_primitive_planner_core motion_primitive_planner_node whole_body_motion_primitive_planner_node
+install(TARGETS motion_primitive_planner_core whole_body_motion_primitive_planner_node
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

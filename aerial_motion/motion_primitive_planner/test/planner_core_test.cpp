@@ -1,7 +1,7 @@
-#include <motion_primitive_planner/planner_core.h>
+#include <motion_primitive_planner/whole_body_planner.h>
+#include <motion_primitive_planner/whole_body_planner_node.h>
 #include <motion_primitive_planner/joint_trajectory_planner.h>
-#include <motion_primitive_planner/planner_common.h>
-#include <motion_primitive_planner/root_candidate_evaluator.h>
+#include <motion_primitive_planner/root_primitive_generator.h>
 
 #include <multilink_copilot/follow_the_leader.h>
 
@@ -535,79 +535,6 @@ TEST(NominalJointPredictor, ExposesRetracedHistoryBranchDiscontinuity)
   EXPECT_GT(maximum_joint_step, 3.0);
 }
 
-TEST(CandidateSelector, RanksOnlyFeasibleCandidatesByLengthThenJerk)
-{
-  std::vector<Candidate> candidates(5);
-  candidates[0].status = CandidateStatus::kCollision;
-  candidates[0].path_length = 1.0;
-  candidates[1].status = CandidateStatus::kStability;
-  candidates[1].path_length = 0.5;
-  candidates[2].status = CandidateStatus::kFeasible;
-  candidates[2].path_length = 2.0;
-  candidates[2].jerk_energy = 10.0;
-  candidates[3].status = CandidateStatus::kFeasible;
-  candidates[3].path_length = 1.5;
-  candidates[3].jerk_energy = 20.0;
-  candidates[4].status = CandidateStatus::kFeasible;
-  candidates[4].path_length = 1.5;
-  candidates[4].jerk_energy = 5.0;
-  EXPECT_EQ(selectBestCandidate(candidates), 4);
-  for (Candidate& candidate : candidates)
-  {
-    candidate.status = CandidateStatus::kCollision;
-  }
-  EXPECT_EQ(selectBestCandidate(candidates), -1);
-}
-
-TEST(CandidateSelector, UsesCopilotProjectionOnlyWhenNoNominallyStableCandidateExists)
-{
-  std::vector<Candidate> candidates(3);
-  candidates[0].status = CandidateStatus::kStabilityProjection;
-  candidates[0].requires_stability_projection = true;
-  candidates[0].min_fc_rp = 3.0;
-  candidates[0].path_length = 1.0;
-  candidates[1].status = CandidateStatus::kStabilityProjection;
-  candidates[1].requires_stability_projection = true;
-  candidates[1].min_fc_rp = 3.1;
-  candidates[1].path_length = 2.0;
-  candidates[2].status = CandidateStatus::kFeasible;
-  candidates[2].min_fc_rp = 3.2;
-  candidates[2].path_length = 3.0;
-
-  EXPECT_EQ(selectBestCandidate(candidates, true), 2);
-
-  candidates[2].status = CandidateStatus::kStability;
-  EXPECT_EQ(selectBestCandidate(candidates), -1);
-  EXPECT_EQ(selectBestCandidate(candidates, true), 0);
-}
-
-TEST(CandidateSelector, RanksProjectionFallbackByLengthJointMotionMarginAndJerk)
-{
-  std::vector<Candidate> candidates(4);
-  for (Candidate& candidate : candidates)
-  {
-    candidate.status = CandidateStatus::kStabilityProjection;
-    candidate.requires_stability_projection = true;
-    candidate.min_fc_rp = 3.0;
-  }
-  candidates[0].min_fc_rp = 2.9;
-  candidates[0].path_length = 2.0;
-  candidates[1].path_length = 1.5;
-  candidates[1].jerk_energy = 1.0;
-  candidates[2].min_fc_rp = 2.8;
-  candidates[2].path_length = 1.0;
-  candidates[2].joint_motion = 2.0;
-  candidates[2].jerk_energy = 2.0;
-  candidates[3].path_length = 1.0;
-  candidates[3].joint_motion = 1.0;
-  candidates[3].jerk_energy = 1.0;
-
-  EXPECT_EQ(selectBestCandidate(candidates, true), 3);
-
-  candidates[3].requires_stability_projection = false;
-  EXPECT_EQ(selectBestCandidate(candidates, true), 2);
-}
-
 TEST(WholeBodyCandidateSelector, BalancesDurationAndJointMotionThenUsesDeterministicTies)
 {
   std::vector<WholeBodyCandidateScore> candidates(6);
@@ -1010,44 +937,8 @@ TEST(CandidateDiagnostics, UsesOneSharedStatusColorMapping)
       candidateColor(CandidateStatus::kJointPlanningFailed, false);
   EXPECT_FLOAT_EQ(joint_failure.r, 1.0f);
   EXPECT_FLOAT_EQ(joint_failure.g, 0.5f);
-  const std_msgs::ColorRGBA joint_limit = candidateColor(CandidateStatus::kJointLimit, false);
-  EXPECT_FLOAT_EQ(joint_limit.r, 1.0f);
-  EXPECT_FLOAT_EQ(joint_limit.b, 1.0f);
 }
 
-TEST(RootStabilityFallback, AcceptsOnlyAnIsolatedFcRpViolation)
-{
-  multilink_copilot::StabilityConfig config;
-  config.fc_rp_min_threshold = 3.5;
-  config.check_fc_t = true;
-  config.fc_t_min_threshold = 0.05;
-  config.static_thrust_min = 2.0;
-  config.static_thrust_max = 20.0;
-  config.overlap_min_clearance = 0.01;
-  config.max_baselink_tilt = 1.2;
-  config.feasibility_tolerance = 1.0e-6;
-
-  multilink_copilot::StabilityMetrics metrics;
-  metrics.fc_rp_min = 3.0;
-  metrics.fc_t_min = 0.10;
-  metrics.static_thrust_min = 5.0;
-  metrics.static_thrust_max = 10.0;
-  metrics.overlap_clearance = 0.10;
-  metrics.baselink_tilt = 0.5;
-  EXPECT_TRUE(isOnlyFcRpViolation(metrics, config));
-
-  metrics.baselink_tilt = 1.3;
-  EXPECT_FALSE(isOnlyFcRpViolation(metrics, config));
-  metrics.baselink_tilt = 0.5;
-  metrics.static_thrust_min = 1.0;
-  EXPECT_FALSE(isOnlyFcRpViolation(metrics, config));
-  metrics.static_thrust_min = 5.0;
-  metrics.fc_t_min = 0.01;
-  EXPECT_FALSE(isOnlyFcRpViolation(metrics, config));
-  metrics.fc_t_min = 0.10;
-  metrics.fc_rp_min = 4.0;
-  EXPECT_FALSE(isOnlyFcRpViolation(metrics, config));
-}
 }  // namespace
 }  // namespace motion_primitive_planner
 

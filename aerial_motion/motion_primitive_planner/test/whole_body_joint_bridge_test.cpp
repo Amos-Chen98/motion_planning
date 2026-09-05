@@ -2,7 +2,8 @@
 // candidate batch must yield an executable whole-body trajectory, and the
 // archetypal fold flip must be connected without crossing an infeasible edge.
 #include <motion_primitive_planner/joint_trajectory_planner.h>
-#include <motion_primitive_planner/planner_common.h>
+#include <motion_primitive_planner/root_primitive_generator.h>
+#include <motion_primitive_planner/whole_body_planner.h>
 
 #include <dragon/model/hydrus_like_robot_model.h>
 #include <pluginlib/class_loader.h>
@@ -175,6 +176,119 @@ protected:
   std::unique_ptr<DragonModelInfo> info_;
   PrimitiveConfig primitive_;
 };
+
+class WholeBodyBatchPlanner : public WholeBodyJointBridge
+{
+protected:
+  void SetUp() override
+  {
+    WholeBodyJointBridge::SetUp();
+    ASSERT_FALSE(HasFatalFailure());
+    config_.reset(new WholeBodyPlannerConfig(ros::NodeHandle("~")));
+    config_->shared.primitive = primitive_;
+    config_->shared.primitive.candidate_count = 3;
+    config_->shared.common.dilateRadius = 0.0;
+    config_->joint = jointConfig(1);
+    environment_.reset(new PlanningEnvironment(config_->shared));
+
+    std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>> evaluators;
+    for (int index = 0; index < config_->shared.primitive.candidate_count; ++index)
+    {
+      const auto model = boost::dynamic_pointer_cast<Dragon::HydrusLikeRobotModel>(
+          loader_->createInstance("dragon/hydrus_like_robot_model"));
+      ASSERT_TRUE(model);
+      evaluators.push_back(std::make_shared<multilink_copilot::StabilityEvaluator>(
+          model, config_->stability));
+    }
+    planner_.reset(new WholeBodyPlanner(*config_, info_->collisionGeometry(), evaluators));
+    start_.position = Eigen::Vector3d(0.0, 0.0, 2.0);
+    start_joints_.resize(6);
+    start_joints_ << 0.0, M_PI_2, 0.0, M_PI_2, 0.0, M_PI_2;
+    TrajectoryHistory history(config_->joint.follower);
+    history.append(start_.position);
+    context_ = makeNominalJointContext(history, *info_);
+    batch_ = environment_->generate(start_, start_.position + Eigen::Vector3d::UnitX());
+    ASSERT_TRUE(batch_.success()) << batch_.detail;
+    ASSERT_EQ(batch_.candidates.size(), 3u);
+    for (const Candidate& candidate : batch_.candidates)
+    {
+      ASSERT_NE(candidate.status, CandidateStatus::kGenerationFailed) << candidate.detail;
+    }
+  }
+
+  std::unique_ptr<WholeBodyPlannerConfig> config_;
+  std::unique_ptr<PlanningEnvironment> environment_;
+  std::unique_ptr<WholeBodyPlanner> planner_;
+  RootState start_;
+  Eigen::VectorXd start_joints_;
+  NominalJointContext context_;
+  PrimitiveBatch batch_;
+};
+
+TEST_F(WholeBodyBatchPlanner, SelectsExecutableCandidateUsingTheCapturedMap)
+{
+  const auto occupancy = environment_->occupancySnapshot();
+  environment_->replaceMap({start_.position});
+  ASSERT_TRUE(environment_->occupied(start_.position));
+  ASSERT_FALSE(occupancy->query(start_.position));
+
+  const WholeBodyPlanResult result = planner_->plan(
+      batch_, occupancy, start_joints_, RootAttitude{}, context_,
+      ros::Time::now() + ros::Duration(2.0));
+  ASSERT_EQ(result.candidates.size(), batch_.candidates.size());
+  ASSERT_GE(result.selected, 0);
+  ASSERT_LT(static_cast<size_t>(result.selected), result.candidates.size());
+  const WholeBodyCandidate& selected = result.candidates[result.selected];
+  EXPECT_EQ(selected.status, CandidateStatus::kSelected);
+  ASSERT_TRUE(selected.joints.success) << selected.detail;
+  EXPECT_GT(selected.joints.duration, 0.0);
+  EXPECT_GE(selected.joints.minimum_fc_rp + 1e-4, config_->stability.fc_rp_min_threshold);
+  EXPECT_TRUE(selected.joints.jointPositions(0.0).isApprox(start_joints_, 1e-8));
+  EXPECT_TRUE(selected.scaled_root.getPos(0.0).isApprox(start_.position, 1e-8));
+  EXPECT_TRUE(selected.scaled_root.getPos(selected.scaled_root.getTotalDuration())
+                  .isApprox(batch_.local_target, 1e-8));
+  EXPECT_NEAR(selected.joints.duration,
+              selected.scaled_root.getTotalDuration() + selected.joints.root_translation_delay,
+              1e-8);
+
+  const auto cost = [this](const WholeBodyCandidate& candidate) {
+    return candidate.joints.duration +
+        config_->joint_motion_cost_weight * candidate.joints.joint_motion +
+        config_->tracking_error_cost_weight * candidate.joints.tracking_error_rms;
+  };
+  int selected_count = 0;
+  for (const WholeBodyCandidate& candidate : result.candidates)
+  {
+    selected_count += candidate.status == CandidateStatus::kSelected;
+    if (candidate.status == CandidateStatus::kFeasible)
+    {
+      EXPECT_LE(cost(selected), cost(candidate) + 1e-6);
+    }
+  }
+  EXPECT_EQ(selected_count, 1);
+}
+
+TEST_F(WholeBodyBatchPlanner, RejectsUnevaluatedCandidatesAfterTheSharedDeadline)
+{
+  batch_.candidates.front().status = CandidateStatus::kGenerationFailed;
+  batch_.candidates.front().detail = "generation failed before joint planning";
+  const WholeBodyPlanResult result = planner_->plan(
+      batch_, environment_->occupancySnapshot(), start_joints_, RootAttitude{}, context_,
+      ros::Time::now() - ros::Duration(1.0));
+  EXPECT_EQ(result.selected, -1);
+  ASSERT_EQ(result.candidates.size(), batch_.candidates.size());
+  EXPECT_EQ(result.candidates.front().status, CandidateStatus::kGenerationFailed);
+  EXPECT_EQ(result.candidates.front().detail, batch_.candidates.front().detail);
+  for (size_t index = 1; index < result.candidates.size(); ++index)
+  {
+    const WholeBodyCandidate& candidate = result.candidates[index];
+    EXPECT_EQ(candidate.status, CandidateStatus::kJointPlanningFailed);
+    EXPECT_EQ(candidate.detail, "whole-body planning budget exhausted");
+    EXPECT_FALSE(candidate.joints.success);
+    EXPECT_TRUE(candidate.joints.joint_waypoints.empty());
+    EXPECT_EQ(candidate.scaled_root.getPieceNum(), 0);
+  }
+}
 
 // Targets behind the robot force the nominal follow-the-leader terminal shape
 // across the infeasible near-straight band.  At least one global-RRT plan in

@@ -4,6 +4,11 @@
     <group ns="dragon">
         <param name="robot_description" command="$(find xacro)/xacro '$(arg robot_model)' robot_name:=dragon" />
         <test test-name="whole_body_joint_bridge_test" pkg="motion_primitive_planner"
-              type="whole_body_joint_bridge_test" time-limit="300.0" />
+              type="whole_body_joint_bridge_test" time-limit="300.0">
+            <rosparam command="load" file="$(find motion_primitive_planner)/config/whole_body_motion_primitive_planner.yaml" />
+            <rosparam param="MapBound">[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]</rosparam>
+            <param name="VoxelWidth" value="0.10" />
+            <param name="MaxVelMag" value="1.0" />
+        </test>
     </group>
 </launch>

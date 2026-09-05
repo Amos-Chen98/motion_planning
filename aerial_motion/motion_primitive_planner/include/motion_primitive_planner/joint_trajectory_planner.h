@@ -2,7 +2,7 @@
 #ifndef MOTION_PRIMITIVE_PLANNER_JOINT_TRAJECTORY_PLANNER_H
 #define MOTION_PRIMITIVE_PLANNER_JOINT_TRAJECTORY_PLANNER_H
 
-#include <motion_primitive_planner/planner_common.h>
+#include <motion_primitive_planner/dragon_geometry.h>
 
 #include <gcopter/trajectory.hpp>
 #include <multilink_copilot/follow_the_leader.h>
@@ -22,15 +22,74 @@
 namespace motion_primitive_planner
 {
 
-struct JointPlannerConfig
+class TrajectoryHistory
 {
-  FollowerConfig follower;
-  double reference_dt = 0.10;
-  //! Total per-candidate joint-planning budget.
-  double planning_timeout = 0.15;
-  double validity_resolution = 0.025;
-  double max_joint_command_step = 0.10;
-  unsigned int random_seed = 1;
+public:
+  TrajectoryHistory() = default;
+  explicit TrajectoryHistory(const FollowerConfig& config);
+
+  bool append(const Eigen::Vector3d& position);
+  bool append(const Eigen::Vector3d& position, double sample_interval, double maximum_length);
+
+  const std::deque<multilink_copilot::TrajectoryPoint>& points() const { return points_; }
+  double arcLength() const { return arc_length_; }
+  double sampleInterval() const { return sample_interval_; }
+  double maximumLength() const { return maximum_length_; }
+
+private:
+  double sample_interval_ = 0.05;
+  double maximum_length_ = 10.0;
+  std::deque<multilink_copilot::TrajectoryPoint> points_;
+  double arc_length_ = 0.0;
+};
+
+struct NominalJointContext
+{
+  TrajectoryHistory executed_history;
+  int link_num = 0;
+  double link_length = 0.0;
+  std::vector<int> pitch_joint_indices;
+  std::vector<int> yaw_joint_indices;
+};
+
+NominalJointContext makeNominalJointContext(const TrajectoryHistory& history,
+                                            const DragonModelInfo& model);
+
+struct NominalJointSample
+{
+  double time = 0.0;
+  double yaw = 0.0;
+  double pitch = 0.0;
+  Eigen::Vector3d root_position = Eigen::Vector3d::Zero();
+  Eigen::VectorXd joints;
+  bool history_changed = false;
+};
+
+class NominalJointPredictor
+{
+public:
+  explicit NominalJointPredictor(const FollowerConfig& config) : config_(config)
+  {
+    config_.validateOrThrow();
+  }
+
+  std::vector<NominalJointSample> predict(const Trajectory<5>& root_trajectory,
+                                          const NominalJointContext& context,
+                                          const Eigen::VectorXd& start_joints,
+                                          double start_yaw,
+                                          double sample_dt) const;
+
+  std::vector<NominalJointSample> predict(const Trajectory<5>& root_trajectory,
+                                          const NominalJointContext& context,
+                                          const Eigen::VectorXd& start_joints,
+                                          const RootAttitude& start_attitude,
+                                          double sample_dt,
+                                          bool command_pitch,
+                                          double trajectory_start_time = 0.0,
+                                          double output_time_offset = 0.0) const;
+
+private:
+  FollowerConfig config_;
 };
 
 struct TimedJointWaypoint

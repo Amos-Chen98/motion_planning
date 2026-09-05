@@ -1,6 +1,5 @@
-#include <motion_primitive_planner/joint_trajectory_planner.h>
-#include <motion_primitive_planner/planner_config.h>
-#include <motion_primitive_planner/planner_core.h>
+#include <motion_primitive_planner/whole_body_planner.h>
+#include <motion_primitive_planner/whole_body_planner_node.h>
 
 #include <aerial_robot_msgs/FullStateTarget.h>
 #include <dragon/model/hydrus_like_robot_model.h>
@@ -12,6 +11,9 @@
 #include <ros/master.h>
 #include <sensor_msgs/JointState.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <std_msgs/Float64.h>
+#include <std_msgs/Int32.h>
+#include <visualization_msgs/MarkerArray.h>
 
 #include <Eigen/Geometry>
 
@@ -108,38 +110,32 @@ struct ActivePlan
   }
 };
 
-struct WholeBodyCandidate
-{
-  Candidate root;
-  Trajectory<5> scaled_root;
-  JointPlanResult joints;
-  CandidateStatus status = CandidateStatus::kGenerationFailed;
-  std::string detail;
-};
 }  // namespace
 
-class WholeBodyOnlinePlanner
+class WholeBodyPlannerNode
 {
 public:
-  WholeBodyOnlinePlanner(const WholeBodyPlannerConfig& config, ros::NodeHandle& nh)
+  WholeBodyPlannerNode(const WholeBodyPlannerConfig& config, ros::NodeHandle& nh)
     : config_(config)
     , nh_(nh)
     , environment_(config.shared)
     , ros_interface_(config.shared.common, nh_)
     , robot_model_loader_("aerial_robot_model", "aerial_robot_model::RobotModel")
     , executed_history_(config.joint.follower)
-    , diagnostics_(nh_, config.shared.common.worldFrameId,
-                   "whole_body_root_candidates", 0.015)
     , replan_trigger_(config.shared.replan_trigger_ratio)
   {
+    marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("candidate_markers", 1, true);
+    selected_candidate_pub_ = nh_.advertise<std_msgs::Int32>("selected_candidate", 1, true);
+    selected_min_fc_pub_ = nh_.advertise<std_msgs::Float64>("selected_min_fc_rp", 1, true);
+    selected_joint_motion_pub_ = nh_.advertise<std_msgs::Float64>("selected_joint_motion", 1, true);
     initializeRobotModels();
-    map_sub_ = nh_.subscribe("voxelmap/occupied", 1, &WholeBodyOnlinePlanner::mapCallback, this,
+    map_sub_ = nh_.subscribe("voxelmap/occupied", 1, &WholeBodyPlannerNode::mapCallback, this,
                              ros::TransportHints().tcpNoDelay());
-    target_sub_ = nh_.subscribe("target", 1, &WholeBodyOnlinePlanner::targetCallback, this,
+    target_sub_ = nh_.subscribe("target", 1, &WholeBodyPlannerNode::targetCallback, this,
                                 ros::TransportHints().tcpNoDelay());
-    odom_sub_ = nh_.subscribe("odom", 1, &WholeBodyOnlinePlanner::odomCallback, this,
+    odom_sub_ = nh_.subscribe("odom", 1, &WholeBodyPlannerNode::odomCallback, this,
                               ros::TransportHints().tcpNoDelay());
-    joint_state_sub_ = nh_.subscribe("joint_states", 1, &WholeBodyOnlinePlanner::jointStateCallback, this,
+    joint_state_sub_ = nh_.subscribe("joint_states", 1, &WholeBodyPlannerNode::jointStateCallback, this,
                                      ros::TransportHints().tcpNoDelay());
     full_state_topic_ = nh_.resolveName("full_state_target");
     if (hasConflictingFullStatePublisher())
@@ -149,17 +145,17 @@ public:
     full_state_pub_ = nh_.advertise<aerial_robot_msgs::FullStateTarget>("full_state_target", 10);
     root_target_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("root/target_pose", 10);
     command_timer_ = nh_.createTimer(ros::Duration(1.0 / config_.joint.follower.command_hz),
-                                     &WholeBodyOnlinePlanner::commandTimerCallback, this);
+                                     &WholeBodyPlannerNode::commandTimerCallback, this);
     publisher_guard_timer_ = nh_.createTimer(ros::Duration(1.0),
-                                             &WholeBodyOnlinePlanner::publisherGuardTimerCallback, this);
-    planning_worker_ = std::thread(&WholeBodyOnlinePlanner::planningWorker, this);
+                                             &WholeBodyPlannerNode::publisherGuardTimerCallback, this);
+    planning_worker_ = std::thread(&WholeBodyPlannerNode::planningWorker, this);
     ROS_INFO("Whole-body motion primitive planner ready: candidates=%d, fc_rp_min>=%.2f, "
              "collision radius=%.2f m, replan_ratio=%.2f.",
              config_.shared.primitive.candidate_count, config_.stability.fc_rp_min_threshold,
              config_.shared.common.dilateRadius, config_.shared.replan_trigger_ratio);
   }
 
-  ~WholeBodyOnlinePlanner()
+  ~WholeBodyPlannerNode()
   {
     planning_shutdown_.store(true);
     planning_request_cv_.notify_one();
@@ -234,13 +230,11 @@ private:
       robot_models_.push_back(model);
       auto evaluator = std::make_shared<multilink_copilot::StabilityEvaluator>(model, config_.stability);
       stability_evaluators_.push_back(evaluator);
-      JointPlannerConfig joint_config = config_.joint;
-      joint_config.random_seed += static_cast<unsigned int>(candidate_index);
-      joint_planners_.emplace_back(new JointTrajectoryPlanner(joint_config, evaluator));
     }
 
     model_info_.reset(new DragonModelInfo(robot_models_.front()));
-    collision_geometry_ = model_info_->collisionGeometry();
+    planner_.reset(new WholeBodyPlanner(config_, model_info_->collisionGeometry(),
+                                         stability_evaluators_));
     current_joints_ = Eigen::VectorXd::Zero(model_info_->jointCount());
   }
 
@@ -339,82 +333,55 @@ private:
     }
   }
 
-  bool wholeBodyTrajectoryCollides(
-      const Trajectory<5>& root, const JointPlanResult& joints,
-      const std::shared_ptr<const gcopter_planner::PlannerBackend>& occupancy) const
-  {
-    const double duration = joints.duration;
-    const double command_dt = 1.0 / config_.joint.follower.command_hz;
-    const double spatial_resolution = 0.5 * occupancy->voxelScale();
-    const auto occupied = [&occupancy](const Eigen::Vector3d& point) {
-      return occupancy->query(point);
-    };
-
-    const auto collides_at_time = [&](double time) {
-      WholeBodyConfiguration configuration;
-      const double root_time = std::max(
-          0.0, std::min(root.getTotalDuration(),
-                        time - joints.root_translation_delay));
-      configuration.link1_tail = root.getPos(root_time);
-      configuration.root_link_rotation = joints.rootLinkRotation(time);
-      configuration.joint_positions = joints.jointPositions(time);
-      return wholeBodyCollides(configuration, collision_geometry_, spatial_resolution, occupied);
-    };
-
-    if (!std::isfinite(duration) || duration < 0.0)
-    {
-      return true;
-    }
-    const int sample_count = duration > kEpsilon
-                                 ? std::max(1, static_cast<int>(std::ceil(duration / command_dt)))
-                                 : 0;
-    for (int sample = 0; sample <= sample_count; ++sample)
-    {
-      const double time = sample_count > 0
-                              ? duration * static_cast<double>(sample) / sample_count
-                              : 0.0;
-      if (collides_at_time(time))
-      {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  int selectBest(const std::vector<WholeBodyCandidate>& candidates) const
-  {
-    std::vector<WholeBodyCandidateScore> scores;
-    scores.reserve(candidates.size());
-    for (const WholeBodyCandidate& candidate : candidates)
-    {
-      scores.push_back({candidate.status == CandidateStatus::kFeasible,
-                        candidate.joints.duration,
-                        candidate.joints.joint_motion,
-                        candidate.root.jerk_energy,
-                        candidate.joints.tracking_error_rms});
-    }
-    return selectBestWholeBodyCandidate(scores, config_.joint_motion_cost_weight,
-                                        config_.tracking_error_cost_weight);
-  }
-
   void publishDiagnostics(const std::vector<WholeBodyCandidate>& candidates, int selected)
   {
-    std::vector<CandidateVisualization> visualizations;
-    visualizations.reserve(candidates.size());
-    for (const WholeBodyCandidate& candidate : candidates)
+    visualization_msgs::MarkerArray array;
+    visualization_msgs::Marker clear;
+    clear.action = visualization_msgs::Marker::DELETEALL;
+    array.markers.push_back(clear);
+    const ros::Time stamp = ros::Time::now();
+    for (size_t index = 0; index < candidates.size(); ++index)
     {
-      const Trajectory<5>& root = candidate.scaled_root.getPieceNum() > 0 ? candidate.scaled_root :
-                                                                              candidate.root.trajectory;
-      visualizations.push_back({&root, candidate.status});
+      const WholeBodyCandidate& candidate = candidates[index];
+      const Trajectory<5>& root = candidate.scaled_root.getPieceNum() > 0
+                                      ? candidate.scaled_root : candidate.root.trajectory;
+      if (root.getPieceNum() <= 0)
+      {
+        continue;
+      }
+      visualization_msgs::Marker marker;
+      marker.header.frame_id = config_.shared.common.worldFrameId;
+      marker.header.stamp = stamp;
+      marker.ns = "whole_body_root_candidates";
+      marker.id = static_cast<int>(index);
+      marker.type = visualization_msgs::Marker::LINE_STRIP;
+      marker.action = visualization_msgs::Marker::ADD;
+      marker.pose.orientation.w = 1.0;
+      marker.scale.x = 0.015;
+      marker.color = candidateColor(candidate.status, static_cast<int>(index) == selected);
+      const double duration = root.getTotalDuration();
+      for (int sample = 0; sample <= 80; ++sample)
+      {
+        const Eigen::Vector3d point = root.getPos(duration * sample / 80.0);
+        geometry_msgs::Point message;
+        message.x = point.x();
+        message.y = point.y();
+        message.z = point.z();
+        marker.points.push_back(message);
+      }
+      array.markers.push_back(marker);
     }
-    SelectedCandidateMetrics metrics;
-    if (selected >= 0)
-    {
-      const WholeBodyCandidate& candidate = candidates[static_cast<size_t>(selected)];
-      metrics.minimum_fc_rp = candidate.joints.minimum_fc_rp;
-      metrics.joint_motion = candidate.joints.joint_motion;
-    }
-    diagnostics_.publish(visualizations, selected, metrics);
+    marker_pub_.publish(array);
+
+    std_msgs::Int32 selected_message;
+    selected_message.data = selected;
+    selected_candidate_pub_.publish(selected_message);
+    const JointPlanResult* joints = selected >= 0 ? &candidates[static_cast<size_t>(selected)].joints : nullptr;
+    std_msgs::Float64 value;
+    value.data = joints ? joints->minimum_fc_rp : std::numeric_limits<double>::quiet_NaN();
+    selected_min_fc_pub_.publish(value);
+    value.data = joints ? joints->joint_motion : std::numeric_limits<double>::quiet_NaN();
+    selected_joint_motion_pub_.publish(value);
   }
 
   void requestPlanning()
@@ -597,56 +564,14 @@ private:
       enterHold(currentCommandOr(start), target_sequence, batch.detail);
       return PlanAttemptResult::kRetry;
     }
-    std::vector<WholeBodyCandidate> candidates(batch.candidates.size());
     const NominalJointContext nominal_context = makeNominalJointContext(history, *model_info_);
-
-    // Global joint-space RRT is the expensive part of whole-body planning, so all
-    // candidates share one wall-clock budget. Running out only costs the quality
-    // of the remaining candidates; the ones already evaluated stay selectable and
-    // the plan still reaches its activation instant.
     const ros::Time joint_planning_deadline =
         activation_time - ros::Duration(kActivationSafetyMargin);
-    for (size_t index = 0; index < batch.candidates.size(); ++index)
-    {
-      WholeBodyCandidate& candidate = candidates[index];
-      candidate.root = batch.candidates[index];
-      if (candidate.root.status == CandidateStatus::kGenerationFailed)
-      {
-        candidate.detail = candidate.root.detail;
-        continue;
-      }
-      const double joint_planning_budget = (joint_planning_deadline - ros::Time::now()).toSec();
-      if (joint_planning_budget <= 0.0)
-      {
-        candidate.status = CandidateStatus::kJointPlanningFailed;
-        candidate.detail = "whole-body planning budget exhausted";
-        continue;
-      }
-      candidate.joints = joint_planners_[index]->plan(candidate.root.trajectory, nominal_context,
-                                                      start.joint_positions, start.attitude,
-                                                      joint_planning_budget);
-      if (!candidate.joints.success)
-      {
-        candidate.status = CandidateStatus::kJointPlanningFailed;
-        candidate.detail = candidate.joints.detail;
-        continue;
-      }
-      candidate.scaled_root = gcopter_planner::PlannerBackend::timeScaledTrajectory(
-          candidate.root.trajectory, candidate.joints.time_scale);
-      if (wholeBodyTrajectoryCollides(candidate.scaled_root, candidate.joints, occupancy))
-      {
-        candidate.status = CandidateStatus::kCollision;
-        candidate.detail = "whole-body sampled collision";
-        continue;
-      }
-      candidate.status = CandidateStatus::kFeasible;
-    }
-
-    const int selected = selectBest(candidates);
-    if (selected >= 0)
-    {
-      candidates[static_cast<size_t>(selected)].status = CandidateStatus::kSelected;
-    }
+    const WholeBodyPlanResult result = planner_->plan(
+        batch, occupancy, start.joint_positions, start.attitude, nominal_context,
+        joint_planning_deadline);
+    const std::vector<WholeBodyCandidate>& candidates = result.candidates;
+    const int selected = result.selected;
     publishDiagnostics(candidates, selected);
     if (selected < 0)
     {
@@ -893,10 +818,8 @@ private:
   std::vector<boost::shared_ptr<Dragon::HydrusLikeRobotModel>> robot_models_;
   std::unique_ptr<DragonModelInfo> model_info_;
   std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>> stability_evaluators_;
-  std::vector<std::unique_ptr<JointTrajectoryPlanner>> joint_planners_;
+  std::unique_ptr<WholeBodyPlanner> planner_;
   TrajectoryHistory executed_history_;
-  DragonCollisionGeometry collision_geometry_;
-  CandidateDiagnosticsPublisher diagnostics_;
   TrajectoryReplanTrigger replan_trigger_;
 
   ros::Subscriber map_sub_;
@@ -905,6 +828,10 @@ private:
   ros::Subscriber joint_state_sub_;
   ros::Publisher full_state_pub_;
   ros::Publisher root_target_pub_;
+  ros::Publisher marker_pub_;
+  ros::Publisher selected_candidate_pub_;
+  ros::Publisher selected_min_fc_pub_;
+  ros::Publisher selected_joint_motion_pub_;
   ros::Timer command_timer_;
   ros::Timer publisher_guard_timer_;
   std::string full_state_topic_;
@@ -943,7 +870,7 @@ int main(int argc, char** argv)
   try
   {
     motion_primitive_planner::WholeBodyPlannerConfig config(ros::NodeHandle("~"));
-    motion_primitive_planner::WholeBodyOnlinePlanner planner(config, nh);
+    motion_primitive_planner::WholeBodyPlannerNode planner(config, nh);
     ros::AsyncSpinner spinner(3);
     spinner.start();
     ros::waitForShutdown();

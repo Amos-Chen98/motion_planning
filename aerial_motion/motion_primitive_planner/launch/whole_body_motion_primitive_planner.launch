@@ -52,7 +52,6 @@
     <group ns="$(arg robot_ns)">
       <node pkg="motion_primitive_planner" type="whole_body_motion_primitive_planner_node"
             name="$(arg node_name)" output="screen">
-        <rosparam file="$(find motion_primitive_planner)/config/common_motion_primitive_planner.yaml" command="load" />
         <rosparam file="$(find motion_primitive_planner)/config/whole_body_motion_primitive_planner.yaml" command="load" />
         <remap from="target" to="$(arg target_topic)" />
         <remap from="odom" to="$(arg odom_topic)" />
