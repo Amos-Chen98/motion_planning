@@ -44,4 +44,6 @@ Do not start `gcopter/traj_server` or `multilink_copilot` full-state output with
 
 ## Configuration
 
+The mapper enables [single-frame noise filtering](../voxel_mapping/README.md#noise-filtering) by default, requiring two other points within 0.20 m before a point can mark a voxel occupied. The planner launch forwards `enable_noise_filter`, `noise_filter_radius`, and `noise_filter_min_neighbors`; for example, append `noise_filter_min_neighbors:=3` to require three neighbors or `enable_noise_filter:=false` to restore single-point occupancy. The neighbor radius is independent of `voxel_width` and the planner's obstacle dilation radius.
+
 [whole_body_motion_primitive_planner.yaml](config/whole_body_motion_primitive_planner.yaml) contains the map/path, primitive, follow-the-leader, flight-feasibility, joint-planning, and execution settings. The launch file loads this configuration and then applies its launch-argument overrides. The default replanning ratio is `0.3`, the activation lead time is `0.75 s`, and commands are published at `40 Hz`.

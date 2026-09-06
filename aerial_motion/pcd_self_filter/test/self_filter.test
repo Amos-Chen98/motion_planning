@@ -16,6 +16,8 @@
     <arg name="robot_ns" value="unit"/>
     <arg name="pcl_topic" value="/unit/filtered"/>
     <arg name="occupied_topic" value="occupied"/>
+    <!-- These probes intentionally use isolated points to test body filtering. -->
+    <arg name="enable_noise_filter" value="false"/>
     <arg name="map_bound" value="[-10, 10, -10, 10, -2, 6]"/>
   </include>
   <include file="$(find voxel_mapping)/launch/voxel_mapping.launch">
@@ -23,6 +25,7 @@
     <arg name="node_name" value="unfiltered_mapping"/>
     <arg name="pcl_topic" value="/unit/unfiltered_input"/>
     <arg name="occupied_topic" value="unfiltered_occupied"/>
+    <arg name="enable_noise_filter" value="false"/>
     <arg name="use_accumulated_map" value="false"/>
     <arg name="map_bound" value="[-10, 10, -10, 10, -2, 6]"/>
   </include>

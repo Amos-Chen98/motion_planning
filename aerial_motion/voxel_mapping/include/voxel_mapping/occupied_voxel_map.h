@@ -17,6 +17,9 @@ struct VoxelMapConfig
   double voxel_width = 0.0;
   std::vector<double> map_bound;
   bool use_accumulated_map = true;
+  bool enable_noise_filter = true;
+  double noise_filter_radius = 0.20;
+  int noise_filter_min_neighbors = 2;  // Excludes the query point itself.
 
   std::string validationError() const;
   void validateOrThrow() const;

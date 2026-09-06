@@ -30,6 +30,10 @@ VoxelMapConfig loadConfig(const ros::NodeHandle& private_nh)
   private_nh.param("VoxelWidth", config.voxel_width, 0.0);
   private_nh.getParam("MapBound", config.map_bound);
   private_nh.param("UseAccumulatedMap", config.use_accumulated_map, true);
+  private_nh.param("EnableNoiseFilter", config.enable_noise_filter, config.enable_noise_filter);
+  private_nh.param("NoiseFilterRadius", config.noise_filter_radius, config.noise_filter_radius);
+  private_nh.param("NoiseFilterMinNeighbors", config.noise_filter_min_neighbors,
+                   config.noise_filter_min_neighbors);
   config.validateOrThrow();
   return config;
 }
@@ -50,6 +54,9 @@ public:
     ROS_INFO("Voxel mapping ready: frame=%s, width=%.3f m, accumulation=%s.",
              config_.world_frame_id.c_str(), config_.voxel_width,
              config_.use_accumulated_map ? "enabled" : "disabled");
+    ROS_INFO("Voxel noise filter: %s, radius=%.3f m, min_neighbors=%d (excluding self).",
+             config_.enable_noise_filter ? "enabled" : "disabled",
+             config_.noise_filter_radius, config_.noise_filter_min_neighbors);
   }
 
 private:

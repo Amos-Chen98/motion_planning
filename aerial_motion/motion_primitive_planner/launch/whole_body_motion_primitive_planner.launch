@@ -18,6 +18,9 @@
     <arg name="self_filter_debug" default="false" />
 
     <arg name="use_accumulated_map" default="true" />
+    <arg name="enable_noise_filter" default="true" />
+    <arg name="noise_filter_radius" default="0.20" />
+    <arg name="noise_filter_min_neighbors" default="2" />
     <arg name="voxel_width" default="0.10" />
     <arg name="dilate_radius" default="0.20" />
     <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
@@ -61,6 +64,9 @@
         <arg name="voxel_width" value="$(arg voxel_width)" />
         <arg name="map_bound" value="$(arg map_bound)" />
         <arg name="use_accumulated_map" value="$(arg use_accumulated_map)" />
+        <arg name="enable_noise_filter" value="$(arg enable_noise_filter)" />
+        <arg name="noise_filter_radius" value="$(arg noise_filter_radius)" />
+        <arg name="noise_filter_min_neighbors" value="$(arg noise_filter_min_neighbors)" />
     </include>
 
     <group ns="$(arg robot_ns)">

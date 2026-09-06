@@ -8,6 +8,9 @@
     <arg name="voxel_width" default="0.10" />
     <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
     <arg name="use_accumulated_map" default="true" />
+    <arg name="enable_noise_filter" default="true" />
+    <arg name="noise_filter_radius" default="0.20" />
+    <arg name="noise_filter_min_neighbors" default="2" />
 
     <group ns="$(arg robot_ns)">
         <node pkg="voxel_mapping" type="voxel_mapping_node"
@@ -18,6 +21,9 @@
             <param name="VoxelWidth" value="$(arg voxel_width)" />
             <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
             <param name="UseAccumulatedMap" value="$(arg use_accumulated_map)" />
+            <param name="EnableNoiseFilter" value="$(arg enable_noise_filter)" />
+            <param name="NoiseFilterRadius" value="$(arg noise_filter_radius)" />
+            <param name="NoiseFilterMinNeighbors" value="$(arg noise_filter_min_neighbors)" />
         </node>
     </group>
 </launch>

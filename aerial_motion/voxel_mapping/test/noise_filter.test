@@ -1,0 +1,26 @@
+<launch>
+  <include file="$(find voxel_mapping)/launch/voxel_mapping.launch">
+    <arg name="robot_ns" value="noise_default"/>
+    <arg name="pcl_topic" value="/noise_test/cloud"/>
+  </include>
+  <include file="$(find voxel_mapping)/launch/voxel_mapping.launch">
+    <arg name="robot_ns" value="noise_latest"/>
+    <arg name="pcl_topic" value="/noise_test/cloud"/>
+    <arg name="use_accumulated_map" value="false"/>
+  </include>
+  <include file="$(find voxel_mapping)/launch/voxel_mapping.launch">
+    <arg name="robot_ns" value="noise_disabled"/>
+    <arg name="pcl_topic" value="/noise_test/cloud"/>
+    <arg name="use_accumulated_map" value="false"/>
+    <arg name="enable_noise_filter" value="false"/>
+  </include>
+  <include file="$(find voxel_mapping)/launch/voxel_mapping.launch">
+    <arg name="robot_ns" value="noise_custom"/>
+    <arg name="pcl_topic" value="/noise_test/cloud"/>
+    <arg name="use_accumulated_map" value="false"/>
+    <arg name="noise_filter_radius" value="0.30"/>
+    <arg name="noise_filter_min_neighbors" value="1"/>
+  </include>
+  <test test-name="voxel_mapping_noise_filter" pkg="voxel_mapping"
+        type="noise_filter_test.py" time-limit="45"/>
+</launch>
