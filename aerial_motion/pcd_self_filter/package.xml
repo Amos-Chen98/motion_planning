@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>pcd_self_filter</name>
+  <version>0.1.0</version>
+  <description>Articulated robot point cloud self filtering for obstacle mapping.</description>
+  <maintainer email="chen@todo.todo">Chen</maintainer>
+  <license>BSD-3-Clause</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>pkg-config</build_depend>
+  <build_depend>libpcl-all-dev</build_depend>
+  <depend>roscpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>robot_body_filter</depend>
+  <depend>filters</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_sensor_msgs</depend>
+  <depend>urdf</depend>
+  <depend>tinyxml2</depend>
+  <test_depend>rostest</test_depend>
+  <test_depend>rospy</test_depend>
+  <test_depend>geometry_msgs</test_depend>
+  <test_depend>voxel_mapping</test_depend>
+  <test_depend>dragon</test_depend>
+  <test_depend>xacro</test_depend>
+</package>

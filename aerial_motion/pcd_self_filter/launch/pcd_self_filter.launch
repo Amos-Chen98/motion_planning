@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="robot_ns" default="dragon" />
+  <arg name="node_name" default="pcd_self_filter" />
+  <arg name="input_topic" default="/$(arg robot_ns)/cloud_registered_body" />
+  <arg name="output_topic" default="/$(arg robot_ns)/cloud_self_filtered" />
+  <arg name="robot_description_param" default="/$(arg robot_ns)/robot_description" />
+  <arg name="tf_prefix" default="$(arg robot_ns)" />
+  <arg name="world_frame_id" default="world" />
+  <arg name="config" default="$(find pcd_self_filter)/config/self_filter.yaml" />
+  <arg name="debug" default="false" />
+
+  <group ns="$(arg robot_ns)">
+    <node pkg="pcd_self_filter" type="pcd_self_filter_node" name="$(arg node_name)" output="screen">
+      <rosparam command="load" file="$(arg config)" />
+      <param name="robot_ns" value="$(arg robot_ns)" />
+      <param name="robot_description_param" value="$(arg robot_description_param)" />
+      <param name="tf_prefix" value="$(arg tf_prefix)" />
+      <param name="world_frame_id" value="$(arg world_frame_id)" />
+      <param name="debug" value="$(arg debug)" />
+      <remap from="~input" to="$(arg input_topic)" />
+      <remap from="~output" to="$(arg output_topic)" />
+    </node>
+  </group>
+</launch>

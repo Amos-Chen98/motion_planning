@@ -1,0 +1,22 @@
+<robot name="self_filter_test">
+  <link name="base">
+    <visual><geometry><box size="1.2 1.2 1.2"/></geometry></visual>
+    <collision><geometry><box size="0.4 0.4 0.4"/></geometry></collision>
+    <collision><origin xyz="0.5 0 0"/><geometry><sphere radius="0.1"/></geometry></collision>
+  </link>
+  <link name="tip">
+    <collision><origin xyz="0.2 0 0"/><geometry><box size="0.4 0.1 0.1"/></geometry></collision>
+  </link>
+  <joint name="hinge" type="revolute">
+    <parent link="base"/><child link="tip"/><origin xyz="0.8 0 0"/>
+    <axis xyz="0 0 1"/><limit lower="-3.14" upper="3.14" effort="1" velocity="1"/>
+  </joint>
+  <link name="mesh">
+    <collision><geometry><mesh filename="package://pcd_self_filter/test/tetrahedron.stl" scale="0.5 0.5 0.5"/></geometry></collision>
+  </link>
+  <joint name="mesh_mount" type="fixed"><parent link="base"/><child link="mesh"/><origin xyz="0 1 0"/></joint>
+  <link name="visual_only">
+    <visual><geometry><box size="0.4 0.4 0.4"/></geometry></visual>
+  </link>
+  <joint name="visual_mount" type="fixed"><parent link="base"/><child link="visual_only"/><origin xyz="0 -1 0"/></joint>
+</robot>

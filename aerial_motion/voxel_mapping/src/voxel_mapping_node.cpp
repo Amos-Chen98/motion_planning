@@ -81,10 +81,16 @@ private:
     const std::string cloud_frame = normalizedFrameId(message.header.frame_id);
     if (world_frame != cloud_frame)
     {
+      if (message.header.stamp.isZero())
+      {
+        error = "point cloud timestamp is zero; cannot select a historical transform";
+        return false;
+      }
       try
       {
         world_from_cloud = tf2::transformToEigen(
-            tf_buffer_.lookupTransform(world_frame, cloud_frame, ros::Time(0)));
+            tf_buffer_.lookupTransform(world_frame, cloud_frame, message.header.stamp,
+                                       ros::Duration(0.2)));
       }
       catch (const tf2::TransformException& exception)
       {

@@ -1,0 +1,31 @@
+<launch>
+  <param name="/unit/robot_description" textfile="$(find pcd_self_filter)/test/robot.urdf"/>
+  <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+    <arg name="robot_ns" value="unit"/>
+    <arg name="input_topic" value="/unit/raw"/>
+    <arg name="output_topic" value="/unit/filtered"/>
+    <arg name="debug" value="true"/>
+  </include>
+  <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+    <arg name="robot_ns" value="late"/>
+    <arg name="tf_prefix" value="unit"/>
+    <arg name="input_topic" value="/late/raw"/>
+    <arg name="output_topic" value="/late/filtered"/>
+  </include>
+  <include file="$(find voxel_mapping)/launch/voxel_mapping.launch">
+    <arg name="robot_ns" value="unit"/>
+    <arg name="pcl_topic" value="/unit/filtered"/>
+    <arg name="occupied_topic" value="occupied"/>
+    <arg name="map_bound" value="[-10, 10, -10, 10, -2, 6]"/>
+  </include>
+  <include file="$(find voxel_mapping)/launch/voxel_mapping.launch">
+    <arg name="robot_ns" value="unit"/>
+    <arg name="node_name" value="unfiltered_mapping"/>
+    <arg name="pcl_topic" value="/unit/unfiltered_input"/>
+    <arg name="occupied_topic" value="unfiltered_occupied"/>
+    <arg name="use_accumulated_map" value="false"/>
+    <arg name="map_bound" value="[-10, 10, -10, 10, -2, 6]"/>
+  </include>
+  <test test-name="pcd_self_filter_integration" pkg="pcd_self_filter"
+        type="self_filter_test.py" time-limit="90"/>
+</launch>

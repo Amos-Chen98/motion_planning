@@ -1,0 +1,9 @@
+<launch>
+  <param name="/use_sim_time" value="true"/>
+  <param name="/paused/robot_description" textfile="$(find pcd_self_filter)/test/robot.urdf"/>
+  <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+    <arg name="robot_ns" value="paused"/>
+  </include>
+  <test test-name="pcd_self_filter_paused_clock" pkg="pcd_self_filter"
+        type="paused_clock_test.py" time-limit="15"/>
+</launch>
