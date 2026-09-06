@@ -8,16 +8,32 @@ cloud_registered_body → pcd_self_filter_node → cloud_self_filtered → voxel
 
 ## Dependencies and Build
 
-The wrapper uses `robot_body_filter` 1.3.2 and depends on `tf2_sensor_msgs`, PCL, TinyXML2, and the ROS packages declared in `package.xml`. Place the package in a catkin workspace, then source your ROS installation and any workspace providing your robot's description and dependencies. Replace `/path/to/catkin_ws` with your workspace directory.
+The wrapper requires C++17, `robot_body_filter` 1.3.2, `tf2_sensor_msgs`, PCL, TinyXML2, and the ROS packages declared in `package.xml`. Install binary dependencies with `rosdep` after sourcing the built `jsk_aerial_robot_ws` underlay:
 
 ```bash
-cd /path/to/catkin_ws
+cd /path/to/motion_planning_ws
+source ../jsk_aerial_robot_ws/devel/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
 catkin build pcd_self_filter
 source devel/setup.bash
 ```
 
-If your ROS distribution does not provide `robot_body_filter` 1.3.2 as a binary package, add that version of the upstream project to the workspace as a source dependency. The upstream source does not require modification. Avoid adding duplicate copies of dependencies already present in your workspace.
+For manual installation, the packages are `ros-noetic-robot-body-filter` and `ros-noetic-tf2-sensor-msgs` on Noetic, or `ros-one-robot-body-filter` and `ros-one-tf2-sensor-msgs` on ROS-O (`ROS_DISTRO=debian`). The node creates the upstream filter through its `pluginlib` factory to support binary builds.
+
+### Source Fallback
+
+If binary packages are unavailable, add the missing dependencies to an initialized workspace with `wstool`. Run from `motion_planning_ws`, adding only packages not already provided by the workspace or underlay:
+
+```bash
+wstool set -t src robot_body_filter --git https://github.com/ctu-vras/robot_body_filter.git -v 1.3.2
+wstool set -t src tf2_sensor_msgs --git https://github.com/ros-gbp/geometry2-release.git -v release/noetic/tf2_sensor_msgs/0.7.7-1
+wstool update -t src robot_body_filter tf2_sensor_msgs
+rosdep install --from-paths src --ignore-src -r -y
+catkin build pcd_self_filter
+source devel/setup.bash
+```
+
+When switching back to binary packages, remove the corresponding `wstool` entries, move the source checkouts out of `src`, and clean and rebuild the affected packages.
 
 ## Launch and Interfaces
 

@@ -3,7 +3,7 @@ project(pcd_self_filter)
 
 add_compile_options(-std=c++17 -Wall -Wextra)
 find_package(catkin REQUIRED COMPONENTS
-  roscpp sensor_msgs diagnostic_msgs robot_body_filter filters tf2_ros tf2_sensor_msgs urdf)
+  roscpp sensor_msgs diagnostic_msgs robot_body_filter filters pluginlib tf2_ros tf2_sensor_msgs urdf)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(tinyxml2 REQUIRED tinyxml2)
 find_package(PCL REQUIRED COMPONENTS common filters)
@@ -11,7 +11,7 @@ find_package(PCL REQUIRED COMPONENTS common filters)
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES pcd_self_filter_model
-  CATKIN_DEPENDS roscpp sensor_msgs diagnostic_msgs robot_body_filter filters tf2_ros tf2_sensor_msgs urdf
+  CATKIN_DEPENDS roscpp sensor_msgs diagnostic_msgs robot_body_filter filters pluginlib tf2_ros tf2_sensor_msgs urdf
   DEPENDS tinyxml2)
 include_directories(include ${catkin_INCLUDE_DIRS} ${tinyxml2_INCLUDE_DIRS})
 include_directories(SYSTEM ${PCL_INCLUDE_DIRS})

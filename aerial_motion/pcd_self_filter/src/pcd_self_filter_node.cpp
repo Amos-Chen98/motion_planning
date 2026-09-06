@@ -2,6 +2,7 @@
 #include <pcd_self_filter/model_adapter.h>
 
 #include <diagnostic_msgs/DiagnosticArray.h>
+#include <pluginlib/class_loader.hpp>
 #include <robot_body_filter/RobotBodyFilter.h>
 #include <ros/ros.h>
 
@@ -31,14 +32,43 @@ public:
 
 // Only integration checks live here. Geometry, containment and coordinate
 // transforms are implemented by the unmodified upstream filter.
-class StrictBodyFilter : public robot_body_filter::RobotBodyFilterPointCloud2
+class StrictBodyFilter
 {
+  using Filter = robot_body_filter::RobotBodyFilterPointCloud2;
+  using BaseFilter = filters::FilterBase<sensor_msgs::PointCloud2>;
+
+  // Expose member pointers for the integration hooks. This type is never
+  // instantiated or used for a downcast: the pointers address the actual
+  // upstream base members on the plugin-created Filter object.
+  struct FilterMembers : Filter
+  {
+    using Filter::nodeHandle;
+    using Filter::privateNodeHandle;
+    using Filter::failWithoutRobotDescription;
+    using Filter::tfBuffer;
+    using Filter::tfListener;
+    using Filter::tfFramesWatchdog;
+    using Filter::robotDescriptionUpdatesListener;
+    using Filter::shapesToLinks;
+    using Filter::filteringFrame;
+    using Filter::outputFrame;
+    using Filter::modelMutex;
+    using Filter::transformCache;
+  };
+
 public:
   explicit StrictBodyFilter(const ros::NodeHandle& nh)
+    : loader_("filters", "filters::FilterBase<sensor_msgs::PointCloud2>"),
+      instance_(loader_.createUniqueInstance("robot_body_filter/RobotBodyFilterPointCloud2")),
+      filter_(dynamic_cast<Filter*>(instance_.get()))
   {
-    nodeHandle = nh;
-    privateNodeHandle = nh;
-    failWithoutRobotDescription = true;
+    // Optimized upstream binaries do not export the template base constructor
+    // and destructor; create and destroy the filter through its plugin factory.
+    if (!filter_)
+      throw std::runtime_error("Unexpected robot_body_filter plugin type");
+    state(&FilterMembers::nodeHandle) = nh;
+    state(&FilterMembers::privateNodeHandle) = nh;
+    state(&FilterMembers::failWithoutRobotDescription) = true;
   }
 
   void initialize(XmlRpc::XmlRpcValue config, const FilterModel& model)
@@ -46,20 +76,21 @@ public:
     // Install the observation-aware watchdog before upstream configuration.
     // Replacing an already running ROS-time watchdog would block startup while
     // a rosbag clock is paused. Start it only after model loading succeeds.
+    auto& tfBuffer = state(&FilterMembers::tfBuffer);
     tfBuffer = std::make_shared<tf2_ros::Buffer>(ros::Duration(60.0));
-    tfListener = std::make_unique<tf2_ros::TransformListener>(*tfBuffer);
+    state(&FilterMembers::tfListener) = std::make_unique<tf2_ros::TransformListener>(*tfBuffer);
     confirmed_watchdog_ = std::make_shared<ConfirmedTfWatchdog>(
         std::string(config["params"]["frames/filtering"]),
         std::set<std::string>(model.collision_frames.begin(), model.collision_frames.end()),
         tfBuffer, ros::Duration(0), ros::Rate(1.0));
-    tfFramesWatchdog = confirmed_watchdog_;
-    if (!filters::FilterBase<sensor_msgs::PointCloud2>::configure(config))
+    state(&FilterMembers::tfFramesWatchdog) = confirmed_watchdog_;
+    if (!instance_->configure(config))
       throw std::runtime_error("robot_body_filter configuration failed");
     // Dynamic updates must not replace the adapted private model with another
     // application's unprefixed model.
-    robotDescriptionUpdatesListener.shutdown();
+    state(&FilterMembers::robotDescriptionUpdatesListener).shutdown();
     std::set<std::string> loaded;
-    for (const auto& shape : shapesToLinks)
+    for (const auto& shape : state(&FilterMembers::shapesToLinks))
       loaded.insert(shape.second.cacheKey);
     if (loaded.size() != model.collision_count)
       throw std::runtime_error("Not all collision shapes loaded; check mesh resources");
@@ -73,6 +104,8 @@ public:
     const ros::WallTime deadline = ros::WallTime::now() + ros::WallDuration(timeout);
     auto frames = frames_;
     frames.push_back(cloud.header.frame_id);
+    const auto& tfBuffer = state(&FilterMembers::tfBuffer);
+    const auto& filteringFrame = state(&FilterMembers::filteringFrame);
     // Share the exact buffer used by upstream, not a second independently
     // populated listener. The deadline is shared across all links.
     do
@@ -112,18 +145,19 @@ public:
     if (input.width == 0)
     {
       output = input;
-      output.header.frame_id = outputFrame;
+      output.header.frame_id = state(&FilterMembers::outputFrame);
       return true;
     }
-    if (!RobotBodyFilterPointCloud2::update(input, output))
+    if (!filter_->update(input, output))
     {
       error = "robot_body_filter is waiting for TF or rejected the observation";
       return false;
     }
     // Upstream can skip a link when its watchdog cannot supply a transform.
     // Reject that result rather than publishing a partially filtered scan.
-    std::lock_guard<std::mutex> lock(*modelMutex);
-    for (const auto& shape : shapesToLinks)
+    std::lock_guard<std::mutex> lock(*state(&FilterMembers::modelMutex));
+    const auto& transformCache = state(&FilterMembers::transformCache);
+    for (const auto& shape : state(&FilterMembers::shapesToLinks))
       if (transformCache.find(shape.second.cacheKey) == transformCache.end())
       {
         error = "Incomplete body transform cache: " + shape.second.link->name;
@@ -133,6 +167,16 @@ public:
   }
 
 private:
+  template <typename T, typename Owner>
+  T& state(T Owner::* member)
+  {
+    return (*filter_).*member;
+  }
+
+  // Destroy the plugin instance before unloading its library.
+  pluginlib::ClassLoader<BaseFilter> loader_;
+  pluginlib::UniquePtr<BaseFilter> instance_;
+  Filter* filter_;
   std::vector<std::string> frames_;
   std::shared_ptr<ConfirmedTfWatchdog> confirmed_watchdog_;
 };

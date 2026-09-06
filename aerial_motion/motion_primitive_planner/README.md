@@ -21,9 +21,12 @@ Headers follow the same responsibilities. `WholeBodyPlanner::plan()` receives a 
 
 ## Build
 
+Install the [self-filter dependencies](../pcd_self_filter/README.md#dependencies-and-build) first; the default launch starts both the filter and mapper.
+
 ```bash
 cd motion_planning_ws
-catkin build motion_primitive_planner
+source ../jsk_aerial_robot_ws/devel/setup.bash
+catkin build pcd_self_filter voxel_mapping motion_primitive_planner
 source devel/setup.bash
 ```
 
