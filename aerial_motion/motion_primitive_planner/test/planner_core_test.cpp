@@ -373,44 +373,325 @@ TEST(WholeBodyCollision, UsesTheShortestYawDeltaAcrossTheWrapBoundary)
   EXPECT_NEAR(shortestYawDelta(-M_PI + 0.1, M_PI - 0.1), -0.2, 1e-12);
 }
 
-TEST(NominalJointPredictor, UsesUniformFixedTimeSamplesIncludingEndpoints)
+TEST(RootAttitudePredictor, UsesUniformFixedTimeSamplesIncludingEndpoints)
 {
   FollowerConfig follower;
-  follower.publish_yaw_command = false;
-  NominalJointContext context;
-  context.link_num = 1;
-  context.link_length = 1.0;
-  const Eigen::VectorXd start_joints = Eigen::VectorXd::Zero(1);
-  const NominalJointPredictor predictor(follower);
-
   const auto samples_for = [&](double duration, double sample_dt) {
-    return predictor.predict(
+    return predictRootAttitudes(
         linearTrajectory(Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitX(), duration),
-        context, start_joints, 0.0, sample_dt);
+        RootAttitude{}, follower, sample_dt, true);
   };
-
-  const std::vector<NominalJointSample> divisible = samples_for(1.0, 0.25);
+  const auto divisible = samples_for(1.0, 0.25);
   ASSERT_EQ(divisible.size(), 5u);
   for (size_t index = 0; index < divisible.size(); ++index)
-  {
     EXPECT_NEAR(divisible[index].time, 0.25 * index, 1e-12);
-  }
-
-  const std::vector<NominalJointSample> non_divisible = samples_for(1.0, 0.30);
+  const auto non_divisible = samples_for(1.0, 0.30);
   ASSERT_EQ(non_divisible.size(), 5u);
   EXPECT_DOUBLE_EQ(non_divisible.front().time, 0.0);
   EXPECT_DOUBLE_EQ(non_divisible.back().time, 1.0);
   const double interval = non_divisible[1].time - non_divisible[0].time;
   EXPECT_LE(interval, 0.30);
   for (size_t index = 2; index < non_divisible.size(); ++index)
-  {
-    EXPECT_NEAR(non_divisible[index].time - non_divisible[index - 1].time,
-                interval, 1e-12);
-  }
-
-  const std::vector<NominalJointSample> zero_duration = samples_for(0.0, 0.25);
+    EXPECT_NEAR(non_divisible[index].time - non_divisible[index - 1].time, interval, 1e-12);
+  const auto zero_duration = samples_for(0.0, 0.25);
   ASSERT_EQ(zero_duration.size(), 1u);
   EXPECT_DOUBLE_EQ(zero_duration.front().time, 0.0);
+}
+
+TEST(RootAttitudePredictor, PreservesRateLimitsOffsetsSwitchesAndZeroSpeedTerminal)
+{
+  FollowerConfig follower;
+  follower.max_angular_vel = 1.0;
+  const RootAttitude start{0.2, 0.1};
+  Piece<5>::CoefficientMat coefficients = Piece<5>::CoefficientMat::Zero();
+  coefficients(1, 4) = 2.0;
+  coefficients(1, 3) = -1.0;
+  coefficients(2, 4) = 2.0;
+  coefficients(2, 3) = -1.0;
+  const Trajectory<5> root({1.0}, {coefficients});
+  const auto samples = predictRootAttitudes(root, start, follower, 0.1, true, 0.5, 2.0);
+  ASSERT_EQ(samples.size(), 6u);
+  EXPECT_DOUBLE_EQ(samples.front().time, 2.0);
+  EXPECT_DOUBLE_EQ(samples.back().time, 2.5);
+  EXPECT_DOUBLE_EQ(samples.front().attitude.yaw, start.yaw);
+  EXPECT_DOUBLE_EQ(samples.front().attitude.pitch, start.pitch);
+  EXPECT_NEAR(samples[1].attitude.yaw, 0.3, 1e-12);
+  EXPECT_NEAR(samples[1].attitude.pitch, 0.0, 1e-12);
+  EXPECT_DOUBLE_EQ(samples.back().attitude.yaw, samples[4].attitude.yaw);
+  EXPECT_DOUBLE_EQ(samples.back().attitude.pitch, samples[4].attitude.pitch);
+  for (size_t index = 1; index < samples.size(); ++index)
+  {
+    const double dt = samples[index].time - samples[index - 1].time;
+    EXPECT_LE(std::abs(shortestYawDelta(samples[index - 1].attitude.yaw,
+                                       samples[index].attitude.yaw)), dt + 1e-12);
+    EXPECT_LE(std::abs(samples[index].attitude.pitch - samples[index - 1].attitude.pitch), dt + 1e-12);
+  }
+  follower.publish_yaw_command = false;
+  const auto disabled = predictRootAttitudes(root, start, follower, 0.1, false);
+  ASSERT_FALSE(disabled.empty());
+  EXPECT_DOUBLE_EQ(disabled.back().attitude.yaw, start.yaw);
+  EXPECT_DOUBLE_EQ(disabled.back().attitude.pitch, start.pitch);
+  EXPECT_TRUE(predictRootAttitudes(root, start, follower, 0.1, true, 0.0, 0.0,
+                                   std::chrono::steady_clock::now()).empty());
+}
+
+class TerminalJointTarget : public ::testing::Test
+{
+protected:
+  DragonCollisionGeometry geometry{4, 1.0, {0, 2, 4}, {1, 3, 5}};
+  WholeBodyConfiguration aligned{Eigen::Vector3d::Zero(), linkRotation(RootAttitude{}),
+                                  Eigen::VectorXd::Zero(6)};
+
+  void useTwoLinks()
+  {
+    geometry = {2, 1.0, {0}, {1}};
+    aligned.joint_positions = Eigen::VectorXd::Zero(2);
+  }
+
+  TerminalJointTargetResult generate(const Trajectory<5>& root, double start_time = 0.0,
+                                     RootAttitude terminal = RootAttitude{}) const
+  {
+    return computeTerminalJointTarget(root, start_time, terminal, aligned, geometry, 0.1);
+  }
+
+  void expectLinkLengthsAndKinematics(const TerminalJointTargetResult& result,
+                                      const Eigen::Vector3d& root_tail,
+                                      RootAttitude terminal = RootAttitude{}) const
+  {
+    ASSERT_TRUE(result.success) << result.detail;
+    ASSERT_EQ(result.target_positions.size(), static_cast<size_t>(geometry.link_num - 1));
+    const auto endpoints = linkEndpoints(root_tail, linkRotation(terminal), result.joints,
+        geometry.pitch_joint_indices, geometry.yaw_joint_indices, geometry.link_num, geometry.link_length);
+    Eigen::Vector3d head = root_tail;
+    for (size_t index = 0; index < result.target_positions.size(); ++index)
+    {
+      EXPECT_NEAR((result.target_positions[index] - head).norm(), geometry.link_length, 1.1e-6);
+      EXPECT_LE((endpoints[index + 2] - result.target_positions[index]).norm(), 5e-6);
+      head = result.target_positions[index];
+    }
+  }
+};
+
+TEST_F(TerminalJointTarget, StraightCurveProducesOrderedTailTargets)
+{
+  const auto root = linearTrajectory(Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitX(), 4.0);
+  const auto result = generate(root);
+  ASSERT_TRUE(result.success) << result.detail;
+  expectLinkLengthsAndKinematics(result, root.getPos(4.0));
+  for (int index = 0; index < 3; ++index)
+    EXPECT_TRUE(result.target_positions[index].isApprox(Eigen::Vector3d(3.0 - index, 0.0, 0.0), 4e-6));
+  EXPECT_LT(result.joints.norm(), 1e-6);
+}
+
+TEST_F(TerminalJointTarget, CurvedMincoTargetsLieOnTheAnalyticCurve)
+{
+  Piece<5>::CoefficientMat coefficients = Piece<5>::CoefficientMat::Zero();
+  coefficients(0, 4) = 1.0;
+  coefficients(1, 3) = 0.2;
+  const Trajectory<5> root({4.0}, {coefficients});
+  const auto result = generate(root);
+  ASSERT_TRUE(result.success) << result.detail;
+  expectLinkLengthsAndKinematics(result, root.getPos(4.0));
+  double previous_x = 4.0;
+  for (const auto& position : result.target_positions)
+  {
+    EXPECT_LT(position.x(), previous_x);
+    EXPECT_GT(position.x(), 0.0);
+    EXPECT_NEAR(position.y(), 0.2 * position.x() * position.x(), 1e-10);
+    previous_x = position.x();
+  }
+}
+
+TEST_F(TerminalJointTarget, IsInvariantToPolynomialSplittingAndTimeScaling)
+{
+  Piece<5>::CoefficientMat coefficients = Piece<5>::CoefficientMat::Zero();
+  coefficients(0, 4) = 1.0;
+  coefficients(1, 3) = 0.2;
+  const Trajectory<5> whole({4.0}, {coefficients});
+  auto shifted = coefficients;
+  shifted(0, 5) = 1.2;
+  shifted(1, 4) = 0.48;
+  shifted(1, 5) = 0.288;
+  const Trajectory<5> split({1.2, 2.8}, {coefficients, shifted});
+  auto slowed = coefficients;
+  slowed(0, 4) *= 0.5;
+  slowed(1, 3) *= 0.25;
+  const Trajectory<5> rescaled({8.0}, {slowed});
+  const auto expected = generate(whole);
+  ASSERT_TRUE(expected.success) << expected.detail;
+  for (const auto& root : {split, rescaled})
+  {
+    const auto result = generate(root);
+    ASSERT_TRUE(result.success) << result.detail;
+    EXPECT_TRUE(result.joints.isApprox(expected.joints, 5e-6));
+    for (int index = 0; index < 3; ++index)
+      EXPECT_TRUE(result.target_positions[index].isApprox(expected.target_positions[index], 5e-6));
+  }
+}
+
+TEST_F(TerminalJointTarget, HandlesPieceAndBodyJunctionIntersections)
+{
+  auto first = linearTrajectory(Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitX(), 1.0);
+  auto second = linearTrajectory(Eigen::Vector3d::UnitX(), Eigen::Vector3d::UnitX(), 1.0);
+  const Trajectory<5> root({1.0, 1.0}, {first[0].getCoeffMat(), second[0].getCoeffMat()});
+  const auto result = generate(root);
+  ASSERT_TRUE(result.success) << result.detail;
+  expectLinkLengthsAndKinematics(result, root.getPos(2.0));
+  EXPECT_NEAR(result.target_positions[0].x(), 1.0, 1e-6);
+  EXPECT_NEAR(result.target_positions[1].norm(), 0.0, 2e-6);
+  EXPECT_NEAR(result.target_positions[2].x(), -1.0, 3e-6);
+}
+
+TEST_F(TerminalJointTarget, ShortCurveUsesAlignedBodyMorphology)
+{
+  useTwoLinks();
+  const auto root = linearTrajectory(Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitX(), 0.2);
+  const auto straight = generate(root);
+  ASSERT_TRUE(straight.success) << straight.detail;
+  EXPECT_NEAR(straight.target_positions[0].x(), -0.8, 1e-6);
+  aligned.joint_positions(1) = M_PI_2;
+  const auto bent = generate(root);
+  ASSERT_TRUE(bent.success) << bent.detail;
+  EXPECT_NEAR(bent.target_positions[0].x(), 0.0, 1e-6);
+  EXPECT_NEAR(bent.target_positions[0].y(), -std::sqrt(0.96), 1e-6);
+  expectLinkLengthsAndKinematics(bent, root.getPos(0.2));
+}
+
+TEST_F(TerminalJointTarget, MovingHandoverExcludesRootPrefix)
+{
+  useTwoLinks();
+  const auto root = linearTrajectory(Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitX(), 2.0);
+  aligned.link1_tail = root.getPos(1.5);
+  aligned.root_link_rotation = Eigen::Matrix3d::Identity();
+  aligned.joint_positions(1) = M_PI_2;
+  const auto result = generate(root, 1.5);
+  ASSERT_TRUE(result.success) << result.detail;
+  EXPECT_NEAR(result.target_positions[0].x(), 1.5, 1e-6);
+  EXPECT_NEAR(result.target_positions[0].y(), std::sqrt(0.75), 1e-6);
+  expectLinkLengthsAndKinematics(result, root.getPos(2.0));
+}
+
+TEST_F(TerminalJointTarget, FindsTangencyWithoutASignChange)
+{
+  useTwoLinks();
+  Piece<5>::CoefficientMat coefficients = Piece<5>::CoefficientMat::Zero();
+  coefficients(0, 4) = 4.0;
+  coefficients(0, 3) = -4.0;
+  const auto result = generate(Trajectory<5>({1.0}, {coefficients}));
+  ASSERT_TRUE(result.success) << result.detail;
+  EXPECT_TRUE(result.target_positions[0].isApprox(Eigen::Vector3d::UnitX(), 1e-6));
+}
+
+TEST_F(TerminalJointTarget, QuinticIntersectionsMatchAnIndependentBackwardScan)
+{
+  useTwoLinks();
+  // Deterministic, spatially curved degree-five cases exercise the full
+  // degree-ten distance equation, independently of the stationary-root solver.
+  for (int example = 0; example < 24; ++example)
+  {
+    Piece<5>::CoefficientMat coefficients = Piece<5>::CoefficientMat::Zero();
+    for (int power = 1; power <= 5; ++power)
+    {
+      coefficients(0, 5 - power) = 0.8 + 0.3 * std::cos(example + 2.0 * power);
+      coefficients(1, 5 - power) = std::sin(0.7 * example + power);
+      coefficients(2, 5 - power) = 0.5 * std::cos(0.3 * example - power);
+    }
+    const Trajectory<5> root({1.0}, {coefficients});
+    const auto result = generate(root);
+    ASSERT_TRUE(result.success) << example << ": " << result.detail;
+    const Eigen::Vector3d head = root.getPos(1.0);
+    double right = 1.0;
+    double left = right;
+    for (int sample = 1; sample <= 10000; ++sample)
+    {
+      left = 1.0 - sample / 10000.0;
+      if ((root.getPos(left) - head).norm() >= geometry.link_length) break;
+      right = left;
+    }
+    ASSERT_LT(left, right);
+    for (int iteration = 0; iteration < 50; ++iteration)
+    {
+      const double middle = (left + right) / 2.0;
+      if ((root.getPos(middle) - head).norm() >= geometry.link_length) left = middle;
+      else right = middle;
+    }
+    EXPECT_LE((result.target_positions[0] - root.getPos((left + right) / 2.0)).norm(), 2e-6);
+  }
+}
+
+TEST_F(TerminalJointTarget, ChoosesLatestOfMultipleCurveIntersections)
+{
+  useTwoLinks();
+  Piece<5>::CoefficientMat coefficients = Piece<5>::CoefficientMat::Zero();
+  coefficients(0, 4) = 8.0;
+  coefficients(0, 3) = -8.0;
+  coefficients(1, 4) = -8.0;
+  coefficients(1, 3) = 24.0;
+  coefficients(1, 2) = -16.0;
+  const auto result = generate(Trajectory<5>({1.0}, {coefficients}));
+  ASSERT_TRUE(result.success) << result.detail;
+  EXPECT_NEAR(result.target_positions[0].norm(), 1.0, 1e-6);
+  EXPECT_GT(result.target_positions[0].x(), 0.0);
+  EXPECT_GT(result.target_positions[0].y(), 0.0);
+}
+
+TEST_F(TerminalJointTarget, NoIntersectionUsesClosestDistanceIncludingStationaryPoints)
+{
+  useTwoLinks();
+  aligned.root_link_rotation = Eigen::AngleAxisd(std::atan2(0.6, 0.8), Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  Piece<5>::CoefficientMat coefficients = Piece<5>::CoefficientMat::Zero();
+  coefficients(0, 4) = 0.8;
+  coefficients(1, 4) = 2.8;
+  coefficients(1, 3) = -2.8;
+  const Trajectory<5> root({1.0}, {coefficients});
+  const auto result = generate(root);
+  ASSERT_TRUE(result.success) << result.detail;
+  const double chosen_distance = (result.target_positions[0] - root.getPos(1.0)).norm();
+  EXPECT_GT(chosen_distance, 0.8);
+  EXPECT_LT(chosen_distance, 1.0);
+  EXPECT_GT(result.target_positions[0].y(), 0.1);
+  // Independent dense oracle for the closest residual when the whole trace
+  // lies inside the sphere. The body segment's maximum distance is 0.8 m.
+  double greatest_distance = 0.8;
+  for (int sample = 0; sample <= 10000; ++sample)
+    greatest_distance = std::max(greatest_distance,
+        (root.getPos(sample / 10000.0) - root.getPos(1.0)).norm());
+  EXPECT_NEAR(chosen_distance, greatest_distance, 1e-6);
+}
+
+TEST_F(TerminalJointTarget, SingularPitchUsesAlignedJointsWithoutTemporalPrediction)
+{
+  useTwoLinks();
+  const auto root = linearTrajectory(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), 1.0);
+  aligned.joint_positions << 0.37, M_PI_2;
+  const auto first = generate(root);
+  ASSERT_TRUE(first.success) << first.detail;
+  EXPECT_DOUBLE_EQ(first.joints(0), 0.37);
+  aligned.joint_positions(0) = -0.21;
+  const auto second = generate(root);
+  ASSERT_TRUE(second.success) << second.detail;
+  EXPECT_DOUBLE_EQ(second.joints(0), -0.21);
+  EXPECT_TRUE(first.target_positions[0].isApprox(second.target_positions[0], 1e-6));
+}
+
+TEST_F(TerminalJointTarget, RejectsMalformedInputsAndExpiredBudget)
+{
+  const auto root = linearTrajectory(Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitX(), 4.0);
+  EXPECT_FALSE(generate(root, 4.1).success);
+  EXPECT_FALSE(generate(root, 0.0, RootAttitude{NAN, 0.0}).success);
+  EXPECT_FALSE(computeTerminalJointTarget(root, 0.0, {}, aligned, geometry, 0.1,
+                                          std::chrono::steady_clock::now()).success);
+  auto coefficients = root[0].getCoeffMat();
+  coefficients(0, 0) = NAN;
+  EXPECT_FALSE(generate(Trajectory<5>({4.0}, {coefficients})).success);
+  auto shifted = root[0].getCoeffMat();
+  shifted(0, 5) = 9.0;
+  EXPECT_FALSE(generate(Trajectory<5>({1.0, 1.0}, {root[0].getCoeffMat(), shifted})).success);
+  aligned.link1_tail.x() = 0.1;
+  EXPECT_FALSE(generate(root).success);
+  aligned.link1_tail.setZero();
+  geometry.yaw_joint_indices[0] = geometry.pitch_joint_indices[0];
+  EXPECT_FALSE(generate(root).success);
 }
 
 TEST(FollowTheLeaderGeometry, CurvedHistoryProducesCurvedNominalShape)
@@ -492,47 +773,6 @@ TEST(FollowTheLeaderGeometry, PartialRootHistoryTransitionsIntoCurrentBodyMorpho
   ASSERT_EQ(targets.size(), 3u);
   EXPECT_TRUE(targets.front().isApprox(Eigen::Vector3d(0.0, 0.8, 0.0), 1e-12));
   EXPECT_NEAR((targets.front() - short_history.back().position).norm(), 1.0, 1e-12);
-}
-
-TEST(NominalJointPredictor, ExposesRetracedHistoryBranchDiscontinuity)
-{
-  FollowerConfig follower;
-  follower.publish_yaw_command = false;
-  TrajectoryHistory history(follower);
-  for (int index = 0; index <= 50; ++index)
-  {
-    history.append(Eigen::Vector3d(-2.5 + 0.05 * index, 0.0, 1.0));
-  }
-  NominalJointContext context;
-  context.executed_history = history;
-  context.link_num = 4;
-  context.link_length = 0.5255;
-  context.pitch_joint_indices = {0, 2, 4};
-  context.yaw_joint_indices = {1, 3, 5};
-
-  PrimitiveConfig primitive;
-  primitive.candidate_count = 1;
-  primitive.max_velocity = 1.0;
-  primitive.cruise_velocity = 0.25;
-  Eigen::Matrix3d initial_state = Eigen::Matrix3d::Zero();
-  initial_state.col(0) = Eigen::Vector3d(0.0, 0.0, 1.0);
-  Eigen::Matrix3d final_state = Eigen::Matrix3d::Zero();
-  final_state.col(0) = Eigen::Vector3d(-3.0, 0.0, 1.0);
-  const Candidate candidate =
-      PrimitiveGenerator(primitive).generate(initial_state, final_state).front();
-
-  const std::vector<NominalJointSample> samples =
-      NominalJointPredictor(follower).predict(
-          candidate.trajectory, context, Eigen::VectorXd::Zero(6), 0.0, 0.05);
-  ASSERT_GT(samples.size(), 2u);
-  double maximum_joint_step = 0.0;
-  for (size_t index = 1; index < samples.size(); ++index)
-  {
-    maximum_joint_step = std::max(
-        maximum_joint_step,
-        (samples[index].joints - samples[index - 1].joints).norm());
-  }
-  EXPECT_GT(maximum_joint_step, 3.0);
 }
 
 TEST(WholeBodyCandidateSelector, BalancesDurationAndJointMotionThenUsesDeterministicTies)
@@ -780,39 +1020,6 @@ TEST(Joint1PriorityAllocation, SaturatesEachAxisAndLeavesOtherJointsUnchanged)
   {
     EXPECT_DOUBLE_EQ(complete(index), start(index));
   }
-}
-
-TEST(NominalJointPredictor, PreservesHandoverStateAndUsesSharedFollowerGeometry)
-{
-  PrimitiveConfig primitive;
-  primitive.candidate_count = 1;
-  primitive.max_velocity = 0.5;
-  primitive.cruise_velocity = 0.3;
-  const std::vector<Eigen::Vector3d> route = {
-      Eigen::Vector3d(0.0, 0.0, 1.0), Eigen::Vector3d(0.5, 0.0, 1.0)};
-  const Candidate candidate = PrimitiveGenerator(primitive).generate(
-      endpointState(route.front()), endpointState(route.back())).front();
-
-  FollowerConfig follower;
-  TrajectoryHistory history(follower);
-  history.append(route.front());
-  NominalJointContext context;
-  context.executed_history = history;
-  context.link_num = 4;
-  context.link_length = 1.0;
-  context.pitch_joint_indices = {0, 2, 4};
-  context.yaw_joint_indices = {1, 3, 5};
-  Eigen::VectorXd start = Eigen::VectorXd::Zero(6);
-  start(1) = M_PI_2;
-  start(3) = M_PI_2;
-  start(5) = M_PI_2;
-
-  const std::vector<NominalJointSample> samples =
-      NominalJointPredictor(follower).predict(candidate.trajectory, context, start, 0.0, 0.05);
-  ASSERT_GT(samples.size(), 2u);
-  EXPECT_DOUBLE_EQ(samples.front().time, 0.0);
-  EXPECT_TRUE(samples.front().joints.isApprox(start, 1e-12));
-  EXPECT_TRUE(samples.back().joints.allFinite());
 }
 
 TEST(PlanningEnvironment, ReplacesCollisionMapSnapshots)

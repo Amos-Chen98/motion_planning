@@ -14,6 +14,7 @@
 #include <limits>
 #include <mutex>
 #include <random>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -27,6 +28,169 @@ constexpr double kInfinity = std::numeric_limits<double>::infinity();
 //! Resolution relaxation used by the sampling-based search and its shortcut,
 //! whose output is always re-validated at the configured resolution.
 constexpr double kSearchResolutionFactor = 4.0;
+constexpr double kTraceParameterTolerance = 1e-9;
+constexpr double kTraceDistanceTolerance = 1e-6;
+using PlanningClock = std::chrono::steady_clock;
+
+//! Coefficients use descending powers of normalized local time, including for
+//! linear initial-body segments. Bounds can clip a MINCO piece at handover.
+struct TerminalTraceSegment
+{
+  Piece<5>::CoefficientMat coefficients = Piece<5>::CoefficientMat::Zero();
+  double lower = 0.0;
+  double upper = 1.0;
+
+  Eigen::Vector3d position(double parameter) const
+  {
+    Eigen::Vector3d value = coefficients.col(0);
+    for (int column = 1; column < coefficients.cols(); ++column)
+    {
+      value = value * parameter + coefficients.col(column);
+    }
+    return value;
+  }
+};
+
+struct TerminalTraceCursor
+{
+  size_t segment = 0;
+  double parameter = 1.0;
+};
+
+//! RootFinder expects non-root interval boundaries. Widen its interval and
+//! explicitly handle the actual segment boundaries in the caller.
+bool stationaryParameters(const Eigen::VectorXd& squared_distance,
+                           double lower, double upper,
+                           const PlanningClock::time_point& deadline,
+                           std::vector<double>& parameters)
+{
+  if (PlanningClock::now() >= deadline || !squared_distance.allFinite())
+  {
+    return false;
+  }
+  Eigen::VectorXd derivative(squared_distance.size() - 1);
+  for (int index = 0; index < derivative.size(); ++index)
+  {
+    derivative(index) = (derivative.size() - index) * squared_distance(index);
+  }
+  const double scale = derivative.cwiseAbs().maxCoeff();
+  if (!std::isfinite(scale)) return false;
+  if (scale == 0.0 || upper <= lower) return true;
+  derivative /= scale;
+  double padding = 0.0625;
+  double left = lower - padding;
+  double right = upper + padding;
+  for (int attempt = 0; attempt < 32; ++attempt)
+  {
+    const double left_value = RootFinder::polyVal(derivative, left);
+    const double right_value = RootFinder::polyVal(derivative, right);
+    if (!std::isfinite(left_value) || !std::isfinite(right_value)) return false;
+    if (std::abs(left_value) > std::numeric_limits<double>::epsilon() &&
+        std::abs(right_value) > std::numeric_limits<double>::epsilon())
+    {
+      const std::set<double> roots = RootFinder::solvePolynomial(
+          derivative, left, right, kTraceParameterTolerance);
+      for (const double root : roots)
+      {
+        if (std::isfinite(root) && root > lower && root < upper)
+        {
+          parameters.push_back(root);
+        }
+      }
+      return PlanningClock::now() < deadline;
+    }
+    padding *= 1.5;
+    left = lower - padding;
+    right = upper + padding;
+  }
+  return false;
+}
+
+//! Find the first sphere intersection backwards along the trace. Stationary
+//! distances partition the degree-ten distance equation into monotone
+//! intervals: bracketed roots cover crossings, and the partition boundaries
+//! cover tangencies. They also give the global nearest-distance fallback.
+bool findTerminalTail(const std::vector<TerminalTraceSegment>& trace,
+                      const Eigen::Vector3d& head, double length,
+                      const PlanningClock::time_point& deadline,
+                      TerminalTraceCursor& cursor, Eigen::Vector3d& tail)
+{
+  double best_error = kInfinity;
+  TerminalTraceCursor best_cursor = cursor;
+  Eigen::Vector3d best_position = head;
+  for (size_t reverse = cursor.segment + 1; reverse > 0; --reverse)
+  {
+    if (PlanningClock::now() >= deadline) return false;
+    const size_t index = reverse - 1;
+    const TerminalTraceSegment& segment = trace[index];
+    const double upper = index == cursor.segment ? cursor.parameter : segment.upper;
+    const double lower = segment.lower;
+    auto relative = segment.coefficients;
+    relative.col(5) -= head;
+    const Eigen::VectorXd squared_distance =
+        RootFinder::polySqr(relative.row(0)) + RootFinder::polySqr(relative.row(1)) +
+        RootFinder::polySqr(relative.row(2));
+    std::vector<double> parameters{upper, lower};
+    if (!stationaryParameters(squared_distance, lower, upper, deadline, parameters)) return false;
+    std::sort(parameters.begin(), parameters.end(), std::greater<double>());
+    parameters.erase(std::unique(parameters.begin(), parameters.end(),
+                                  [](double lhs, double rhs) {
+                                    return std::abs(lhs - rhs) <= kTraceParameterTolerance;
+                                  }), parameters.end());
+
+    const auto distance_error = [&](double parameter) {
+      return (segment.position(parameter) - head).norm() - length;
+    };
+    for (size_t sample = 0; sample < parameters.size(); ++sample)
+    {
+      if (PlanningClock::now() >= deadline) return false;
+      const double parameter = parameters[sample];
+      const double error = distance_error(parameter);
+      if (!std::isfinite(error)) return false;
+      if (std::abs(error) < best_error - kTraceDistanceTolerance)
+      {
+        best_error = std::abs(error);
+        best_cursor = {index, parameter};
+        best_position = segment.position(parameter);
+      }
+      if (std::abs(error) <= kTraceDistanceTolerance)
+      {
+        cursor = {index, parameter};
+        tail = segment.position(parameter);
+        return true;
+      }
+      if (sample + 1 >= parameters.size()) continue;
+      double left = parameters[sample + 1];
+      double right = parameter;
+      const double left_error = distance_error(left);
+      if (!std::isfinite(left_error)) return false;
+      if ((error < 0.0) == (left_error < 0.0)) continue;
+      // No squared polynomial evaluation here: Cartesian residuals avoid
+      // cancellation around a root. Keep bisecting until the distance is valid.
+      for (int iteration = 0; iteration < 80; ++iteration)
+      {
+        if (PlanningClock::now() >= deadline) return false;
+        const double middle = 0.5 * (left + right);
+        const double middle_error = distance_error(middle);
+        if (!std::isfinite(middle_error)) return false;
+        if (std::abs(middle_error) <= kTraceDistanceTolerance)
+        {
+          cursor = {index, middle};
+          tail = segment.position(middle);
+          return true;
+        }
+        if (middle == left || middle == right) return false;
+        if ((middle_error < 0.0) == (error < 0.0)) right = middle;
+        else left = middle;
+      }
+      return false;
+    }
+  }
+  if (!std::isfinite(best_error)) return false;
+  cursor = best_cursor;
+  tail = best_position;
+  return true;
+}
 
 template <typename Waypoint>
 size_t upperWaypointIndex(const std::vector<Waypoint>& waypoints, double time)
@@ -187,96 +351,170 @@ NominalJointContext makeNominalJointContext(const TrajectoryHistory& history,
   return context;
 }
 
-std::vector<NominalJointSample> NominalJointPredictor::predict(
-    const Trajectory<5>& root_trajectory, const NominalJointContext& context,
-    const Eigen::VectorXd& start_joints, double start_yaw, double sample_dt) const
+std::vector<TimedRootAttitudeWaypoint> predictRootAttitudes(
+    const Trajectory<5>& root_trajectory, const RootAttitude& start_attitude,
+    const FollowerConfig& config, double sample_dt, bool command_pitch,
+    double trajectory_start_time, double output_time_offset,
+    PlanningClock::time_point deadline)
 {
-  return predict(root_trajectory, context, start_joints,
-                 RootAttitude{start_yaw, 0.0}, sample_dt, false);
-}
-
-std::vector<NominalJointSample> NominalJointPredictor::predict(
-    const Trajectory<5>& root_trajectory, const NominalJointContext& context,
-    const Eigen::VectorXd& start_joints, const RootAttitude& start_attitude,
-    double sample_dt, bool command_pitch, double trajectory_start_time,
-    double output_time_offset) const
-{
-  std::vector<NominalJointSample> samples;
-  if (root_trajectory.getPieceNum() <= 0 || sample_dt <= 0.0 || context.link_num <= 0 ||
-      context.link_length <= 0.0 || start_joints.size() <= 0 ||
-      trajectory_start_time < 0.0 || output_time_offset < 0.0)
+  config.validateOrThrow();
+  std::vector<TimedRootAttitudeWaypoint> samples;
+  if (root_trajectory.getPieceNum() <= 0 || !std::isfinite(sample_dt) || sample_dt <= 0.0 ||
+      !std::isfinite(trajectory_start_time) || trajectory_start_time < 0.0 ||
+      !std::isfinite(output_time_offset) || output_time_offset < 0.0 ||
+      !std::isfinite(start_attitude.yaw) || !std::isfinite(start_attitude.pitch))
   {
     return samples;
   }
-
-  TrajectoryHistory history = context.executed_history;
-  Eigen::VectorXd predicted_joints = start_joints;
+  for (int piece = 0; piece < root_trajectory.getPieceNum(); ++piece)
+  {
+    if (!std::isfinite(root_trajectory[piece].getDuration()) ||
+        root_trajectory[piece].getDuration() < 0.0 ||
+        !root_trajectory[piece].getCoeffMat().allFinite()) return samples;
+  }
   RootAttitude attitude = start_attitude;
   const double duration = root_trajectory.getTotalDuration();
-  if (!std::isfinite(duration) || duration < 0.0 || trajectory_start_time > duration + kPredictionTimeTolerance)
-  {
-    return samples;
-  }
+  if (!std::isfinite(duration) || duration < 0.0 ||
+      trajectory_start_time > duration + kPredictionTimeTolerance) return samples;
   const double remaining_duration = std::max(0.0, duration - trajectory_start_time);
-  const int sample_count = remaining_duration > kPredictionTimeTolerance
-                               ? std::max(1, static_cast<int>(std::ceil(remaining_duration / sample_dt)))
-                               : 0;
-  const double required_history = static_cast<double>(context.link_num - 1) * context.link_length;
-  const Eigen::Vector3d initial_root_tail = root_trajectory.getPos(trajectory_start_time);
-  const Eigen::Matrix3d initial_root_rotation = linkRotation(start_attitude);
-  samples.reserve(static_cast<size_t>(sample_count + 1));
-
-  double previous_trajectory_time = trajectory_start_time;
-  for (int sample_index = 0; sample_index <= sample_count; ++sample_index)
+  const double count = std::ceil(remaining_duration / sample_dt);
+  if (!std::isfinite(count) || count >= std::numeric_limits<int>::max()) return samples;
+  const int sample_count = remaining_duration > kPredictionTimeTolerance ?
+                               std::max(1, static_cast<int>(count)) : 0;
+  double previous_time = trajectory_start_time;
+  for (int index = 0; index <= sample_count; ++index)
   {
-    const double trajectory_time = sample_count > 0
-                                       ? trajectory_start_time + remaining_duration *
-                                           static_cast<double>(sample_index) / sample_count
-                                       : trajectory_start_time;
-    const double output_time = output_time_offset + trajectory_time - trajectory_start_time;
-    const Eigen::Vector3d position = root_trajectory.getPos(trajectory_time);
-    const Eigen::Vector3d velocity = root_trajectory.getVel(trajectory_time);
-    if (!position.allFinite() || !velocity.allFinite())
+    if (PlanningClock::now() >= deadline) return {};
+    const double time = sample_count > 0 ?
+        trajectory_start_time + remaining_duration * static_cast<double>(index) / sample_count :
+        trajectory_start_time;
+    const Eigen::Vector3d position = root_trajectory.getPos(time);
+    const Eigen::Vector3d velocity = root_trajectory.getVel(time);
+    if (!position.allFinite() || !velocity.allFinite()) return {};
+    if (index > 0)
     {
-      samples.clear();
-      return samples;
+      attitude = advanceRootAttitude(attitude, velocity, time - previous_time, config, command_pitch);
     }
-    if (sample_index > 0)
-    {
-      attitude = advanceRootAttitude(attitude, velocity,
-                                    trajectory_time - previous_trajectory_time,
-                                    config_, command_pitch);
-    }
-    const bool history_changed = history.append(position);
-
-    // Preserve the measured/commanded state exactly at the handover sample.  All
-    // later samples reconstruct the nominal follow-the-leader configuration.
-    if (sample_index > 0)
-    {
-      const Eigen::Matrix3d root_rotation = linkRotation(attitude);
-      const std::deque<multilink_copilot::TrajectoryPoint> nominal_history =
-          history.arcLength() < required_history
-              ? multilink_copilot::follow_the_leader::prependCurrentBodyMorphology(
-                    history.points(), initial_root_tail, initial_root_rotation, start_joints,
-                    context.pitch_joint_indices, context.yaw_joint_indices,
-                    context.link_num, context.link_length)
-              : history.points();
-      const std::vector<Eigen::Vector3d> targets =
-          multilink_copilot::follow_the_leader::computeTargetPositions(
-              nominal_history, position, context.link_num, context.link_length);
-      if (!targets.empty())
-      {
-        predicted_joints = multilink_copilot::follow_the_leader::computeJointAngles(
-            targets, position, root_rotation, context.pitch_joint_indices,
-            context.yaw_joint_indices, predicted_joints.size(),
-            config_.ik_singularity_threshold, predicted_joints);
-      }
-    }
-    samples.push_back({output_time, attitude.yaw, attitude.pitch, position,
-                       predicted_joints, history_changed});
-    previous_trajectory_time = trajectory_time;
+    samples.push_back({output_time_offset + time - trajectory_start_time, attitude});
+    previous_time = time;
   }
   return samples;
+}
+
+TerminalJointTargetResult computeTerminalJointTarget(
+    const Trajectory<5>& root_trajectory, double trajectory_start_time,
+    const RootAttitude& terminal_attitude, const WholeBodyConfiguration& aligned_body,
+    const DragonCollisionGeometry& geometry, double ik_singularity_threshold,
+    PlanningClock::time_point deadline)
+{
+  TerminalJointTargetResult result;
+  const auto fail = [&](const std::string& reason) {
+    result.success = false;
+    result.joints.resize(0);
+    result.target_positions.clear();
+    result.detail = PlanningClock::now() >= deadline ?
+                        "terminal target generation deadline expired" : reason;
+    return result;
+  };
+  if (PlanningClock::now() >= deadline) return fail("");
+  if (root_trajectory.getPieceNum() <= 0 || !std::isfinite(trajectory_start_time) ||
+      trajectory_start_time < 0.0 || !std::isfinite(terminal_attitude.yaw) ||
+      !std::isfinite(terminal_attitude.pitch) || !aligned_body.link1_tail.allFinite() ||
+      !aligned_body.root_link_rotation.allFinite() || !aligned_body.joint_positions.allFinite() ||
+      !aligned_body.root_link_rotation.isUnitary(1e-6) ||
+      std::abs(aligned_body.root_link_rotation.determinant() - 1.0) > 1e-6 ||
+      geometry.link_num <= 0 || !std::isfinite(geometry.link_length) || geometry.link_length <= 0.0 ||
+      !std::isfinite(ik_singularity_threshold) || ik_singularity_threshold < 0.0 ||
+      geometry.pitch_joint_indices.size() != static_cast<size_t>(geometry.link_num - 1) ||
+      geometry.yaw_joint_indices.size() != static_cast<size_t>(geometry.link_num - 1))
+  {
+    return fail("invalid terminal target geometry or aligned state");
+  }
+  std::vector<bool> used(static_cast<size_t>(aligned_body.joint_positions.size()), false);
+  for (int link = 0; link < geometry.link_num - 1; ++link)
+  {
+    for (const int joint : {geometry.pitch_joint_indices[link], geometry.yaw_joint_indices[link]})
+    {
+      if (joint < 0 || joint >= aligned_body.joint_positions.size() || used[joint])
+        return fail("invalid terminal target joint mapping");
+      used[joint] = true;
+    }
+  }
+  for (int piece = 0; piece < root_trajectory.getPieceNum(); ++piece)
+  {
+    if (PlanningClock::now() >= deadline) return fail("");
+    if (!std::isfinite(root_trajectory[piece].getDuration()) ||
+        root_trajectory[piece].getDuration() < 0.0 ||
+        !root_trajectory[piece].getCoeffMat().allFinite())
+      return fail("invalid terminal target root trajectory");
+  }
+  const double duration = root_trajectory.getTotalDuration();
+  if (!std::isfinite(duration) || trajectory_start_time > duration ||
+      !root_trajectory.getPos(duration).allFinite() ||
+      !root_trajectory.getPos(trajectory_start_time).allFinite() ||
+      (root_trajectory.getPos(trajectory_start_time) - aligned_body.link1_tail).norm() >
+          kTraceDistanceTolerance)
+    return fail("terminal target root trajectory does not match aligned state");
+
+  const std::vector<Eigen::Vector3d> endpoints = linkEndpoints(
+      aligned_body.link1_tail, aligned_body.root_link_rotation, aligned_body.joint_positions,
+      geometry.pitch_joint_indices, geometry.yaw_joint_indices, geometry.link_num, geometry.link_length);
+  std::vector<TerminalTraceSegment> trace;
+  trace.reserve(static_cast<size_t>(geometry.link_num - 1 + root_trajectory.getPieceNum()));
+  // Oldest to newest: linkN tail -> ... -> link2 tail -> aligned root tail.
+  for (int link = geometry.link_num; link > 1; --link)
+  {
+    TerminalTraceSegment segment;
+    segment.coefficients.col(5) = endpoints[link];
+    segment.coefficients.col(4) = endpoints[link - 1] - endpoints[link];
+    if (!segment.coefficients.allFinite()) return fail("non-finite initial body geometry");
+    trace.push_back(segment);
+  }
+  double piece_start = 0.0;
+  for (int piece = 0; piece < root_trajectory.getPieceNum(); ++piece)
+  {
+    if (PlanningClock::now() >= deadline) return fail("");
+    const double piece_duration = root_trajectory[piece].getDuration();
+    const double piece_end = piece_start + piece_duration;
+    if (piece_duration > 0.0 && piece_end > trajectory_start_time)
+    {
+      TerminalTraceSegment segment;
+      segment.coefficients = root_trajectory[piece].normalizePosCoeffMat();
+      segment.lower = std::max(0.0, (trajectory_start_time - piece_start) / piece_duration);
+      if (!segment.coefficients.allFinite()) return fail("non-finite normalized MINCO coefficients");
+      const Eigen::Vector3d previous_tail = trace.empty() ? aligned_body.link1_tail :
+          trace.back().position(trace.back().upper);
+      if ((segment.position(segment.lower) - previous_tail).norm() > kTraceDistanceTolerance)
+        return fail("discontinuous terminal target root trajectory");
+      trace.push_back(segment);
+    }
+    piece_start = piece_end;
+  }
+  Eigen::Vector3d head = root_trajectory.getPos(duration);
+  if (geometry.link_num > 1)
+  {
+    if (trace.empty()) return fail("empty terminal target trace");
+    TerminalTraceCursor cursor{trace.size() - 1, trace.back().upper};
+    for (int link = 2; link <= geometry.link_num; ++link)
+    {
+      Eigen::Vector3d tail;
+      if (!findTerminalTail(trace, head, geometry.link_length, deadline, cursor, tail))
+        return fail("failed to solve terminal target trace intersections");
+      if (!tail.allFinite() || (tail - head).norm() < kTraceDistanceTolerance)
+        return fail("degenerate terminal target link direction");
+      result.target_positions.push_back(tail);
+      head = tail;
+    }
+  }
+  if (PlanningClock::now() >= deadline) return fail("");
+  result.joints = multilink_copilot::follow_the_leader::computeJointAngles(
+      result.target_positions, root_trajectory.getPos(duration), linkRotation(terminal_attitude),
+      geometry.pitch_joint_indices, geometry.yaw_joint_indices, aligned_body.joint_positions.size(),
+      ik_singularity_threshold, aligned_body.joint_positions);
+  if (!result.joints.allFinite()) return fail("non-finite terminal joint target");
+  if (PlanningClock::now() >= deadline) return fail("");
+  result.success = true;
+  return result;
 }
 
 Eigen::VectorXd JointPlanResult::jointPositions(double time) const
@@ -407,7 +645,7 @@ double JointPlanResult::pitchRate(double time) const
 JointTrajectoryPlanner::JointTrajectoryPlanner(
     const JointPlannerConfig& config,
     const std::shared_ptr<multilink_copilot::StabilityEvaluator>& stability_evaluator)
-  : config_(config), stability_evaluator_(stability_evaluator), nominal_predictor_(config.follower)
+  : config_(config), stability_evaluator_(stability_evaluator)
 {
   if (!stability_evaluator_)
   {
@@ -689,12 +927,7 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
   double prefix_minimum_fc_rp = origin_metrics.fc_rp_min;
   if (attitude_change)
   {
-    std::vector<NominalSample> prefix_schedule;
-    prefix_schedule.reserve(result.attitude_waypoints.size());
-    for (const TimedRootAttitudeWaypoint& waypoint : result.attitude_waypoints)
-    {
-      prefix_schedule.push_back({waypoint.time, waypoint.attitude, Eigen::VectorXd()});
-    }
+    const auto& prefix_schedule = result.attitude_waypoints;
     TimedJointWaypoint previous{alignment_start_time, origin};
     for (const TimedJointWaypoint& waypoint : result.joint_waypoints)
     {
@@ -712,40 +945,35 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
     }
   }
 
-  NominalJointContext remaining_context = context;
-  if (!stationary_start && trajectory_start_time > kEpsilon)
+  const std::vector<TimedRootAttitudeWaypoint> attitude_schedule = predictRootAttitudes(
+      root_trajectory, alignment_goal, config_.follower, config_.reference_dt, true,
+      trajectory_start_time, output_time_offset, deadline);
+  if (attitude_schedule.empty())
   {
-    const int history_samples = std::max(
-        1, static_cast<int>(std::ceil(trajectory_start_time /
-                                     config_.follower.trajectory_sample_interval)));
-    for (int sample = 1; sample <= history_samples; ++sample)
-    {
-      const double time = trajectory_start_time * static_cast<double>(sample) /
-                          history_samples;
-      remaining_context.executed_history.append(root_trajectory.getPos(time));
-    }
-  }
-
-  // Re-seed follow-the-leader at the end of the joint1-priority interval. The
-  // subsequent global RRT remains unchanged, but it cannot rewrite this prefix.
-  const std::vector<NominalSample> nominal = buildNominalSamples(
-      root_trajectory, remaining_context, alignment_joints, alignment_goal,
-      trajectory_start_time, output_time_offset);
-  if (nominal.empty())
-  {
-    result.detail = "failed to build nominal follow-the-leader joint samples";
+    result.detail = "failed to predict root attitude schedule";
     return result;
   }
-
-  const NominalSample& terminal = nominal.back();
+  const RootAttitude terminal_attitude = attitude_schedule.back().attitude;
+  const WholeBodyConfiguration aligned_body{
+      root_trajectory.getPos(trajectory_start_time), linkRotation(alignment_goal), alignment_joints};
+  const DragonCollisionGeometry geometry{
+      context.link_num, context.link_length, context.pitch_joint_indices, context.yaw_joint_indices};
+  const TerminalJointTargetResult terminal = computeTerminalJointTarget(
+      root_trajectory, trajectory_start_time, terminal_attitude, aligned_body, geometry,
+      config_.follower.ik_singularity_threshold, deadline);
+  if (!terminal.success)
+  {
+    result.detail = terminal.detail;
+    return result;
+  }
   Eigen::VectorXd goal = terminal.joints;
   multilink_copilot::StabilityMetrics goal_metrics;
   bool repaired_goal = false;
-  if (!configurationIsSafe(goal, terminal.attitude, &goal_metrics))
+  if (!configurationIsSafe(goal, terminal_attitude, &goal_metrics))
   {
-    if (!repairEndpoint(terminal.joints, alignment_joints, terminal.attitude,
+    if (!repairEndpoint(terminal.joints, alignment_joints, terminal_attitude,
                         false, goal) ||
-        !configurationIsSafe(goal, terminal.attitude, &goal_metrics))
+        !configurationIsSafe(goal, terminal_attitude, &goal_metrics))
     {
       result.detail = "terminal joint configuration could not be repaired";
       return result;
@@ -761,14 +989,14 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
     sampled_path = {alignment_joints, goal};
   }
   else if (!searchJointPath(alignment_joints, goal,
-                            linkRotation(terminal.attitude), deadline,
+                            linkRotation(terminal_attitude), deadline,
                             sampled_path) || sampled_path.size() < 2)
   {
     result.detail = "global joint-space RRT failed";
     return result;
   }
   std::vector<Eigen::VectorXd> joint_path =
-      shortcutChain(sampled_path, linkRotation(terminal.attitude));
+      shortcutChain(sampled_path, linkRotation(terminal_attitude));
   if (joint_path.size() < 2 || budgetExpired())
   {
     result.detail = "global joint-space RRT shortcut failed";
@@ -795,7 +1023,7 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
   result.joint_waypoints.front().time = 0.0;
   result.joint_waypoints.back().time = total_base_duration;
 
-  for (const NominalSample& sample : nominal)
+  for (const TimedRootAttitudeWaypoint& sample : attitude_schedule)
   {
     if (!result.attitude_waypoints.empty() &&
         std::abs(result.attitude_waypoints.back().time - sample.time) <= kEpsilon)
@@ -809,18 +1037,13 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
   }
 
   result.minimum_fc_rp = std::min(prefix_minimum_fc_rp, goal_metrics.fc_rp_min);
-  std::vector<NominalSample> complete_schedule;
-  complete_schedule.reserve(result.attitude_waypoints.size());
-  for (const TimedRootAttitudeWaypoint& waypoint : result.attitude_waypoints)
-  {
-    complete_schedule.push_back({waypoint.time, waypoint.attitude, Eigen::VectorXd()});
-  }
+  const auto& complete_schedule = result.attitude_waypoints;
   const size_t safe_origin_index = repaired_start ? 1u : 0u;
   multilink_copilot::StabilityMetrics timed_origin_metrics;
   if (safe_origin_index >= result.joint_waypoints.size() ||
       !configurationIsSafe(
           result.joint_waypoints[safe_origin_index].positions,
-          nominalAttitudeAt(complete_schedule,
+          scheduledAttitudeAt(complete_schedule,
                             result.joint_waypoints[safe_origin_index].time),
           &timed_origin_metrics))
   {
@@ -908,7 +1131,7 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
   }
   result.root_translation_delay = root_delay * result.time_scale;
   result.duration = total_base_duration * result.time_scale;
-  if (!computeTrackingError(root_trajectory, context, nominal, result) ||
+  if (!computeTrackingError(root_trajectory, context, result) ||
       budgetExpired())
   {
     result.detail = budgetExpired() ?
@@ -981,26 +1204,6 @@ bool JointTrajectoryPlanner::planStableConnection(const Eigen::VectorXd& start,
   }
   minimum_fc_rp = path_minimum;
   return true;
-}
-
-std::vector<JointTrajectoryPlanner::NominalSample> JointTrajectoryPlanner::buildNominalSamples(
-    const Trajectory<5>& root_trajectory,
-    const NominalJointContext& context,
-    const Eigen::VectorXd& start_joints,
-    const RootAttitude& start_attitude,
-    double trajectory_start_time,
-    double output_time_offset)
-{
-  std::vector<NominalSample> samples;
-  const std::vector<NominalJointSample> nominal = nominal_predictor_.predict(
-      root_trajectory, context, start_joints, start_attitude,
-      config_.reference_dt, true, trajectory_start_time, output_time_offset);
-  samples.reserve(nominal.size());
-  for (const NominalJointSample& sample : nominal)
-  {
-    samples.push_back({sample.time, RootAttitude{sample.yaw, sample.pitch}, sample.joints});
-  }
-  return samples;
 }
 
 bool JointTrajectoryPlanner::chainIsSafe(const std::vector<Eigen::VectorXd>& chain,
@@ -1236,8 +1439,8 @@ bool JointTrajectoryPlanner::configurationIsSafe(
   return valid;
 }
 
-RootAttitude JointTrajectoryPlanner::nominalAttitudeAt(
-    const std::vector<NominalSample>& samples, double time)
+RootAttitude JointTrajectoryPlanner::scheduledAttitudeAt(
+    const std::vector<TimedRootAttitudeWaypoint>& samples, double time)
 {
   if (samples.empty())
   {
@@ -1252,8 +1455,8 @@ RootAttitude JointTrajectoryPlanner::nominalAttitudeAt(
   {
     return samples.back().attitude;
   }
-  const NominalSample& before = samples[upper - 1];
-  const NominalSample& after = samples[upper];
+  const TimedRootAttitudeWaypoint& before = samples[upper - 1];
+  const TimedRootAttitudeWaypoint& after = samples[upper];
   const double duration = after.time - before.time;
   const double ratio = duration > kEpsilon ? (time - before.time) / duration : 1.0;
   return interpolateRootAttitude(before.attitude, after.attitude, ratio);
@@ -1261,9 +1464,9 @@ RootAttitude JointTrajectoryPlanner::nominalAttitudeAt(
 
 bool JointTrajectoryPlanner::timedConfigurationPathIsSafe(
     const TimedJointWaypoint& start, const TimedJointWaypoint& goal,
-    const std::vector<NominalSample>& nominal, double& minimum_fc_rp)
+    const std::vector<TimedRootAttitudeWaypoint>& attitude_schedule, double& minimum_fc_rp)
 {
-  if (start.positions.size() != goal.positions.size() || nominal.empty() ||
+  if (start.positions.size() != goal.positions.size() || attitude_schedule.empty() ||
       !start.positions.allFinite() || !goal.positions.allFinite() ||
       !std::isfinite(start.time) || !std::isfinite(goal.time) ||
       goal.time + kEpsilon < start.time)
@@ -1287,16 +1490,16 @@ bool JointTrajectoryPlanner::timedConfigurationPathIsSafe(
   // The root attitude is piecewise linear. Add enough samples on every
   // overlapping segment that neither joint nor root-attitude motion can step
   // over a thin infeasible shell.
-  for (size_t index = 1; index < nominal.size(); ++index)
+  for (size_t index = 1; index < attitude_schedule.size(); ++index)
   {
-    const double interval_start = std::max(start.time, nominal[index - 1].time);
-    const double interval_end = std::min(goal.time, nominal[index].time);
+    const double interval_start = std::max(start.time, attitude_schedule[index - 1].time);
+    const double interval_end = std::min(goal.time, attitude_schedule[index].time);
     if (interval_end <= interval_start + kEpsilon)
     {
       continue;
     }
-    const RootAttitude attitude_start = nominalAttitudeAt(nominal, interval_start);
-    const RootAttitude attitude_end = nominalAttitudeAt(nominal, interval_end);
+    const RootAttitude attitude_start = scheduledAttitudeAt(attitude_schedule, interval_start);
+    const RootAttitude attitude_end = scheduledAttitudeAt(attitude_schedule, interval_end);
     const double attitude_delta = std::max(
         std::abs(shortestYawDelta(attitude_start.yaw, attitude_end.yaw)),
         std::abs(attitude_end.pitch - attitude_start.pitch));
@@ -1328,7 +1531,7 @@ bool JointTrajectoryPlanner::timedConfigurationPathIsSafe(
     const Eigen::VectorXd joints =
         start.positions + ratio * (goal.positions - start.positions);
     multilink_copilot::StabilityMetrics metrics;
-    if (!configurationIsSafe(joints, nominalAttitudeAt(nominal, time), &metrics))
+    if (!configurationIsSafe(joints, scheduledAttitudeAt(attitude_schedule, time), &metrics))
     {
       return false;
     }
@@ -1340,7 +1543,7 @@ bool JointTrajectoryPlanner::timedConfigurationPathIsSafe(
 
 bool JointTrajectoryPlanner::computeTrackingError(
     const Trajectory<5>& root_trajectory, const NominalJointContext& context,
-    const std::vector<NominalSample>& nominal, JointPlanResult& result) const
+    JointPlanResult& result) const
 {
   result.tracking_error_rms = 0.0;
   result.tracking_error_max = 0.0;
@@ -1351,7 +1554,7 @@ bool JointTrajectoryPlanner::computeTrackingError(
   const int downstream_link_count = context.link_num - 1;
   if (!std::isfinite(result.duration) || !std::isfinite(result.time_scale) ||
       result.duration <= kEpsilon || result.time_scale <= 0.0 ||
-      downstream_link_count <= 0 || nominal.empty())
+      downstream_link_count <= 0 || result.attitude_waypoints.empty())
   {
     return true;
   }

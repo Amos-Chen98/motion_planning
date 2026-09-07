@@ -630,17 +630,29 @@ TEST_F(WholeBodyJointBridge, ProjectsTerminalAndMapsGlobalRrtAcrossTheRootHorizo
   const Candidate candidate =
       PrimitiveGenerator(primitive_).generate(initial_state, final_state).front();
 
-  const std::vector<NominalJointSample> nominal =
-      NominalJointPredictor(config.follower).predict(
-          candidate.trajectory, context, start_joints, 0.0, config.reference_dt);
-  ASSERT_GE(nominal.size(), 2u);
-  evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(nominal.back().yaw + M_PI));
+  const RootAttitude alignment_attitude{-M_PI_2, 0.0};
+  const Eigen::VectorXd alignment_joints = JointTrajectoryPlanner::joint1PriorityConfiguration(
+      start_joints, context.pitch_joint_indices.front(), context.yaw_joint_indices.front(),
+      model_->getLinkJointLowerLimits(), model_->getLinkJointUpperLimits(),
+      RootAttitude{}, alignment_attitude, 1.0);
+  const auto attitudes = predictRootAttitudes(candidate.trajectory, alignment_attitude,
+                                              config.follower, config.reference_dt, true);
+  ASSERT_FALSE(attitudes.empty());
+  const WholeBodyConfiguration aligned_body{
+      start_position, linkRotation(alignment_attitude), alignment_joints};
+  const auto nominal = computeTerminalJointTarget(
+      candidate.trajectory, 0.0, attitudes.back().attitude, aligned_body,
+      info_->collisionGeometry(), config.follower.ik_singularity_threshold);
+  ASSERT_TRUE(nominal.success) << nominal.detail;
+  const Eigen::Quaterniond terminal_rotation(linkRotation(attitudes.back().attitude));
+  evaluator_->setRootLinkRotation(KDL::Rotation::Quaternion(
+      terminal_rotation.x(), terminal_rotation.y(), terminal_rotation.z(), terminal_rotation.w()));
   multilink_copilot::StabilityMetrics nominal_terminal_metrics;
-  ASSERT_TRUE(evaluator_->evaluate(nominal.back().joints, nominal_terminal_metrics));
+  ASSERT_TRUE(evaluator_->evaluate(nominal.joints, nominal_terminal_metrics));
   ASSERT_FALSE(nominal_terminal_metrics.safe);
   Eigen::VectorXd projected_terminal;
   ASSERT_TRUE(evaluator_->projectToSafe(
-      nominal.back().joints, start_joints, projected_terminal, false));
+      nominal.joints, alignment_joints, projected_terminal, false));
 
   JointTrajectoryPlanner planner(config, evaluator_);
   const JointPlanResult result =
@@ -668,6 +680,43 @@ TEST_F(WholeBodyJointBridge, ProjectsTerminalAndMapsGlobalRrtAcrossTheRootHorizo
   EXPECT_TRUE(std::isfinite(result.tracking_error_rms));
   EXPECT_TRUE(std::isfinite(result.tracking_error_max));
   expectTimedPathIsSafe(result, config);
+}
+
+TEST_F(WholeBodyJointBridge, TerminalGoalIsIndependentOfHistoryAndSampling)
+{
+  Eigen::VectorXd start_joints(6);
+  start_joints << 0.0, M_PI_2, 0.0, M_PI_2, 0.0, M_PI_2;
+  Eigen::Matrix3d start = Eigen::Matrix3d::Zero();
+  start.col(0) = Eigen::Vector3d(0.0, 0.0, 1.0);
+  Eigen::Matrix3d goal = start;
+  goal(0, 0) = 3.0;
+  const Candidate candidate = PrimitiveGenerator(primitive_).generate(start, goal).front();
+  Eigen::VectorXd first_goal;
+  for (const bool alternate : {false, true})
+  {
+    JointPlannerConfig config = jointConfig(19);
+    config.planning_timeout = 1.0;
+    config.reference_dt = alternate ? 0.013 : 0.4;
+    config.follower.trajectory_sample_interval = alternate ? 0.01 : 0.2;
+    config.follower.trajectory_buffer_max_length = alternate ? 20.0 : 4.0;
+    TrajectoryHistory history(config.follower);
+    for (int index = 0; index <= 50; ++index)
+    {
+      const double offset = 0.1 * (index - 50);
+      history.append(alternate ? Eigen::Vector3d(0.0, offset, 1.0) :
+                                 Eigen::Vector3d(offset, 0.0, 1.0));
+    }
+    JointTrajectoryPlanner planner(config, evaluator_);
+    const JointPlanResult result = planner.plan(
+        candidate.trajectory, makeNominalJointContext(history, *info_), start_joints, 0.0, 1.0);
+    ASSERT_TRUE(result.success) << result.detail;
+    ASSERT_FALSE(result.joint_waypoints.empty());
+    EXPECT_NEAR(result.attitude_waypoints.back().attitude.yaw, 0.0, 1e-12);
+    EXPECT_NEAR(result.attitude_waypoints.back().attitude.pitch, 0.0, 1e-12);
+    if (!alternate) first_goal = result.joint_waypoints.back().positions;
+    else EXPECT_TRUE(result.joint_waypoints.back().positions.isApprox(first_goal, 1e-8));
+    expectTimedPathIsSafe(result, config);
+  }
 }
 
 TEST_F(WholeBodyJointBridge, RepairsMeasuredStartAndPreservesTheCommandHandover)
@@ -766,7 +815,7 @@ TEST_F(WholeBodyJointBridge, RejectsCandidateWhenTerminalProjectionFails)
   const JointPlanResult result =
       planner.plan(malformed_root, context, start_joints, 0.0, 1.0);
   EXPECT_FALSE(result.success);
-  EXPECT_EQ(result.detail, "failed to build nominal follow-the-leader joint samples");
+  EXPECT_EQ(result.detail, "failed to predict root attitude schedule");
 }
 }  // namespace
 }  // namespace motion_primitive_planner

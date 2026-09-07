@@ -45,6 +45,7 @@ private:
 
 struct NominalJointContext
 {
+  //! Used only for the final trace-tracking score, not terminal target generation.
   TrajectoryHistory executed_history;
   int link_num = 0;
   double link_length = 0.0;
@@ -54,43 +55,6 @@ struct NominalJointContext
 
 NominalJointContext makeNominalJointContext(const TrajectoryHistory& history,
                                             const DragonModelInfo& model);
-
-struct NominalJointSample
-{
-  double time = 0.0;
-  double yaw = 0.0;
-  double pitch = 0.0;
-  Eigen::Vector3d root_position = Eigen::Vector3d::Zero();
-  Eigen::VectorXd joints;
-  bool history_changed = false;
-};
-
-class NominalJointPredictor
-{
-public:
-  explicit NominalJointPredictor(const FollowerConfig& config) : config_(config)
-  {
-    config_.validateOrThrow();
-  }
-
-  std::vector<NominalJointSample> predict(const Trajectory<5>& root_trajectory,
-                                          const NominalJointContext& context,
-                                          const Eigen::VectorXd& start_joints,
-                                          double start_yaw,
-                                          double sample_dt) const;
-
-  std::vector<NominalJointSample> predict(const Trajectory<5>& root_trajectory,
-                                          const NominalJointContext& context,
-                                          const Eigen::VectorXd& start_joints,
-                                          const RootAttitude& start_attitude,
-                                          double sample_dt,
-                                          bool command_pitch,
-                                          double trajectory_start_time = 0.0,
-                                          double output_time_offset = 0.0) const;
-
-private:
-  FollowerConfig config_;
-};
 
 struct TimedJointWaypoint
 {
@@ -103,6 +67,31 @@ struct TimedRootAttitudeWaypoint
   double time = 0.0;
   RootAttitude attitude;
 };
+
+//! Predicts only root attitude; no joint reconstruction or trajectory history.
+std::vector<TimedRootAttitudeWaypoint> predictRootAttitudes(
+    const Trajectory<5>& root_trajectory, const RootAttitude& start_attitude,
+    const FollowerConfig& config, double sample_dt, bool command_pitch,
+    double trajectory_start_time = 0.0, double output_time_offset = 0.0,
+    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max());
+
+struct TerminalJointTargetResult
+{
+  bool success = false;
+  Eigen::VectorXd joints;
+  //! World-frame link2..N tail targets on the initial-body/MINCO trace.
+  std::vector<Eigen::Vector3d> target_positions;
+  std::string detail;
+};
+
+//! Searches the analytic remaining MINCO curve and the aligned initial body,
+//! then reconstructs joints once. The result still requires flight-feasibility
+//! validation/projection. No executed root history is used.
+TerminalJointTargetResult computeTerminalJointTarget(
+    const Trajectory<5>& root_trajectory, double trajectory_start_time,
+    const RootAttitude& terminal_attitude, const WholeBodyConfiguration& aligned_body,
+    const DragonCollisionGeometry& geometry, double ik_singularity_threshold,
+    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max());
 
 struct JointPlanResult
 {
@@ -138,8 +127,8 @@ public:
   JointTrajectoryPlanner(const JointPlannerConfig& config,
                          const std::shared_ptr<multilink_copilot::StabilityEvaluator>& stability_evaluator);
 
-  //! `time_budget` overrides `planning_timeout` when positive, which lets the
-  //! caller share one wall-clock budget across all root candidates.
+  //! A positive `time_budget` caps `planning_timeout`, allowing the caller to
+  //! share one wall-clock budget across all root candidates.
   JointPlanResult plan(const Trajectory<5>& root_trajectory,
                        const NominalJointContext& nominal_context,
                        const Eigen::VectorXd& start_joint_positions,
@@ -178,20 +167,6 @@ public:
 private:
   using Clock = std::chrono::steady_clock;
 
-  struct NominalSample
-  {
-    double time = 0.0;
-    RootAttitude attitude;
-    Eigen::VectorXd joints;
-  };
-
-  std::vector<NominalSample> buildNominalSamples(const Trajectory<5>& root_trajectory,
-                                                 const NominalJointContext& context,
-                                                 const Eigen::VectorXd& start_joints,
-                                                 const RootAttitude& start_attitude,
-                                                 double trajectory_start_time = 0.0,
-                                                 double output_time_offset = 0.0);
-
   bool chainIsSafe(const std::vector<Eigen::VectorXd>& chain, double start_yaw, double goal_yaw,
                    double& minimum_fc_rp);
   //! Greedy corner removal on a sampled path; the result is subsequently
@@ -219,15 +194,14 @@ private:
   bool configurationIsSafe(const Eigen::VectorXd& joints,
                            const Eigen::Matrix3d& root_link_rotation,
                            multilink_copilot::StabilityMetrics* metrics = nullptr);
-  static RootAttitude nominalAttitudeAt(const std::vector<NominalSample>& samples,
-                                        double time);
+  static RootAttitude scheduledAttitudeAt(const std::vector<TimedRootAttitudeWaypoint>& samples,
+                                          double time);
   bool timedConfigurationPathIsSafe(const TimedJointWaypoint& start,
                                     const TimedJointWaypoint& goal,
-                                    const std::vector<NominalSample>& nominal,
+                                    const std::vector<TimedRootAttitudeWaypoint>& attitude_schedule,
                                     double& minimum_fc_rp);
   bool computeTrackingError(const Trajectory<5>& root_trajectory,
                             const NominalJointContext& context,
-                            const std::vector<NominalSample>& nominal,
                             JointPlanResult& result) const;
   bool repairEndpoint(const Eigen::VectorXd& desired,
                       const Eigen::VectorXd& reference,
@@ -239,7 +213,6 @@ private:
   //! Hard wall-clock limit for the running plan; every validation loop honours it.
   Clock::time_point deadline_ = Clock::time_point::max();
   std::shared_ptr<multilink_copilot::StabilityEvaluator> stability_evaluator_;
-  NominalJointPredictor nominal_predictor_;
 };
 
 }  // namespace motion_primitive_planner

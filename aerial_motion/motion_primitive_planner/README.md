@@ -13,7 +13,7 @@ The package has six production C++ source files. The five planning and geometry 
 | [whole_body_planner_node.cpp](src/whole_body_planner_node.cpp) | ROS IO, robot model lifecycle, planning worker, trajectory activation and execution, replanning, hold commands, and diagnostics. |
 | [whole_body_planner.cpp](src/whole_body_planner.cpp) | Batch joint planning, root time scaling, full-trajectory collision checks, and candidate selection. |
 | [root_primitive_generator.cpp](src/root_primitive_generator.cpp) | Map replacement and snapshots, route search, local targets, and MINCO root primitives. |
-| [joint_trajectory_planner.cpp](src/joint_trajectory_planner.cpp) | Trajectory history, nominal follow-the-leader prediction, joint search, attitude allocation, timing, and interpolation. |
+| [joint_trajectory_planner.cpp](src/joint_trajectory_planner.cpp) | Trajectory history for scoring, root-attitude prediction, analytic terminal joint targets, joint search, attitude allocation, timing, and interpolation. |
 | [dragon_geometry.cpp](src/dragon_geometry.cpp) | Robot metadata, attitude and frame transforms, link geometry, and instantaneous body collision checks. |
 | [planner_config.cpp](src/planner_config.cpp) | Parameter loading and validation. |
 
@@ -46,4 +46,4 @@ Do not start `gcopter/traj_server` or `multilink_copilot` full-state output with
 
 The mapper enables [single-frame noise filtering](../voxel_mapping/README.md#noise-filtering) by default, requiring two other points within 0.20 m before a point can mark a voxel occupied. The planner launch forwards `enable_noise_filter`, `noise_filter_radius`, and `noise_filter_min_neighbors`; for example, append `noise_filter_min_neighbors:=3` to require three neighbors or `enable_noise_filter:=false` to restore single-point occupancy. The neighbor radius is independent of `voxel_width` and the planner's obstacle dilation radius.
 
-[whole_body_motion_primitive_planner.yaml](config/whole_body_motion_primitive_planner.yaml) contains the map/path, primitive, follow-the-leader, flight-feasibility, joint-planning, and execution settings. The launch file loads this configuration and then applies its launch-argument overrides. The default replanning ratio is `0.3`, the activation lead time is `0.75 s`, and commands are published at `40 Hz`.
+[whole_body_motion_primitive_planner.yaml](config/whole_body_motion_primitive_planner.yaml) contains the map/path, primitive, root-attitude, terminal IK, flight-feasibility, joint-planning, and execution settings. `JointReferenceDt` controls root-attitude prediction; terminal tail targets are computed directly on the remaining MINCO curve and aligned initial-body segments, independently of trajectory-history sampling. The launch file loads this configuration and then applies its launch-argument overrides. The default replanning ratio is `0.3`, the activation lead time is `0.75 s`, and commands are published at `40 Hz`.
