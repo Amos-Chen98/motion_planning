@@ -4,6 +4,8 @@
 
 For algorithm details, see [Algorithm Design](doc/algorithm_design.md).
 
+Candidate evaluation uses a persistent thread pool with one independent robot model per candidate. `PlanningThreads=0` (the default) uses the available CPUs, capped by `CandidateCount`; `1` selects the serial path, and a positive value sets the thread limit. The launch argument is `planning_threads`, for example `roslaunch motion_primitive_planner whole_body_motion_primitive_planner.launch planning_threads:=1`. Results retain candidate order and the existing ranking rules. Under a shared deadline, parallel execution may finish additional candidates and consequently select a different trajectory. See [Parallel Performance](doc/parallel_performance.md) for measurements and reproduction instructions.
+
 ## Source Organization
 
 The package has six production C++ source files. The five planning and geometry files form `motion_primitive_planner_core`; the node file builds `whole_body_motion_primitive_planner_node` and contains `main()`.

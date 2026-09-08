@@ -69,6 +69,8 @@ struct WholeBodyPlannerConfig
   SharedPlannerConfig shared;
   JointPlannerConfig joint;
   multilink_copilot::StabilityConfig stability;
+  //! Zero selects available CPUs, capped by the candidate count; one is serial.
+  int planning_threads = 0;
   double activation_lead_time = 0.75;
   //! Equivalent seconds charged per radian of whole-body joint path length.
   double joint_motion_cost_weight = 0.25;

@@ -111,6 +111,7 @@ WholeBodyPlannerConfig::WholeBodyPlannerConfig(const ros::NodeHandle& private_nh
   , stability(loadStabilityConfig(private_nh))
 {
   joint.follower = FollowerConfig::fromRos(private_nh);
+  loadParam(private_nh, "PlanningThreads", planning_threads);
   loadParam(private_nh, "JointReferenceDt", joint.reference_dt);
   loadParam(private_nh, "JointPlanningTimeout", joint.planning_timeout);
   loadParam(private_nh, "JointValidityResolution", joint.validity_resolution);
@@ -124,7 +125,8 @@ WholeBodyPlannerConfig::WholeBodyPlannerConfig(const ros::NodeHandle& private_nh
   loadParam(private_nh, "RootChildFrameId", root_child_frame_id);
   loadParam(private_nh, "Verbose", verbose);
 
-  if (!std::isfinite(activation_lead_time) || activation_lead_time <= 0.0 ||
+  if (planning_threads < 0 ||
+      !std::isfinite(activation_lead_time) || activation_lead_time <= 0.0 ||
       !std::isfinite(joint_motion_cost_weight) || joint_motion_cost_weight < 0.0 ||
       !std::isfinite(tracking_error_cost_weight) || tracking_error_cost_weight < 0.0 ||
       root_child_frame_id.empty())

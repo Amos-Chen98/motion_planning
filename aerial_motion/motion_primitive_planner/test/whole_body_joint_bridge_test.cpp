@@ -4,6 +4,7 @@
 #include <motion_primitive_planner/joint_trajectory_planner.h>
 #include <motion_primitive_planner/root_primitive_generator.h>
 #include <motion_primitive_planner/whole_body_planner.h>
+#include "plan_snapshot.h"
 
 #include <dragon/model/hydrus_like_robot_model.h>
 #include <pluginlib/class_loader.h>
@@ -288,6 +289,96 @@ TEST_F(WholeBodyBatchPlanner, RejectsUnevaluatedCandidatesAfterTheSharedDeadline
     EXPECT_TRUE(candidate.joints.joint_waypoints.empty());
     EXPECT_EQ(candidate.scaled_root.getPieceNum(), 0);
   }
+}
+
+TEST_F(WholeBodyBatchPlanner, SerialAndParallelResultsMatchAcrossRepeatedBatches)
+{
+  config_->joint.planning_timeout = 5.0;
+  auto make_planner = [&](int threads) {
+    config_->planning_threads = threads;
+    std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>> evaluators;
+    for (int i = 0; i < config_->shared.primitive.candidate_count; ++i)
+    {
+      const auto model = boost::dynamic_pointer_cast<Dragon::HydrusLikeRobotModel>(
+          loader_->createInstance("dragon/hydrus_like_robot_model"));
+      evaluators.push_back(std::make_shared<multilink_copilot::StabilityEvaluator>(model, config_->stability));
+    }
+    return std::make_unique<WholeBodyPlanner>(*config_, info_->collisionGeometry(), evaluators);
+  };
+  auto serial = make_planner(1);
+  auto parallel = make_planner(3);
+  const auto occupancy = environment_->occupancySnapshot();
+  for (int repeat = 0; repeat < 3; ++repeat)
+  {
+    for (const auto& displacement : std::vector<Eigen::Vector3d>{
+             {1.0, 0.0, 0.0}, {-1.0, 0.0, 0.0}, {-1.0, 0.5, 0.5}})
+    {
+      Eigen::Matrix3d initial = Eigen::Matrix3d::Zero(), final = initial;
+      initial.col(0) = start_.position;
+      final.col(0) = start_.position + displacement;
+      PrimitiveBatch batch;
+      batch.candidates = PrimitiveGenerator(config_->shared.primitive).generate(initial, final);
+      const auto a = serial->plan(batch, occupancy, start_joints_, {}, context_,
+                                  ros::Time::now() + ros::Duration(30.0));
+      const auto b = parallel->plan(batch, occupancy, start_joints_, {}, context_,
+                                    ros::Time::now() + ros::Duration(30.0));
+      EXPECT_EQ(a.selected, b.selected);
+      const test::PlanSnapshot sa(a), sb(b);
+      ASSERT_EQ(sa.details, sb.details);
+      ASSERT_EQ(sa.values.size(), sb.values.size());
+      for (size_t i = 0; i < sa.values.size(); ++i)
+      {
+        if (std::isfinite(sa.values[i]))
+          EXPECT_NEAR(sa.values[i], sb.values[i], 1e-10 * std::max(1.0, std::abs(sa.values[i]))) << i;
+        else EXPECT_EQ(sa.values[i], sb.values[i]) << i;
+      }
+    }
+  }
+}
+
+TEST_F(WholeBodyBatchPlanner, HandlesEmptySingleFailedAndCollidingBatches)
+{
+  auto occupancy = environment_->occupancySnapshot();
+  const auto deadline = []() { return ros::Time::now() + ros::Duration(10.0); };
+  PrimitiveBatch empty;
+  EXPECT_EQ(planner_->plan(empty, occupancy, start_joints_, {}, context_, deadline()).selected, -1);
+  EXPECT_THROW(planner_->plan(empty, nullptr, start_joints_, {}, context_, deadline()), std::invalid_argument);
+  PrimitiveBatch single = batch_;
+  single.candidates.resize(1);
+  const auto one = planner_->plan(single, occupancy, start_joints_, {}, context_, deadline());
+  ASSERT_EQ(one.candidates.size(), 1u);
+  EXPECT_EQ(one.selected, 0);
+  PrimitiveBatch failed = batch_;
+  for (auto& candidate : failed.candidates)
+  {
+    candidate.status = CandidateStatus::kGenerationFailed;
+    candidate.detail = "deliberate generation failure";
+  }
+  const auto none = planner_->plan(failed, occupancy, start_joints_, {}, context_, deadline());
+  EXPECT_EQ(none.selected, -1);
+  for (const auto& c : none.candidates) EXPECT_EQ(c.detail, "deliberate generation failure");
+  environment_->replaceMap({start_.position});
+  const auto collision = planner_->plan(batch_, environment_->occupancySnapshot(), start_joints_,
+                                         {}, context_, deadline());
+  EXPECT_EQ(collision.selected, -1);
+  for (const auto& c : collision.candidates)
+    if (c.joints.success) EXPECT_EQ(c.status, CandidateStatus::kCollision);
+  EXPECT_GE(planner_->plan(batch_, occupancy, start_joints_, {}, context_, deadline()).selected, 0);
+}
+
+TEST_F(WholeBodyBatchPlanner, RejectsInvalidThreadCountsAndAliasedModels)
+{
+  ros::NodeHandle nh("~");
+  nh.setParam("PlanningThreads", -1);
+  EXPECT_THROW(WholeBodyPlannerConfig{nh}, std::invalid_argument);
+  nh.setParam("PlanningThreads", 0);
+  config_->planning_threads = 3;
+  std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>> aliases(3, evaluator_);
+  EXPECT_THROW(WholeBodyPlanner(*config_, info_->collisionGeometry(), aliases), std::invalid_argument);
+  aliases[1] = std::make_shared<multilink_copilot::StabilityEvaluator>(model_, config_->stability);
+  EXPECT_THROW(WholeBodyPlanner(*config_, info_->collisionGeometry(), aliases), std::invalid_argument);
+  aliases[0].reset();
+  EXPECT_THROW(WholeBodyPlanner(*config_, info_->collisionGeometry(), aliases), std::invalid_argument);
 }
 
 // Targets behind the robot force the nominal follow-the-leader terminal shape

@@ -10,6 +10,7 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DNDEBUG")
 
 find_package(Eigen3 REQUIRED)
 find_package(ompl REQUIRED)
+find_package(Threads REQUIRED)
 find_package(catkin REQUIRED COMPONENTS
   aerial_robot_msgs
   roscpp
@@ -46,7 +47,7 @@ if(TARGET ompl::ompl)
 else()
   set(MOTION_PRIMITIVE_OMPL_TARGET ${OMPL_LIBRARIES})
 endif()
-target_link_libraries(motion_primitive_planner_core ${catkin_LIBRARIES} ${MOTION_PRIMITIVE_OMPL_TARGET})
+target_link_libraries(motion_primitive_planner_core ${catkin_LIBRARIES} ${MOTION_PRIMITIVE_OMPL_TARGET} ${CMAKE_THREAD_LIBS_INIT})
 add_dependencies(motion_primitive_planner_core ${catkin_EXPORTED_TARGETS})
 
 add_executable(whole_body_motion_primitive_planner_node src/whole_body_planner_node.cpp)
@@ -58,6 +59,10 @@ add_dependencies(whole_body_motion_primitive_planner_node ${catkin_EXPORTED_TARG
 
 if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
+  catkin_add_gtest(candidate_executor_test test/candidate_executor_test.cpp)
+  if(TARGET candidate_executor_test)
+    target_link_libraries(candidate_executor_test ${CMAKE_THREAD_LIBS_INIT})
+  endif()
   catkin_add_gtest(motion_primitive_planner_core_test test/planner_core_test.cpp)
   if(TARGET motion_primitive_planner_core_test)
     target_link_libraries(motion_primitive_planner_core_test motion_primitive_planner_core ${catkin_LIBRARIES})

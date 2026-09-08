@@ -1,8 +1,13 @@
 #include <motion_primitive_planner/whole_body_planner.h>
+#include <motion_primitive_planner/detail/candidate_executor.h>
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <set>
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 namespace motion_primitive_planner
 {
@@ -10,6 +15,17 @@ namespace motion_primitive_planner
 namespace
 {
 constexpr double kEpsilon = 1e-6;
+
+size_t availableCpus()
+{
+#ifdef __linux__
+  cpu_set_t cpus;
+  CPU_ZERO(&cpus);
+  if (sched_getaffinity(0, sizeof(cpus), &cpus) == 0 && CPU_COUNT(&cpus) > 0)
+    return static_cast<size_t>(CPU_COUNT(&cpus));
+#endif
+  return std::max(1u, std::thread::hardware_concurrency());
+}
 }  // namespace
 
 int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& candidates,
@@ -78,17 +94,27 @@ WholeBodyPlanner::WholeBodyPlanner(
     const std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>>& evaluators)
   : config_(config), collision_geometry_(geometry)
 {
-  if (evaluators.size() != static_cast<size_t>(config_.shared.primitive.candidate_count))
+  if (config_.planning_threads < 0 || evaluators.empty() ||
+      evaluators.size() != static_cast<size_t>(config_.shared.primitive.candidate_count))
   {
     throw std::invalid_argument("Each root candidate requires an independent stability evaluator");
   }
+  std::set<const void*> models;
   for (size_t index = 0; index < evaluators.size(); ++index)
   {
+    if (!evaluators[index] || !evaluators[index]->robotModel() ||
+        !models.insert(evaluators[index]->robotModel().get()).second)
+      throw std::invalid_argument("Each root candidate requires an independent robot model");
     JointPlannerConfig joint_config = config_.joint;
     joint_config.random_seed += static_cast<unsigned int>(index);
     joint_planners_.emplace_back(new JointTrajectoryPlanner(joint_config, evaluators[index]));
   }
+  const size_t threads = std::min(evaluators.size(), config_.planning_threads == 0
+      ? availableCpus() : static_cast<size_t>(config_.planning_threads));
+  executor_.reset(new detail::CandidateExecutor(threads));
 }
+
+WholeBodyPlanner::~WholeBodyPlanner() = default;
 
 WholeBodyPlanResult WholeBodyPlanner::plan(
     const PrimitiveBatch& batch,
@@ -96,6 +122,7 @@ WholeBodyPlanResult WholeBodyPlanner::plan(
     const Eigen::VectorXd& start_joints, const RootAttitude& start_attitude,
     const NominalJointContext& nominal_context, const ros::Time& deadline)
 {
+  std::lock_guard<std::mutex> plan_lock(plan_mutex_);
   if (!occupancy || batch.candidates.size() > joint_planners_.size())
   {
     throw std::invalid_argument("Invalid whole-body candidate batch or occupancy snapshot");
@@ -103,21 +130,20 @@ WholeBodyPlanResult WholeBodyPlanner::plan(
   WholeBodyPlanResult result;
   std::vector<WholeBodyCandidate>& candidates = result.candidates;
   candidates.resize(batch.candidates.size());
-  for (size_t index = 0; index < batch.candidates.size(); ++index)
-  {
+  executor_->run(batch.candidates.size(), [&](size_t index) {
     WholeBodyCandidate& candidate = candidates[index];
     candidate.root = batch.candidates[index];
     if (candidate.root.status == CandidateStatus::kGenerationFailed)
     {
       candidate.detail = candidate.root.detail;
-      continue;
+      return;
     }
     const double joint_planning_budget = (deadline - ros::Time::now()).toSec();
     if (joint_planning_budget <= 0.0)
     {
       candidate.status = CandidateStatus::kJointPlanningFailed;
       candidate.detail = "whole-body planning budget exhausted";
-      continue;
+      return;
     }
     candidate.joints = joint_planners_[index]->plan(candidate.root.trajectory, nominal_context,
                                                     start_joints, start_attitude,
@@ -126,7 +152,7 @@ WholeBodyPlanResult WholeBodyPlanner::plan(
     {
       candidate.status = CandidateStatus::kJointPlanningFailed;
       candidate.detail = candidate.joints.detail;
-      continue;
+      return;
     }
     candidate.scaled_root = gcopter_planner::PlannerBackend::timeScaledTrajectory(
         candidate.root.trajectory, candidate.joints.time_scale);
@@ -134,10 +160,10 @@ WholeBodyPlanResult WholeBodyPlanner::plan(
     {
       candidate.status = CandidateStatus::kCollision;
       candidate.detail = "whole-body sampled collision";
-      continue;
+      return;
     }
     candidate.status = CandidateStatus::kFeasible;
-  }
+  });
 
   const int selected = selectBest(candidates);
   if (selected >= 0)

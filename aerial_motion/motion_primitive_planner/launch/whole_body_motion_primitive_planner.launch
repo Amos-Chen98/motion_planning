@@ -26,6 +26,7 @@
     <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
 
     <arg name="planning_horizon" default="3.0" />
+    <arg name="planning_threads" default="0" />
     <arg name="max_vel_mag" default="1.0" />
     <arg name="max_angular_vel" default="1.0" />
     <arg name="publish_yaw_command" default="true" />
@@ -85,6 +86,7 @@
         <param name="DilateRadius" value="$(arg dilate_radius)" />
         <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
         <param name="PlanningHorizon" value="$(arg planning_horizon)" />
+        <param name="PlanningThreads" value="$(arg planning_threads)" />
         <param name="MaxVelMag" value="$(arg max_vel_mag)" />
         <param name="MaxAngularVel" value="$(arg max_angular_vel)" />
         <param name="PublishYawCommand" value="$(arg publish_yaw_command)" />

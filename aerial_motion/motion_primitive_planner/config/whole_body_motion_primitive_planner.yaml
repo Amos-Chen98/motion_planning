@@ -18,6 +18,8 @@ ZeroLocalTargetVel: true
 
 # Root motion primitive sampling.
 CandidateCount: 9
+# 0: available CPUs capped by CandidateCount; 1: serial; positive: thread cap.
+PlanningThreads: 0
 MaxPrimitiveOffset: 0.8
 MinimumPieceDuration: 0.20
 

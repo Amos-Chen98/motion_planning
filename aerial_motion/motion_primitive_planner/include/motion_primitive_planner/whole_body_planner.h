@@ -6,9 +6,11 @@
 #include <motion_primitive_planner/root_primitive_generator.h>
 
 #include <ros/time.h>
+#include <mutex>
 
 namespace motion_primitive_planner
 {
+namespace detail { class CandidateExecutor; }
 
 struct WholeBodyCandidateScore
 {
@@ -47,6 +49,7 @@ public:
   WholeBodyPlanner(
       const WholeBodyPlannerConfig& config, const DragonCollisionGeometry& geometry,
       const std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>>& evaluators);
+  ~WholeBodyPlanner();
 
   //! The root batch and occupancy must come from the same map snapshot.
   //! The shared deadline uses ROS time, as does the node's activation schedule.
@@ -65,6 +68,9 @@ private:
   WholeBodyPlannerConfig config_;
   DragonCollisionGeometry collision_geometry_;
   std::vector<std::unique_ptr<JointTrajectoryPlanner>> joint_planners_;
+  std::mutex plan_mutex_;
+  // Destroy and join workers before destroying their candidate planners.
+  std::unique_ptr<detail::CandidateExecutor> executor_;
 };
 
 }  // namespace motion_primitive_planner

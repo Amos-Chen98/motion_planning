@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
@@ -16,6 +17,9 @@ namespace
 using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 constexpr int kQpMaxWorkingSetRecalculations = 50;
+// qpOASES 3.2 mutates a global message handler even with PL_NONE. Protect
+// every solver's lifetime; model evaluation and constraint building stay local.
+std::mutex qp_solver_mutex;
 
 std::vector<int> selectSmallestIndices(const Eigen::VectorXd& values, int count)
 {
@@ -396,21 +400,26 @@ bool StabilityEvaluator::projectToSafe(const Eigen::VectorXd& desired_joint_posi
     const Eigen::VectorXd gradient = -(desired + config_.qp_regularization * current_vector);
     RowMajorMatrixXd hessian_row_major = hessian;
     RowMajorMatrixXd constraints_row_major = builder.matrix;
-    qpOASES::SQProblem solver(link_joint_num_, constraint_count);
-    qpOASES::Options options;
-    options.printLevel = qpOASES::PL_NONE;
-    options.enableEqualities = qpOASES::BT_TRUE;
-    solver.setOptions(options);
-    int working_set_recalculations = kQpMaxWorkingSetRecalculations;
-    const qpOASES::returnValue status =
-        solver.init(hessian_row_major.data(), gradient.data(), constraints_row_major.data(), qp_lower.data(),
-                    qp_upper.data(), builder.lower.data(), builder.upper.data(), working_set_recalculations);
+    Eigen::VectorXd solution = current_vector;
+    qpOASES::returnValue status;
+    {
+      std::lock_guard<std::mutex> lock(qp_solver_mutex);
+      qpOASES::SQProblem solver(link_joint_num_, constraint_count);
+      qpOASES::Options options;
+      options.printLevel = qpOASES::PL_NONE;
+      options.enableEqualities = qpOASES::BT_TRUE;
+      solver.setOptions(options);
+      int working_set_recalculations = kQpMaxWorkingSetRecalculations;
+      status =
+          solver.init(hessian_row_major.data(), gradient.data(), constraints_row_major.data(), qp_lower.data(),
+                      qp_upper.data(), builder.lower.data(), builder.upper.data(), working_set_recalculations);
+      if (status == qpOASES::SUCCESSFUL_RETURN)
+        solver.getPrimalSolution(solution.data());
+    }
     if (status != qpOASES::SUCCESSFUL_RETURN)
     {
       break;
     }
-    Eigen::VectorXd solution = current_vector;
-    solver.getPrimalSolution(solution.data());
     if (!solution.allFinite())
     {
       break;
