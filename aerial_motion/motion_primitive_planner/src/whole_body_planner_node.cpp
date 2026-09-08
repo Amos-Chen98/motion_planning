@@ -481,6 +481,7 @@ private:
     const ros::Time planning_time = ros::Time::now();
     const ros::Time activation_time = planning_time + ros::Duration(config_.activation_lead_time);
     CommandState start = measured;
+    start.joint_positions = stability_evaluators_.front()->clampJointPositions(start.joint_positions);
     std::shared_ptr<const ActivePlan> active_snapshot;
     {
       std::lock_guard<std::mutex> lock(plan_mutex_);
