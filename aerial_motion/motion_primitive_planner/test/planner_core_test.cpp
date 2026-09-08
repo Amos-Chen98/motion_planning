@@ -878,6 +878,101 @@ TEST(JointPlanResult, InterpolatesYawAcrossWrapBoundaryOnShortestArc)
   EXPECT_NEAR(result.yawRate(1.0), -0.1, 1e-12);
 }
 
+TEST(JointPlanResult, HandlesEmptyAndSingleWaypointSequences)
+{
+  JointPlanResult result;
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  for (const double time : {-infinity, -1.0, 1.0, 2.0, infinity, nan})
+  {
+    EXPECT_EQ(result.jointPositions(time).size(), 0);
+    EXPECT_EQ(result.jointVelocities(time).size(), 0);
+    EXPECT_DOUBLE_EQ(result.yaw(time), 0.0);
+    EXPECT_DOUBLE_EQ(result.pitch(time), 0.0);
+    EXPECT_TRUE(result.angularVelocity(time).isZero());
+    EXPECT_DOUBLE_EQ(result.pitchRate(time), 0.0);
+  }
+  result.joint_waypoints = {{1.0, Eigen::Vector2d(2.0, -3.0)}};
+  result.attitude_waypoints = {{1.0, RootAttitude{0.3, -0.2}}};
+  for (const double time : {-infinity, -1.0, 1.0, 2.0, infinity, nan})
+  {
+    EXPECT_TRUE(result.jointPositions(time).isApprox(Eigen::Vector2d(2.0, -3.0), 1e-12));
+    EXPECT_TRUE(result.jointVelocities(time).isZero());
+    EXPECT_DOUBLE_EQ(result.yaw(time), 0.3);
+    EXPECT_DOUBLE_EQ(result.pitch(time), -0.2);
+    EXPECT_TRUE(result.angularVelocity(time).isZero());
+    EXPECT_DOUBLE_EQ(result.pitchRate(time), 0.0);
+  }
+}
+
+TEST(JointPlanResult, PreservesOneSidedValuesAtRepeatedWaypointTimes)
+{
+  JointPlanResult result;
+  for (const auto& sample : std::vector<std::pair<double, double>>{
+           {1.0, 2.0}, {1.0, 4.0}, {2.0, 10.0}, {2.0, 12.0}, {4.0, 16.0}, {4.0, 18.0}})
+  {
+    result.joint_waypoints.push_back({sample.first, Eigen::VectorXd::Constant(1, sample.second)});
+    result.attitude_waypoints.push_back({sample.first, {0.1 * sample.second, -0.05 * sample.second}});
+  }
+  struct Expected
+  {
+    double time;
+    double position;
+    double velocity;
+  };
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  for (const Expected& expected : std::vector<Expected>{
+           {-infinity, 2.0, 0.0}, {0.0, 2.0, 0.0}, {1.0, 2.0, 6.0},
+           {1.5, 7.0, 6.0}, {2.0, 12.0, 2.0}, {3.0, 14.0, 2.0},
+           {4.0, 18.0, 0.0}, {5.0, 18.0, 0.0}, {infinity, 18.0, 0.0}, {nan, 18.0, 0.0}})
+  {
+    SCOPED_TRACE(expected.time);
+    EXPECT_NEAR(result.jointPositions(expected.time)(0), expected.position, 1e-12);
+    EXPECT_NEAR(result.jointVelocities(expected.time)(0), expected.velocity, 1e-12);
+    EXPECT_NEAR(result.yaw(expected.time), 0.1 * expected.position, 1e-12);
+    EXPECT_NEAR(result.pitch(expected.time), -0.05 * expected.position, 1e-12);
+    EXPECT_NEAR(result.yawRate(expected.time), 0.1 * expected.velocity, 1e-12);
+    EXPECT_NEAR(result.pitchRate(expected.time), -0.05 * expected.velocity, 1e-12);
+    const Eigen::Vector3d angular_velocity(
+        0.05 * expected.velocity * std::sin(0.1 * expected.position),
+        -0.05 * expected.velocity * std::cos(0.1 * expected.position),
+        0.1 * expected.velocity);
+    EXPECT_TRUE(result.angularVelocity(expected.time).isApprox(angular_velocity, 1e-12));
+  }
+}
+
+TEST(JointPlanResult, PreservesTheShortIntervalThreshold)
+{
+  for (const double duration : {0.5e-9, 1e-9, 2e-9})
+  {
+    SCOPED_TRACE(duration);
+    JointPlanResult result;
+    result.joint_waypoints = {{0.0, Eigen::VectorXd::Zero(1)},
+                              {duration, Eigen::VectorXd::Constant(1, 2.0)}};
+    result.attitude_waypoints = {{0.0, {0.0, 0.0}}, {duration, {0.4, -0.2}}};
+    const double ratio = duration > 1e-9 ? 0.25 : 1.0;
+    const double inverse_duration = duration > 1e-9 ? 1.0 / duration : 0.0;
+    EXPECT_DOUBLE_EQ(result.jointPositions(0.25 * duration)(0), 2.0 * ratio);
+    EXPECT_DOUBLE_EQ(result.jointVelocities(0.25 * duration)(0), 2.0 * inverse_duration);
+    EXPECT_DOUBLE_EQ(result.yaw(0.25 * duration), 0.4 * ratio);
+    EXPECT_DOUBLE_EQ(result.pitch(0.25 * duration), -0.2 * ratio);
+    EXPECT_DOUBLE_EQ(result.yawRate(0.25 * duration), 0.4 * inverse_duration);
+    EXPECT_DOUBLE_EQ(result.pitchRate(0.25 * duration), -0.2 * inverse_duration);
+    EXPECT_TRUE(result.jointVelocities(duration).isZero());
+    EXPECT_TRUE(result.angularVelocity(duration).isZero());
+  }
+}
+
+TEST(JointPlanResult, PitchRateDoesNotEvaluateInvalidYaw)
+{
+  JointPlanResult result;
+  result.attitude_waypoints = {
+      {0.0, {std::numeric_limits<double>::quiet_NaN(), 0.0}}, {2.0, {0.0, 0.4}}};
+  EXPECT_DOUBLE_EQ(result.pitchRate(1.0), 0.2);
+  EXPECT_THROW(result.angularVelocity(1.0), std::invalid_argument);
+}
+
 TEST(TrajectoryHistory, SamplesAndTrimsByArcLength)
 {
   FollowerConfig config;

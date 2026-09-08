@@ -57,6 +57,14 @@ struct CommandState
   Eigen::Vector3d angular_velocity = Eigen::Vector3d::Zero();
   Eigen::VectorXd joint_positions;
   Eigen::VectorXd joint_velocities;
+
+  void stopMotion()
+  {
+    tail_velocity.setZero();
+    tail_acceleration.setZero();
+    angular_velocity.setZero();
+    joint_velocities = Eigen::VectorXd::Zero(joint_positions.size());
+  }
 };
 
 struct ActivePlan
@@ -227,12 +235,11 @@ private:
       {
         throw std::runtime_error("Could not load an independent dragon/hydrus_like_robot_model");
       }
-      robot_models_.push_back(model);
       auto evaluator = std::make_shared<multilink_copilot::StabilityEvaluator>(model, config_.stability);
       stability_evaluators_.push_back(evaluator);
     }
 
-    model_info_.reset(new DragonModelInfo(robot_models_.front()));
+    model_info_.reset(new DragonModelInfo(stability_evaluators_.front()->robotModel()));
     planner_.reset(new WholeBodyPlanner(config_, model_info_->collisionGeometry(),
                                          stability_evaluators_));
     current_joints_ = Eigen::VectorXd::Zero(model_info_->jointCount());
@@ -655,10 +662,7 @@ private:
         return;
       }
     }
-    state.tail_velocity.setZero();
-    state.tail_acceleration.setZero();
-    state.angular_velocity.setZero();
-    state.joint_velocities = Eigen::VectorXd::Zero(state.joint_positions.size());
+    state.stopMotion();
     std::shared_ptr<ActivePlan> hold(new ActivePlan);
     hold->start_time = ros::Time::now();
     hold->target_sequence = target_sequence;
@@ -729,10 +733,7 @@ private:
     }
     if (terminal_complete)
     {
-      state.tail_velocity.setZero();
-      state.tail_acceleration.setZero();
-      state.angular_velocity.setZero();
-      state.joint_velocities = Eigen::VectorXd::Zero(state.joint_positions.size());
+      state.stopMotion();
     }
     publishFullStateTarget(state, now);
     bool completed_current_target = false;
@@ -815,7 +816,6 @@ private:
   PlanningEnvironment environment_;
   gcopter_planner::PlannerRosInterface ros_interface_;
   pluginlib::ClassLoader<aerial_robot_model::RobotModel> robot_model_loader_;
-  std::vector<boost::shared_ptr<Dragon::HydrusLikeRobotModel>> robot_models_;
   std::unique_ptr<DragonModelInfo> model_info_;
   std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>> stability_evaluators_;
   std::unique_ptr<WholeBodyPlanner> planner_;

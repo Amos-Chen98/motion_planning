@@ -44,11 +44,6 @@ double yawFromQuaternion(const Eigen::Quaterniond& quaternion)
                     1.0 - 2.0 * (q.y() * q.y() + q.z() * q.z()));
 }
 
-double yawFromQuaternion(const geometry_msgs::Quaternion& quaternion)
-{
-  return yawFromQuaternion(Eigen::Quaterniond(quaternion.w, quaternion.x, quaternion.y, quaternion.z));
-}
-
 RootAttitude rootAttitudeFromQuaternion(const Eigen::Quaterniond& quaternion)
 {
   RootAttitude attitude;

@@ -202,6 +202,13 @@ size_t upperWaypointIndex(const std::vector<Waypoint>& waypoints, double time)
   return static_cast<size_t>(std::distance(waypoints.begin(), upper));
 }
 
+template <typename Waypoint>
+const Waypoint* activeWaypointEnd(const std::vector<Waypoint>& waypoints, double time)
+{
+  const size_t upper = upperWaypointIndex(waypoints, time);
+  return upper > 0 && upper < waypoints.size() ? &waypoints[upper] : nullptr;
+}
+
 std::chrono::steady_clock::duration toDuration(double seconds)
 {
   return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -309,13 +316,7 @@ TrajectoryHistory::TrajectoryHistory(const FollowerConfig& config)
 
 bool TrajectoryHistory::append(const Eigen::Vector3d& position)
 {
-  return append(position, sample_interval_, maximum_length_);
-}
-
-bool TrajectoryHistory::append(const Eigen::Vector3d& position, double sample_interval,
-                               double maximum_length)
-{
-  if (!position.allFinite() || sample_interval <= 0.0 || maximum_length <= 0.0)
+  if (!position.allFinite() || sample_interval_ <= 0.0 || maximum_length_ <= 0.0)
   {
     return false;
   }
@@ -325,13 +326,13 @@ bool TrajectoryHistory::append(const Eigen::Vector3d& position, double sample_in
     return true;
   }
   const double distance = (position - points_.back().position).norm();
-  if (distance < sample_interval)
+  if (distance < sample_interval_)
   {
     return false;
   }
   points_.push_back({position});
   arc_length_ += distance;
-  while (points_.size() > 1 && arc_length_ > maximum_length)
+  while (points_.size() > 1 && arc_length_ > maximum_length_)
   {
     arc_length_ -= (points_[1].position - points_[0].position).norm();
     points_.pop_front();
@@ -545,19 +546,18 @@ Eigen::VectorXd JointPlanResult::jointVelocities(double time) const
   {
     return Eigen::VectorXd();
   }
-  const size_t upper = upperWaypointIndex(joint_waypoints, time);
-  if (upper == 0 || upper >= joint_waypoints.size())
+  const TimedJointWaypoint* after = activeWaypointEnd(joint_waypoints, time);
+  if (!after)
   {
     return Eigen::VectorXd::Zero(joint_waypoints.front().positions.size());
   }
-  const TimedJointWaypoint& before = joint_waypoints[upper - 1];
-  const TimedJointWaypoint& after = joint_waypoints[upper];
-  const double duration = after.time - before.time;
+  const TimedJointWaypoint& before = after[-1];
+  const double duration = after->time - before.time;
   if (duration <= kEpsilon)
   {
     return Eigen::VectorXd::Zero(before.positions.size());
   }
-  return (after.positions - before.positions) / duration;
+  return (after->positions - before.positions) / duration;
 }
 
 RootAttitude JointPlanResult::attitude(double time) const
@@ -589,24 +589,19 @@ Eigen::Matrix3d JointPlanResult::rootLinkRotation(double time) const
 
 Eigen::Vector3d JointPlanResult::angularVelocity(double time) const
 {
-  if (attitude_waypoints.empty())
+  const TimedRootAttitudeWaypoint* after = activeWaypointEnd(attitude_waypoints, time);
+  if (!after)
   {
     return Eigen::Vector3d::Zero();
   }
-  const size_t upper = upperWaypointIndex(attitude_waypoints, time);
-  if (upper == 0 || upper >= attitude_waypoints.size())
-  {
-    return Eigen::Vector3d::Zero();
-  }
-  const TimedRootAttitudeWaypoint& before = attitude_waypoints[upper - 1];
-  const TimedRootAttitudeWaypoint& after = attitude_waypoints[upper];
-  const double duration = after.time - before.time;
+  const TimedRootAttitudeWaypoint& before = after[-1];
+  const double duration = after->time - before.time;
   if (duration <= kEpsilon)
   {
     return Eigen::Vector3d::Zero();
   }
-  const double yaw_rate = shortestYawDelta(before.attitude.yaw, after.attitude.yaw) / duration;
-  const double pitch_rate = (after.attitude.pitch - before.attitude.pitch) / duration;
+  const double yaw_rate = shortestYawDelta(before.attitude.yaw, after->attitude.yaw) / duration;
+  const double pitch_rate = (after->attitude.pitch - before.attitude.pitch) / duration;
   return worldAngularVelocity(attitude(time), yaw_rate, pitch_rate);
 }
 
@@ -627,19 +622,14 @@ double JointPlanResult::pitch(double time) const
 
 double JointPlanResult::pitchRate(double time) const
 {
-  if (attitude_waypoints.empty())
+  const TimedRootAttitudeWaypoint* after = activeWaypointEnd(attitude_waypoints, time);
+  if (!after)
   {
     return 0.0;
   }
-  const size_t upper = upperWaypointIndex(attitude_waypoints, time);
-  if (upper == 0 || upper >= attitude_waypoints.size())
-  {
-    return 0.0;
-  }
-  const TimedRootAttitudeWaypoint& before = attitude_waypoints[upper - 1];
-  const TimedRootAttitudeWaypoint& after = attitude_waypoints[upper];
-  const double duration = after.time - before.time;
-  return duration > kEpsilon ? (after.attitude.pitch - before.attitude.pitch) / duration : 0.0;
+  const TimedRootAttitudeWaypoint& before = after[-1];
+  const double duration = after->time - before.time;
+  return duration > kEpsilon ? (after->attitude.pitch - before.attitude.pitch) / duration : 0.0;
 }
 
 JointTrajectoryPlanner::JointTrajectoryPlanner(
@@ -800,32 +790,22 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
       kCommandStepSchedulingMargin * config_.max_joint_command_step *
           config_.follower.command_hz);
   double required_alignment_duration = 0.0;
-  if (std::abs(yaw_delta) > kEpsilon)
-  {
-    required_alignment_duration = std::max(
-        required_alignment_duration,
-        std::abs(yaw_delta) / config_.follower.max_angular_vel);
-    if (std::abs(alignment_joints(joint1_yaw) - origin(joint1_yaw)) > kEpsilon)
+  const auto include_alignment_duration = [&](double delta, int joint) {
+    if (std::abs(delta) > kEpsilon)
     {
       required_alignment_duration = std::max(
           required_alignment_duration,
-          std::abs(alignment_joints(joint1_yaw) - origin(joint1_yaw)) /
-              effective_joint_rate);
+          std::abs(delta) / config_.follower.max_angular_vel);
+      const double joint_delta = std::abs(alignment_joints(joint) - origin(joint));
+      if (joint_delta > kEpsilon)
+      {
+        required_alignment_duration = std::max(
+            required_alignment_duration, joint_delta / effective_joint_rate);
+      }
     }
-  }
-  if (std::abs(pitch_delta) > kEpsilon)
-  {
-    required_alignment_duration = std::max(
-        required_alignment_duration,
-        std::abs(pitch_delta) / config_.follower.max_angular_vel);
-    if (std::abs(alignment_joints(joint1_pitch) - origin(joint1_pitch)) > kEpsilon)
-    {
-      required_alignment_duration = std::max(
-          required_alignment_duration,
-          std::abs(alignment_joints(joint1_pitch) - origin(joint1_pitch)) /
-              effective_joint_rate);
-    }
-  }
+  };
+  include_alignment_duration(yaw_delta, joint1_yaw);
+  include_alignment_duration(pitch_delta, joint1_pitch);
 
   const bool stationary_start = root_trajectory.getVel(0.0).norm() < 1e-3;
   const double recovery_duration = repaired_start ? 1.0 / config_.follower.command_hz : 0.0;
@@ -836,17 +816,15 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
   double root_delay = 0.0;
   if (attitude_change)
   {
+    alignment_end_time += std::max(required_alignment_duration,
+                                   1.0 / config_.follower.command_hz);
     if (stationary_start)
     {
-      alignment_end_time += std::max(required_alignment_duration,
-                                     1.0 / config_.follower.command_hz);
       root_delay = alignment_end_time;
       output_time_offset = root_delay;
     }
     else
     {
-      alignment_end_time += std::max(required_alignment_duration,
-                                     1.0 / config_.follower.command_hz);
       if (alignment_end_time >= root_duration - kEpsilon)
       {
         result.detail = "moving root trajectory is too short for joint1-priority allocation";
@@ -883,22 +861,18 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
     std::vector<double> progress_values{0.0, 1.0};
     const double absorbed_pitch = alignment_joints(joint1_pitch) - origin(joint1_pitch);
     const double absorbed_yaw = origin(joint1_yaw) - alignment_joints(joint1_yaw);
-    if (std::abs(pitch_delta) > kEpsilon)
-    {
-      const double fraction = std::abs(absorbed_pitch / pitch_delta);
-      if (fraction > kEpsilon && fraction < 1.0 - kEpsilon)
+    const auto include_saturation_progress = [&](double absorbed, double delta) {
+      if (std::abs(delta) > kEpsilon)
       {
-        progress_values.push_back(fraction);
+        const double fraction = std::abs(absorbed / delta);
+        if (fraction > kEpsilon && fraction < 1.0 - kEpsilon)
+        {
+          progress_values.push_back(fraction);
+        }
       }
-    }
-    if (std::abs(yaw_delta) > kEpsilon)
-    {
-      const double fraction = std::abs(absorbed_yaw / yaw_delta);
-      if (fraction > kEpsilon && fraction < 1.0 - kEpsilon)
-      {
-        progress_values.push_back(fraction);
-      }
-    }
+    };
+    include_saturation_progress(absorbed_pitch, pitch_delta);
+    include_saturation_progress(absorbed_yaw, yaw_delta);
     std::sort(progress_values.begin(), progress_values.end());
     progress_values.erase(std::unique(progress_values.begin(), progress_values.end(),
                                       [](double lhs, double rhs) {
@@ -1260,7 +1234,6 @@ std::vector<Eigen::VectorXd> JointTrajectoryPlanner::shortcutChain(
     size_t next = chain.size() - 1;
     for (; next > current + 1 && !budgetExpired(); --next)
     {
-      double ignored = kInfinity;
       const Eigen::VectorXd delta = chain[next] - chain[current];
       const double maximum_delta = delta.size() > 0 ? delta.cwiseAbs().maxCoeff() : 0.0;
       const int subdivisions = std::max(

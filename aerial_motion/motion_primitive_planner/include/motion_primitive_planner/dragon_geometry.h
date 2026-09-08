@@ -48,7 +48,6 @@ struct RootCommandKinematics
 };
 
 double yawFromQuaternion(const Eigen::Quaterniond& quaternion);
-double yawFromQuaternion(const geometry_msgs::Quaternion& quaternion);
 RootAttitude rootAttitudeFromQuaternion(const Eigen::Quaterniond& quaternion);
 RootAttitude rootAttitudeFromQuaternion(const geometry_msgs::Quaternion& quaternion);
 RootAttitude tangentAttitude(const Eigen::Vector3d& velocity,
@@ -81,7 +80,6 @@ public:
   double linkLength() const { return link_length_; }
   int jointCount() const { return static_cast<int>(link_joint_names_.size()); }
   const std::vector<std::string>& jointNames() const { return link_joint_names_; }
-  const std::vector<int>& linkJointIndices() const { return link_joint_indices_; }
   const std::vector<int>& pitchJointIndices() const { return pitch_joint_indices_; }
   const std::vector<int>& yawJointIndices() const { return yaw_joint_indices_; }
   DragonCollisionGeometry collisionGeometry() const;

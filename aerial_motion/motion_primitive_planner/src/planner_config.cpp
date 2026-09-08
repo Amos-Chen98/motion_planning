@@ -6,6 +6,14 @@
 
 namespace motion_primitive_planner
 {
+namespace
+{
+template <typename T>
+void loadParam(const ros::NodeHandle& nh, const char* name, T& value)
+{
+  nh.param(name, value, value);
+}
+}  // namespace
 
 void PrimitiveConfig::validateOrThrow() const
 {
@@ -21,15 +29,12 @@ void PrimitiveConfig::validateOrThrow() const
 FollowerConfig FollowerConfig::fromRos(const ros::NodeHandle& private_nh)
 {
   FollowerConfig config;
-  private_nh.param("CommandHz", config.command_hz, config.command_hz);
-  private_nh.param("TrajectorySampleInterval", config.trajectory_sample_interval,
-                   config.trajectory_sample_interval);
-  private_nh.param("TrajectoryBufferMaxLength", config.trajectory_buffer_max_length,
-                   config.trajectory_buffer_max_length);
-  private_nh.param("SnakeIkSingularityThreshold", config.ik_singularity_threshold,
-                   config.ik_singularity_threshold);
-  private_nh.param("MaxAngularVel", config.max_angular_vel, config.max_angular_vel);
-  private_nh.param("PublishYawCommand", config.publish_yaw_command, config.publish_yaw_command);
+  loadParam(private_nh, "CommandHz", config.command_hz);
+  loadParam(private_nh, "TrajectorySampleInterval", config.trajectory_sample_interval);
+  loadParam(private_nh, "TrajectoryBufferMaxLength", config.trajectory_buffer_max_length);
+  loadParam(private_nh, "SnakeIkSingularityThreshold", config.ik_singularity_threshold);
+  loadParam(private_nh, "MaxAngularVel", config.max_angular_vel);
+  loadParam(private_nh, "PublishYawCommand", config.publish_yaw_command);
   config.validateOrThrow();
   return config;
 }
@@ -48,15 +53,14 @@ void FollowerConfig::validateOrThrow() const
 
 SharedPlannerConfig::SharedPlannerConfig(const ros::NodeHandle& private_nh) : common(private_nh)
 {
-  private_nh.param("ReplanTriggerRatio", replan_trigger_ratio, replan_trigger_ratio);
-  private_nh.param("GoalTolerance", goal_tolerance, goal_tolerance);
-  private_nh.param("PlanningHorizon", planning_horizon, planning_horizon);
-  private_nh.param("ZeroLocalTargetVel", zero_local_target_vel, zero_local_target_vel);
-  private_nh.param("CandidateCount", primitive.candidate_count, primitive.candidate_count);
-  private_nh.param("MaxPrimitiveOffset", primitive.max_offset, primitive.max_offset);
+  loadParam(private_nh, "ReplanTriggerRatio", replan_trigger_ratio);
+  loadParam(private_nh, "GoalTolerance", goal_tolerance);
+  loadParam(private_nh, "PlanningHorizon", planning_horizon);
+  loadParam(private_nh, "ZeroLocalTargetVel", zero_local_target_vel);
+  loadParam(private_nh, "CandidateCount", primitive.candidate_count);
+  loadParam(private_nh, "MaxPrimitiveOffset", primitive.max_offset);
   private_nh.param("PrimitiveCruiseVelocity", primitive.cruise_velocity, 0.8 * common.maxVelMag);
-  private_nh.param("MinimumPieceDuration", primitive.minimum_piece_duration,
-                   primitive.minimum_piece_duration);
+  loadParam(private_nh, "MinimumPieceDuration", primitive.minimum_piece_duration);
   primitive.max_velocity = common.maxVelMag;
   validateOrThrow();
 }
@@ -77,23 +81,18 @@ void SharedPlannerConfig::validateOrThrow() const
 multilink_copilot::StabilityConfig loadStabilityConfig(const ros::NodeHandle& private_nh)
 {
   multilink_copilot::StabilityConfig config;
-  private_nh.param("StabilityQpMaxIterations", config.qp_max_iterations, config.qp_max_iterations);
-  private_nh.param("StabilityQpJointStepLimit", config.qp_joint_step_limit,
-                   config.qp_joint_step_limit);
-  private_nh.param("StabilityQpRegularization", config.qp_regularization,
-                   config.qp_regularization);
-  private_nh.param("StabilityQpConvergenceTolerance", config.qp_convergence_tolerance,
-                   config.qp_convergence_tolerance);
-  private_nh.param("FeasibilityTolerance", config.feasibility_tolerance,
-                   config.feasibility_tolerance);
-  private_nh.param("StabilityCheckFcT", config.check_fc_t, config.check_fc_t);
-  private_nh.param("FcRpMinThreshold", config.fc_rp_min_threshold, config.fc_rp_min_threshold);
-  private_nh.param("FcTMinThreshold", config.fc_t_min_threshold, config.fc_t_min_threshold);
-  private_nh.param("StaticThrustMin", config.static_thrust_min, config.static_thrust_min);
-  private_nh.param("StaticThrustMax", config.static_thrust_max, config.static_thrust_max);
-  private_nh.param("OverlapMinClearance", config.overlap_min_clearance,
-                   config.overlap_min_clearance);
-  private_nh.param("MaxBaselinkTilt", config.max_baselink_tilt, config.max_baselink_tilt);
+  loadParam(private_nh, "StabilityQpMaxIterations", config.qp_max_iterations);
+  loadParam(private_nh, "StabilityQpJointStepLimit", config.qp_joint_step_limit);
+  loadParam(private_nh, "StabilityQpRegularization", config.qp_regularization);
+  loadParam(private_nh, "StabilityQpConvergenceTolerance", config.qp_convergence_tolerance);
+  loadParam(private_nh, "FeasibilityTolerance", config.feasibility_tolerance);
+  loadParam(private_nh, "StabilityCheckFcT", config.check_fc_t);
+  loadParam(private_nh, "FcRpMinThreshold", config.fc_rp_min_threshold);
+  loadParam(private_nh, "FcTMinThreshold", config.fc_t_min_threshold);
+  loadParam(private_nh, "StaticThrustMin", config.static_thrust_min);
+  loadParam(private_nh, "StaticThrustMax", config.static_thrust_max);
+  loadParam(private_nh, "OverlapMinClearance", config.overlap_min_clearance);
+  loadParam(private_nh, "MaxBaselinkTilt", config.max_baselink_tilt);
   return config;
 }
 
@@ -112,19 +111,18 @@ WholeBodyPlannerConfig::WholeBodyPlannerConfig(const ros::NodeHandle& private_nh
   , stability(loadStabilityConfig(private_nh))
 {
   joint.follower = FollowerConfig::fromRos(private_nh);
-  private_nh.param("JointReferenceDt", joint.reference_dt, joint.reference_dt);
-  private_nh.param("JointPlanningTimeout", joint.planning_timeout, joint.planning_timeout);
-  private_nh.param("JointValidityResolution", joint.validity_resolution, joint.validity_resolution);
-  private_nh.param("MaxJointCommandStep", joint.max_joint_command_step, joint.max_joint_command_step);
+  loadParam(private_nh, "JointReferenceDt", joint.reference_dt);
+  loadParam(private_nh, "JointPlanningTimeout", joint.planning_timeout);
+  loadParam(private_nh, "JointValidityResolution", joint.validity_resolution);
+  loadParam(private_nh, "MaxJointCommandStep", joint.max_joint_command_step);
   int random_seed = static_cast<int>(joint.random_seed);
-  private_nh.param("JointPlannerSeed", random_seed, random_seed);
+  loadParam(private_nh, "JointPlannerSeed", random_seed);
   joint.random_seed = static_cast<unsigned int>(std::max(0, random_seed));
-  private_nh.param("PlanActivationLeadTime", activation_lead_time, activation_lead_time);
-  private_nh.param("JointMotionCostWeight", joint_motion_cost_weight, joint_motion_cost_weight);
-  private_nh.param("TrackingErrorCostWeight", tracking_error_cost_weight,
-                   tracking_error_cost_weight);
-  private_nh.param("RootChildFrameId", root_child_frame_id, root_child_frame_id);
-  private_nh.param("Verbose", verbose, verbose);
+  loadParam(private_nh, "PlanActivationLeadTime", activation_lead_time);
+  loadParam(private_nh, "JointMotionCostWeight", joint_motion_cost_weight);
+  loadParam(private_nh, "TrackingErrorCostWeight", tracking_error_cost_weight);
+  loadParam(private_nh, "RootChildFrameId", root_child_frame_id);
+  loadParam(private_nh, "Verbose", verbose);
 
   if (!std::isfinite(activation_lead_time) || activation_lead_time <= 0.0 ||
       !std::isfinite(joint_motion_cost_weight) || joint_motion_cost_weight < 0.0 ||

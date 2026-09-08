@@ -29,12 +29,9 @@ public:
   explicit TrajectoryHistory(const FollowerConfig& config);
 
   bool append(const Eigen::Vector3d& position);
-  bool append(const Eigen::Vector3d& position, double sample_interval, double maximum_length);
 
   const std::deque<multilink_copilot::TrajectoryPoint>& points() const { return points_; }
   double arcLength() const { return arc_length_; }
-  double sampleInterval() const { return sample_interval_; }
-  double maximumLength() const { return maximum_length_; }
 
 private:
   double sample_interval_ = 0.05;
