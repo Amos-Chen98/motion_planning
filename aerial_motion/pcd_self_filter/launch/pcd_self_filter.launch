@@ -7,12 +7,16 @@
   <arg name="robot_description_param" default="/$(arg robot_ns)/robot_description" />
   <arg name="tf_prefix" default="$(arg robot_ns)" />
   <arg name="world_frame_id" default="world" />
+  <!-- FAST-LIO publishes IMU-local XYZ under the estimator frame name body.
+       Use the physical mount in the same TF tree as the collision geometry. -->
+  <arg name="body_frame" default="$(eval (arg('tf_prefix').rstrip('/') + '/lidar_imu').lstrip('/') if arg('robot_ns') == 'dragon' else '')" />
   <arg name="config" default="$(find pcd_self_filter)/config/self_filter.yaml" />
   <arg name="debug" default="false" />
 
   <group ns="$(arg robot_ns)">
     <node pkg="pcd_self_filter" type="pcd_self_filter_node" name="$(arg node_name)" output="screen">
       <rosparam command="load" file="$(arg config)" />
+      <param if="$(eval arg('body_frame') != '')" name="input_frame_aliases/body" value="$(arg body_frame)" />
       <param name="robot_ns" value="$(arg robot_ns)" />
       <param name="robot_description_param" value="$(arg robot_description_param)" />
       <param name="tf_prefix" value="$(arg tf_prefix)" />

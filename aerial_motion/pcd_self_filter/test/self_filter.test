@@ -6,6 +6,10 @@
     <arg name="output_topic" value="/unit/filtered"/>
     <arg name="debug" value="true"/>
   </include>
+  <rosparam param="/unit/pcd_self_filter/input_frame_aliases">
+    estimated_body: sensor
+    missing_mount_body: missing_sensor
+  </rosparam>
   <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
     <arg name="robot_ns" value="late"/>
     <arg name="tf_prefix" value="unit"/>

@@ -47,6 +47,8 @@ class SelfFilterIntegration(unittest.TestCase):
         cls.stop = threading.Event()
         cls.static.sendTransform([
             cls.transform("world", "sensor", rospy.Time.now(), (0.3, -0.4, 0), math.pi / 2),
+            cls.transform("world", "estimated_body", rospy.Time.now(), (4, 5, 6), math.pi / 3),
+            cls.transform("world", "missing_mount_body", rospy.Time.now(), (0, 0, 0)),
             cls.transform("unit/base", "unit/mesh", rospy.Time.now(), (0, 1, 0))])
 
         def broadcast():
@@ -187,6 +189,9 @@ class SelfFilterIntegration(unittest.TestCase):
         timer.start()
         try:
             self.assertEqual(self.result(delayed).width, 1)
+            self.wait(lambda: self.diagnostics["unit"]["last_success_stamp"] ==
+                      str(delayed.header.stamp.to_nsec()))
+            self.assertNotEqual(self.diagnostics["unit"]["filtered_ratio"], "n/a")
         finally:
             timer.join()
             with self.lock:
@@ -246,6 +251,39 @@ class SelfFilterIntegration(unittest.TestCase):
         self.assertEqual([r[4] for r in self.rows(output)], [81, 82])
         self.assertEqual(output.header.stamp, message.header.stamp)
         self.assertEqual(output.fields, message.fields)
+
+    def test_09_body_alias_uses_physical_mount_during_articulation(self):
+        # The estimator's body TF is valid but disagrees with the physical
+        # sensor. Incoming XYZ already use sensor-local coordinates.
+        for x, yaw, tip_yaw in ((0, 0, 0), (3, math.pi / 2, math.pi / 2)):
+            with self.lock:
+                type(self).pose = (x, yaw, tip_yaw)
+            time.sleep(0.04)
+            stamp = rospy.Time.now()
+            self.emit(stamp, x, yaw, tip_yaw)
+            tip_x = x + 0.8 * math.cos(yaw) + 0.2 * math.cos(yaw + tip_yaw)
+            tip_y = 0.8 * math.sin(yaw) + 0.2 * math.sin(yaw + tip_yaw)
+            world_points = [(x, 0, 1, 1, 1), (tip_x, tip_y, 1, 2, 2),
+                            (8.03, 0.03, 1.03, 99, 99)]
+            sensor_points = [(wy + 0.4, 0.3 - wx, wz, intensity, label)
+                             for wx, wy, wz, intensity, label in world_points]
+            message = self.cloud(sensor_points, stamp, "/estimated_body")
+            output = self.result(message)
+            rows = self.rows(output)
+            self.assertEqual([r[4] for r in rows], [99])
+            for actual, expected in zip(rows[0][:3], world_points[-1][:3]):
+                self.assertAlmostEqual(actual, expected, places=5)
+            self.assertEqual(output.header.stamp, stamp)
+            self.assertEqual(output.header.frame_id, "world")
+            self.assertEqual(output.fields, message.fields)
+            self.assertEqual(message.header.frame_id, "/estimated_body")
+            self.wait(lambda: stamp.to_nsec() in self.outputs["map"])
+            centers = self.rows(self.outputs["map"][stamp.to_nsec()])
+            self.assertFalse(any(abs(p[0] - (x + 0.05)) < 1e-4 and
+                                 abs(p[1] - 0.05) < 1e-4 for p in centers))
+
+    def test_10_missing_alias_target_drops_cloud_despite_valid_body_tf(self):
+        self.assert_rejected(self.cloud([(4, 0, 1, 1, 1)], frame="missing_mount_body"))
 
 
 if __name__ == "__main__":

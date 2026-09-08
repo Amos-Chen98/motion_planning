@@ -73,13 +73,16 @@ roslaunch motion_primitive_planner whole_body_motion_primitive_planner.launch en
 | `robot_description_param` | `/dragon/robot_description` |
 | `tf_prefix` | Defaults to `robot_ns`; an empty prefix is supported |
 | `world_frame_id` | `world`; frame used for filtering and output |
+| `input_frame_aliases` | Empty for the bare node; explicitly maps an incoming frame name to the physical frame in which its XYZ are already expressed |
 | `padding` | `0.02 m`; independent of the planner's obstacle inflation radius |
 | `per_link_padding` | Upstream per-part padding dictionary, empty by default; names include the TF prefix, such as `dragon/battery1` |
 | `tf_timeout` | `0.2 s`; a shared wall-clock deadline for all required transforms at the cloud timestamp |
 | `queue_size` | 5 input clouds |
 | `debug` | `false`; enables upstream geometry and removed-point visualization |
 
-Use the `input_topic` and `output_topic` launch arguments to remap the input and output. Load custom parameters with `config:=/path/to/config.yaml`. The planner launch exposes `pcl_topic` for the input before filtering, along with `filtered_pcl_topic`, `self_filter_config`, `self_filter_debug`, and `enable_self_filter`. Input and output topics must differ to avoid a feedback loop.
+Use the `input_topic` and `output_topic` launch arguments to remap the input and output. For `robot_ns:=dragon`, the launch defaults `body_frame` to `<tf_prefix>/lidar_imu` and adds the input alias `body` → that frame. Override `body_frame` for a different physical IMU mount, or set `body_frame:=''` to use only the aliases in the configuration file; other robot namespaces default to an empty `body_frame`. Load custom parameters with `config:=/path/to/config.yaml`. The planner launch exposes `pcl_topic` for the input before filtering, along with `filtered_pcl_topic`, `self_filter_config`, `self_filter_debug`, and `enable_self_filter`. Input and output topics must differ to avoid a feedback loop.
+
+FAST-LIO publishes `cloud_registered_body` with IMU-local XYZ and the header frame `body`. When the robot model uses mocap or another pose source, the estimated `world` → `body` transform can disagree with the physical `world` → `dragon/lidar_imu` transform. Transforming those points via `body` while placing collision geometry via the measured robot tree causes self returns to miss their collision volumes. The explicit input alias interprets the unchanged XYZ in the physical IMU frame before checking TF and filtering; both the cloud and collision geometry then use the same robot pose source. This is a coordinate-name alias, not a TF transformation or an extrinsic calibration. Configure it only when the coordinates already represent the target frame. Aliases apply once to matching frame names; other inputs retain their declared frame. The input message and shared TF tree are unchanged, and missing target-frame TF drops the cloud even if the original `body` TF exists. Diagnostics report `input_frame` and `effective_input_frame`.
 
 The output preserves the input sampling timestamp and additional fields such as `intensity`, while expressing XYZ in the configured world frame. Supported clouds use native byte order and scalar `FLOAT32` XYZ fields. Organized clouds, including those with row padding, are compacted into unorganized clouds, and points with NaN or infinite XYZ coordinates are removed.
 
@@ -111,6 +114,8 @@ If model initialization fails, correcting the robot description parameter trigge
 
 Restart `voxel_mapping` when first enabling the filter to clear accumulated robot body returns. Changing the input topic alone does not remove existing occupied voxels. This package neither permanently clears historical voxels inside the current body envelope nor treats occluded regions as free space. Run only one mapper publishing to a given occupancy map topic.
 
+The DRAGON defaults also apply when the filter is included by `naraha_center/launch/data_review/replay_mapping.launch`. Replaying the same data requires a fresh mapper so previously accumulated erroneous voxels are cleared.
+
 For playback, record the input cloud topic, `/tf`, and `/tf_static`, and save the corresponding original `robot_description`. Enable simulated time, load the model, and start the filter and mapper before playing the bag. If the bag contains TF, avoid running another state publisher for the same frames.
 
 ```bash
@@ -120,3 +125,17 @@ rosbag play --clock recording.bag
 ```
 
 Filtering uses one configuration per cloud timestamp and does not apply per-point motion compensation. Rapid articulation during a scan may therefore leave residual body returns; use recorded data to determine suitable operating conditions. Filtering failures stop new map updates. The `last_success_stamp` diagnostic supports upstream freshness monitoring; this package does not change the planner's handling of stale maps.
+
+### Recorded MID360 Regression
+
+The fix was validated with `20260907_66lidar/2026-09-07-22-36-53_mocap_simple_demo.bag` using `naraha_center/launch/data_review/replay_mapping.launch` with RViz disabled. Two filters consumed the same regenerated FAST-LIO clouds: the default DRAGON alias and `body_frame:=''` with an empty alias dictionary to reproduce the previous behavior. Each fed a fresh mapper with the original 0.10 m voxels, 0.20 m noise-filter radius, and six-neighbor threshold. The URDF retained all eight collision shapes, and self-filter padding stayed at 0.02 m.
+
+| Check | Previous frame handling | Physical IMU alias |
+| --- | ---: | ---: |
+| Published clouds out of 806 received | 805 (one missing `body` TF) | 806 |
+| Points inside the physical collision volumes but retained, across 805 paired scans | 6,109 | 0 |
+| Occupied cells at the previous leaked-point locations in the final map | 181 | 0 |
+
+The paired scans contained 4,600,896 input points. An independent box/cylinder containment calculation used recorded TF at each cloud timestamp and the unchanged URDF collision origins and dimensions, including the existing padding. Both filters matched their respective expected containment masks, and the maximum error between expected and published world XYZ was 3.4 micrometers; intensity and field layouts were preserved. The cell comparison concerns the locations of identified self returns, not total map size: using the measured world pose also changes the placement of environment points. These measurements establish removal of the coordinate-mismatch artifact in this recording; they do not establish per-point articulation compensation or classify every point outside the collision volumes.
+
+Run the automated geometry, articulation, frame-alias, missing-TF, mapper, and paused-clock regressions with `catkin test pcd_self_filter --no-deps` after building the package. The frame-alias tests reproduce the two failures on the previous implementation and pass with this fix.

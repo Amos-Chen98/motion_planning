@@ -6,3 +6,6 @@ debug: false
 # Keys refer to links/collisions in the private, prefixed filter model.
 # Example: {"dragon/link1": 0.015, "dragon/battery1": 0.025}
 per_link_padding: {}
+# Explicit aliases for clouds whose XYZ already use a physical sensor frame.
+# The DRAGON launch adds body -> <tf_prefix>/lidar_imu for FAST-LIO.
+input_frame_aliases: {}

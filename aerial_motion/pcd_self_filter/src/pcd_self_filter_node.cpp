@@ -125,6 +125,9 @@ public:
       {
         for (const auto& frame : frames)
           confirmed_watchdog_->confirm(frame);
+        // A previous attempt may have failed while this cloud was waiting.
+        // Do not report that transient TF error after the wait succeeds.
+        error.clear();
         return true;
       }
       if (complete)
@@ -195,6 +198,22 @@ public:
     nh_.param<std::string>("tf_prefix", tf_prefix_, robot_ns_);
     nh_.param<std::string>("world_frame_id", world_frame_, "world");
     world_frame_ = normalizedFrame(world_frame_);
+    XmlRpc::XmlRpcValue aliases;
+    if (nh_.getParam("input_frame_aliases", aliases))
+    {
+      if (aliases.getType() != XmlRpc::XmlRpcValue::TypeStruct)
+        throw std::invalid_argument("input_frame_aliases must be a dictionary");
+      for (auto it = aliases.begin(); it != aliases.end(); ++it)
+      {
+        if (it->second.getType() != XmlRpc::XmlRpcValue::TypeString)
+          throw std::invalid_argument("input_frame_aliases values must be frame names");
+        const auto from = normalizedFrame(it->first);
+        const auto to = normalizedFrame(static_cast<std::string>(it->second));
+        if (from.empty() || to.empty() || !input_frame_aliases_.emplace(from, to).second)
+          throw std::invalid_argument("input_frame_aliases has empty or duplicate frame names");
+        ROS_INFO("Self filter input frame alias: %s -> %s", from.c_str(), to.c_str());
+      }
+    }
     nh_.param("padding", padding_, 0.02);
     nh_.param("tf_timeout", tf_timeout_, 0.2);
     nh_.param("debug", debug_, false);
@@ -305,11 +324,24 @@ private:
     input_points_ = uint64_t(message->width) * message->height;
     kept_points_ = 0;
     last_input_stamp_ = message->header.stamp;
+    input_frame_ = normalizedFrame(message->header.frame_id);
+    effective_input_frame_ = input_frame_;
     last_error_.clear();
     std::string failure;
     try
     {
-      const auto input = prepareCloud(*message);
+      auto input = prepareCloud(*message);
+      const auto alias = input_frame_aliases_.find(input.header.frame_id);
+      if (alias != input_frame_aliases_.end())
+      {
+        // FAST-LIO's body cloud already contains IMU-local XYZ. Its estimated
+        // world->body pose can disagree with the measured robot TF tree.
+        // Interpret the coordinates in the configured physical IMU frame;
+        // transforming XYZ through the estimator's body TF would retain that
+        // disagreement. Only this private copy is changed, before TF checks.
+        input.header.frame_id = alias->second;
+        effective_input_frame_ = input.header.frame_id;
+      }
       if (!filter_)
       {
         failure = "model";
@@ -384,6 +416,8 @@ private:
     add("processing_ms", std::to_string(processing_ms_));
     add("last_input_stamp", std::to_string(last_input_stamp_.toNSec()));
     add("last_success_stamp", std::to_string(last_success_stamp_.toNSec()));
+    add("input_frame", input_frame_);
+    add("effective_input_frame", effective_input_frame_);
     for (const auto& failure : failures_)
       add("failures/" + failure.first, std::to_string(failure.second));
     array.status.push_back(status);
@@ -396,6 +430,8 @@ private:
   ros::WallTimer timer_;
   std::unique_ptr<StrictBodyFilter> filter_;
   std::string robot_ns_, model_param_, tf_prefix_, world_frame_, last_attempted_model_, last_error_;
+  std::map<std::string, std::string> input_frame_aliases_;
+  std::string input_frame_, effective_input_frame_;
   double padding_ = 0.02, tf_timeout_ = 0.2, processing_ms_ = 0.0;
   bool debug_ = false;
   uint64_t received_ = 0, published_ = 0, input_points_ = 0, kept_points_ = 0;
