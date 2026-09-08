@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<launch>
+    <node pkg="rviz" type="rviz" name="rviz" output="screen" args="-d $(find motion_primitive_planner)/rviz/whole_body_nav.rviz" />
+</launch>
