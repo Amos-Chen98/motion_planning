@@ -43,14 +43,13 @@ find_package(catkin REQUIRED COMPONENTS
   multilink_copilot
   dragon
   pluginlib
-  tf
   urdf
 )
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES motion_primitive_planner_core
-  CATKIN_DEPENDS aerial_robot_msgs roscpp rospy std_msgs geometry_msgs nav_msgs sensor_msgs octomap_msgs tf2_eigen tf2_ros std_srvs visualization_msgs gcopter multilink_copilot dragon pluginlib tf urdf
+  CATKIN_DEPENDS aerial_robot_msgs roscpp rospy std_msgs geometry_msgs nav_msgs sensor_msgs octomap_msgs tf2_eigen tf2_ros std_srvs visualization_msgs gcopter multilink_copilot dragon pluginlib urdf
   DEPENDS orocos_kdl
 )
 

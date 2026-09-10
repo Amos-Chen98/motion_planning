@@ -19,7 +19,6 @@
   <depend>multilink_copilot</depend>
   <depend>dragon</depend>
   <depend>pluginlib</depend>
-  <depend>tf</depend>
   <depend>ompl</depend>
   <depend>coal</depend>
   <depend>octomap</depend>

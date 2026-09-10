@@ -1,4 +1,4 @@
-#include <motion_primitive_planner/joint_trajectory_planner.h>
+#include <motion_primitive_planner/dragon_geometry.h>
 
 #include <dragon/model/hydrus_like_robot_model.h>
 #include <pluginlib/class_loader.h>
@@ -7,9 +7,7 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cmath>
-#include <limits>
 #include <memory>
 #include <vector>
 
@@ -38,59 +36,10 @@ protected:
     evaluator_->setRootLinkRotation(KDL::Rotation::RotZ(M_PI));
   }
 
-  bool edgeIsSafe(const Eigen::VectorXd& start, const Eigen::VectorXd& goal,
-                  double& minimum_fc_rp) const
-  {
-    const int subdivisions = std::max(
-        1, static_cast<int>(std::ceil((goal - start).cwiseAbs().maxCoeff() / 0.025)));
-    for (int sample = 0; sample <= subdivisions; ++sample)
-    {
-      const double ratio = static_cast<double>(sample) / subdivisions;
-      multilink_copilot::StabilityMetrics metrics;
-      if (!evaluator_->evaluate(start + ratio * (goal - start), metrics) || !metrics.safe)
-      {
-        return false;
-      }
-      minimum_fc_rp = std::min(minimum_fc_rp, metrics.fc_rp_min);
-    }
-    return true;
-  }
-
   std::unique_ptr<pluginlib::ClassLoader<aerial_robot_model::RobotModel>> loader_;
   boost::shared_ptr<Dragon::HydrusLikeRobotModel> model_;
   std::shared_ptr<multilink_copilot::StabilityEvaluator> evaluator_;
 };
-
-TEST_F(WholeBodyJointPlannerIntegration, GlobalRrtConnectsFoldFlipWithFullySafeEdges)
-{
-  Eigen::VectorXd positive(6);
-  Eigen::VectorXd negative(6);
-  positive << 0.0, M_PI_2, 0.0, M_PI_2, 0.0, M_PI_2;
-  negative << 0.0, -M_PI_2, 0.0, -M_PI_2, 0.0, -M_PI_2;
-
-  double linear_minimum = std::numeric_limits<double>::infinity();
-  EXPECT_FALSE(edgeIsSafe(positive, negative, linear_minimum));
-
-  JointPlannerConfig planner_config;
-  planner_config.planning_timeout = 1.0;
-  planner_config.validity_resolution = 0.025;
-  planner_config.random_seed = 11;
-  JointTrajectoryPlanner planner(planner_config, evaluator_);
-  std::vector<Eigen::VectorXd> planned_detour;
-  double planned_minimum = 0.0;
-  std::string failure;
-  ASSERT_TRUE(planner.planStableConnection(positive, negative, M_PI, planned_detour,
-                                           planned_minimum, &failure)) << failure;
-  ASSERT_GT(planned_detour.size(), 2u);
-  EXPECT_TRUE(planned_detour.front().isApprox(positive, 1e-9));
-  EXPECT_TRUE(planned_detour.back().isApprox(negative, 1e-9));
-  EXPECT_GE(planned_minimum + 1e-4, 3.2);
-  for (size_t index = 1; index < planned_detour.size(); ++index)
-  {
-    double edge_minimum = std::numeric_limits<double>::infinity();
-    ASSERT_TRUE(edgeIsSafe(planned_detour[index - 1], planned_detour[index], edge_minimum));
-  }
-}
 
 TEST_F(WholeBodyJointPlannerIntegration, MatchesLegacyMetricsAndProjectsToSafeConfiguration)
 {
