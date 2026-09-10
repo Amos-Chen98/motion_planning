@@ -19,7 +19,7 @@ from visualization_msgs.msg import MarkerArray
 class SelfFilterIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        rospy.init_node("pcd_self_filter_integration_test")
+        rospy.init_node("pcd_filter_integration_test")
         cls.lock = threading.RLock()
         cls.outputs = {key: {} for key in ("filtered", "map", "direct", "late")}
         cls.diagnostics = {}
@@ -292,4 +292,4 @@ class SelfFilterIntegration(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    rostest.rosrun("pcd_self_filter", "pcd_self_filter_integration", SelfFilterIntegration)
+    rostest.rosrun("pcd_filter", "pcd_filter_integration", SelfFilterIntegration)

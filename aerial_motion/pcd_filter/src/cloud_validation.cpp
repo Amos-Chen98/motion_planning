@@ -1,5 +1,5 @@
-#include <pcd_self_filter/cloud_validation.h>
-#include <pcd_self_filter/model_adapter.h>
+#include <pcd_filter/cloud_validation.h>
+#include <pcd_filter/model_adapter.h>
 
 #include <array>
 #include <cmath>
@@ -8,7 +8,7 @@
 #include <set>
 #include <stdexcept>
 
-namespace pcd_self_filter
+namespace pcd_filter
 {
 sensor_msgs::PointCloud2 prepareCloud(const sensor_msgs::PointCloud2& input)
 {
@@ -77,4 +77,4 @@ sensor_msgs::PointCloud2 prepareCloud(const sensor_msgs::PointCloud2& input)
   output.row_step = output.data.size();
   return output;
 }
-}  // namespace pcd_self_filter
+}  // namespace pcd_filter

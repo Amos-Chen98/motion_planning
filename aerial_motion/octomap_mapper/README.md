@@ -16,13 +16,13 @@ source devel/setup.bash
 
 ## Usage
 
-Start [point-cloud preprocessing](../pcd_self_filter/README.md#usage) first. Input must be individual scans expressed in the physical LiDAR-origin frame, with TF available at each scan timestamp.
+Start [point-cloud preprocessing](../pcd_filter/README.md#usage) first. Input must be individual scans expressed in the physical LiDAR-origin frame, with TF available at each scan timestamp.
 
 ```bash
 roslaunch octomap_mapper octomap_mapper.launch
 ```
 
-The default input is `/dragon/cloud_self_filtered`; change it with `pcl_topic`. Set `voxel_width` for resolution (default `0.10` m) and `max_range` for ray distance (default `-1`, unlimited).
+The default input is `/dragon/cloud_denoised`; change it with `pcl_topic`. Set `voxel_width` for resolution (default `0.10` m) and `max_range` for ray distance (default `-1`, unlimited).
 
 The [whole-body planner launch](../motion_primitive_planner/launch/whole_body_motion_primitive_planner.launch) starts preprocessing and mapping automatically; when using it, skip the standalone command above.
 

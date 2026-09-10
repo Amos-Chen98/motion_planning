@@ -12,7 +12,7 @@
     <axis xyz="0 0 1"/><limit lower="-3.14" upper="3.14" effort="1" velocity="1"/>
   </joint>
   <link name="mesh">
-    <collision><geometry><mesh filename="package://pcd_self_filter/test/tetrahedron.stl" scale="0.5 0.5 0.5"/></geometry></collision>
+    <collision><geometry><mesh filename="package://pcd_filter/test/tetrahedron.stl" scale="0.5 0.5 0.5"/></geometry></collision>
   </link>
   <joint name="mesh_mount" type="fixed"><parent link="base"/><child link="mesh"/><origin xyz="0 1 0"/></joint>
   <link name="visual_only">

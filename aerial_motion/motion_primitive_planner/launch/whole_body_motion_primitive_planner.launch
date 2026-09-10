@@ -13,11 +13,11 @@
     <arg name="trajectory_topic" default="/planning/trajectory" />
     <arg name="pcl_topic" default="/$(arg robot_ns)/cloud_registered_body" />
     <arg name="enable_self_filter" default="true" />
-    <arg name="filtered_pcl_topic" default="/$(arg robot_ns)/cloud_self_filtered" />
-    <arg name="self_filter_config" default="$(find pcd_self_filter)/config/self_filter.yaml" />
+    <arg name="self_filter_config" default="$(find pcd_filter)/config/self_filter.yaml" />
     <arg name="self_filter_debug" default="false" />
 
     <arg name="enable_noise_filter" default="true" />
+    <arg name="filtered_pcl_topic" default="$(eval '/' + arg('robot_ns') + ('/cloud_denoised' if arg('enable_noise_filter') else '/cloud_self_filtered'))" />
     <arg name="noise_filter_radius" default="0.20" />
     <arg name="noise_filter_min_neighbors" default="2" />
     <arg name="sensor_frame_id" default="$(arg robot_ns)/lidar_imu" />
@@ -51,9 +51,8 @@
         <arg name="flu_odom_topic" value="$(arg odom_topic)" />
     </include>
 
-    <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+    <include file="$(find pcd_filter)/launch/pcd_filter.launch">
         <arg name="robot_ns" value="$(arg robot_ns)" />
-        <arg name="node_name" value="$(arg node_name)_self_filter" />
         <arg name="input_topic" value="$(arg pcl_topic)" />
         <arg name="output_topic" value="$(arg filtered_pcl_topic)" />
         <arg name="world_frame_id" value="$(arg world_frame_id)" />
@@ -72,7 +71,7 @@
     <include file="$(find octomap_mapper)/launch/octomap_mapper.launch">
         <arg name="max_range" value="$(arg max_range)" />
         <arg name="robot_ns" value="$(arg robot_ns)" />
-        <arg name="node_name" value="$(arg node_name)_octomap_server" />
+        <arg name="node_name" value="octomap_mapper" />
         <arg name="world_frame_id" value="$(arg world_frame_id)" />
         <arg name="pcl_topic" value="$(eval arg('filtered_pcl_topic') if arg('enable_self_filter') or arg('enable_noise_filter') else arg('pcl_topic'))" />
         <arg name="voxel_width" value="$(arg voxel_width)" />

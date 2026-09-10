@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace pcd_self_filter
+namespace pcd_filter
 {
 struct FilterModel
 {
@@ -15,4 +15,4 @@ struct FilterModel
 
 std::string normalizedFrame(const std::string& frame);
 FilterModel makeFilterModel(const std::string& source, const std::string& tf_prefix);
-}  // namespace pcd_self_filter
+}  // namespace pcd_filter

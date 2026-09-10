@@ -30,7 +30,7 @@
   <depend>std_srvs</depend>
   <depend>orocos_kdl</depend>
   <depend>urdf</depend>
-  <exec_depend>pcd_self_filter</exec_depend>
+  <exec_depend>pcd_filter</exec_depend>
   <test_depend>rostest</test_depend>
   <test_depend>geo_robot_model</test_depend>
 </package>

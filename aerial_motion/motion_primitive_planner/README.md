@@ -29,12 +29,12 @@ Headers follow the same responsibilities. `WholeBodyPlanner::plan()` receives a 
 
 Install Coal 3 with OctoMap support, OctoMap, and the URDF/KDL development dependencies. Make the Coal installation discoverable through `CMAKE_PREFIX_PATH` or `coal_DIR`; CMake links the `coal::coal` imported target and rejects builds without OctoMap support.
 
-Install the [self-filter dependencies](../pcd_self_filter/README.md#dependencies-and-build) first; the default launch starts both the filter and mapper.
+Install the [self-filter dependencies](../pcd_filter/README.md#dependencies-and-build) first; the default launch starts both the filter and mapper.
 
 ```bash
 cd motion_planning_ws
 source ../jsk_aerial_robot_ws/devel/setup.bash
-catkin build pcd_self_filter octomap_mapper motion_primitive_planner
+catkin build pcd_filter octomap_mapper motion_primitive_planner
 source devel/setup.bash
 ```
 
@@ -56,7 +56,7 @@ Environmental collision uses only the four `link1…4` URDF boxes and four `gimb
 
 The planner receives full probability trees on `octomap/full` from the official `octomap_server` through the small `octomap_mapper` integration package; occupied leaves (`p >= 0.5`) enter collision queries directly, with zero extra margin. The upstream server ray-traces timestamped scans from the physical sensor origin and incrementally fuses free and occupied observations. `DilateRadius` (`dilate_radius`, default 0.20 m) applies only to root-route guidance. Each map message is decoded once and atomically replaces the route backend and collision tree in one immutable scene snapshot. Pruned leaves cover their complete volume in both representations. Missing cells inside the map are free; the entire box/cylinder volume must remain inside the grid bounds. `CommandHz` sets discrete trajectory collision sampling, including the first and final configurations, and does not provide continuous collision detection.
 
-The `pcd_self_filter` launch enables [single-frame noise filtering](../pcd_self_filter/README.md#radius-noise-filtering) by default, requiring two other points within 0.20 m before a point can contribute a hit or free ray. The planner launch forwards `enable_noise_filter`, `noise_filter_radius`, and `noise_filter_min_neighbors`; for example, append `noise_filter_min_neighbors:=3` to require three neighbors or `enable_noise_filter:=false` to admit isolated returns. The neighbor radius is independent of `voxel_width` and the planner's obstacle dilation radius.
+The `pcd_filter` launch enables [single-frame noise filtering](../pcd_filter/README.md#radius-noise-filtering) by default, requiring two other points within 0.20 m before a point can contribute a hit or free ray. The planner launch forwards `enable_noise_filter`, `noise_filter_radius`, and `noise_filter_min_neighbors`; for example, append `noise_filter_min_neighbors:=3` to require three neighbors or `enable_noise_filter:=false` to admit isolated returns. The neighbor radius is independent of `voxel_width` and the planner's obstacle dilation radius.
 
 A standard TF publisher locates `dragon/octomap_grid`, and the official server publishes latched occupancy markers at `/dragon/octomap/occupied_cells`. Run `roslaunch motion_primitive_planner rviz.launch` to visualize the actual occupied leaf volumes. `sensor_frame_id` and `sensor_origin_offset` select the physical ray origin; defaults use the DRAGON IMU frame and the existing MID360 extrinsic translation. The filter outputs XYZ in `sensor_origin_frame_id` (default `dragon/lidar_origin`) so the server casts rays from the physical LiDAR origin. MapBound constrains planning only; the tree and RViz can include outside obstacles. Empty scans retain history; use `/dragon/octomap/reset` to clear it. See the [mapper interfaces and coordinate conventions](../octomap_mapper/README.md).
 

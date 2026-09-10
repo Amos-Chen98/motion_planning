@@ -4,7 +4,7 @@
   <arg name="node_name" default="octomap_server"/>
   <arg name="world_frame_id" default="world"/>
   <arg name="grid_frame_id" default="$(arg robot_ns)/octomap_grid"/>
-  <arg name="pcl_topic" default="/$(arg robot_ns)/cloud_self_filtered"/>
+  <arg name="pcl_topic" default="/$(arg robot_ns)/cloud_denoised"/>
   <arg name="map_topic" default="octomap/full"/>
   <arg name="markers_topic" default="octomap/occupied_cells"/>
   <arg name="reset_service" default="octomap/reset"/>

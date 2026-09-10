@@ -1,4 +1,4 @@
-#include <pcd_self_filter/model_adapter.h>
+#include <pcd_filter/model_adapter.h>
 
 #include <tinyxml2.h>
 #include <urdf/model.h>
@@ -6,7 +6,7 @@
 #include <map>
 #include <stdexcept>
 
-namespace pcd_self_filter
+namespace pcd_filter
 {
 std::string normalizedFrame(const std::string& frame)
 {
@@ -75,4 +75,4 @@ FilterModel makeFilterModel(const std::string& source, const std::string& tf_pre
     throw std::invalid_argument("Robot model has no collision geometry for filtering");
   return result;
 }
-}  // namespace pcd_self_filter
+}  // namespace pcd_filter

@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>pcd_self_filter</name>
+  <name>pcd_filter</name>
   <version>0.1.0</version>
   <description>Articulated robot point cloud self filtering for obstacle mapping.</description>
   <maintainer email="chen@todo.todo">Chen</maintainer>

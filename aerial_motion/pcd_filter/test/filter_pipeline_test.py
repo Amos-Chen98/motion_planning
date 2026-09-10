@@ -47,7 +47,7 @@ class FilterPipelineTest(unittest.TestCase):
                            ('missing', '/pipe/missing'), ('map', '/pipe/octomap/full')]:
             cls.subs.append(rospy.Subscriber(topic, Octomap if key == 'map' else PointCloud2,
                                             lambda m, key=key: cls.outputs[key].append(m)))
-        cls.subs.append(rospy.Subscriber('/pipe/missing_output/diagnostics', DiagnosticArray,
+        cls.subs.append(rospy.Subscriber('/pipe/missing_output/pcd_self_filter/diagnostics', DiagnosticArray,
                                         cls.diagnostics.append))
         cls.publisher = rospy.Publisher('/pipe/raw', PointCloud2, queue_size=5)
         cls.static = tf2_ros.StaticTransformBroadcaster()
@@ -57,7 +57,17 @@ class FilterPipelineTest(unittest.TestCase):
                                   cls.tf('pipe/mesh', (0, 1, 10)),
                                   cls.tf('pipe/imu', (1, 2, .4), yaw=math.pi / 2)])
         cls.wait(lambda: cls.publisher.get_num_connections() == 3, 15)
-        time.sleep(.5)
+        # Wait for every filter's TF buffer and downstream subscriber to be ready.
+        # A raw-input connection alone does not guarantee TF has propagated.
+        def pipeline_ready():
+            fields = [PointField(name=n, offset=i * 4, datatype=PointField.FLOAT32, count=1)
+                      for i, n in enumerate(('x', 'y', 'z', 'intensity'))]
+            cls.publisher.publish(point_cloud2.create_cloud(
+                Header(stamp=rospy.Time.now(), frame_id='world'), fields, []))
+            return (all(cls.outputs[key] for key in ('two', 'six', 'map')) and
+                    any('nonexistent_output' in status.message
+                        for message in cls.diagnostics for status in message.status))
+        cls.wait(pipeline_ready, 15)
 
     def cloud(self, points, frame='world', stamp=None):
         fields = [PointField(name=n, offset=i * 4, datatype=PointField.FLOAT32, count=1)
@@ -132,4 +142,4 @@ class FilterPipelineTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    rostest.rosrun('pcd_self_filter', 'filter_pipeline', FilterPipelineTest)
+    rostest.rosrun('pcd_filter', 'filter_pipeline', FilterPipelineTest)

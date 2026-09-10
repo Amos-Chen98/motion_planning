@@ -1,5 +1,5 @@
-#include <pcd_self_filter/model_adapter.h>
-#include <pcd_self_filter/cloud_validation.h>
+#include <pcd_filter/model_adapter.h>
+#include <pcd_filter/cloud_validation.h>
 
 #include <gtest/gtest.h>
 #include <sensor_msgs/point_cloud2_iterator.h>
@@ -8,7 +8,7 @@
 #include <cstring>
 #include <limits>
 
-namespace pcd_self_filter
+namespace pcd_filter
 {
 namespace
 {
@@ -159,7 +159,7 @@ TEST(CloudValidation, AcceptsValidEmptyClouds)
   EXPECT_EQ(prepareCloud(message).width, 0u);
 }
 }  // namespace
-}  // namespace pcd_self_filter
+}  // namespace pcd_filter
 
 int main(int argc, char** argv)
 {

@@ -1,6 +1,6 @@
 <launch>
-  <param name="/unit/robot_description" textfile="$(find pcd_self_filter)/test/robot.urdf"/>
-  <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+  <param name="/unit/robot_description" textfile="$(find pcd_filter)/test/robot.urdf"/>
+  <include file="$(find pcd_filter)/launch/pcd_filter.launch">
     <arg name="enable_noise_filter" value="false"/>
     <arg name="robot_ns" value="unit"/>
     <arg name="input_topic" value="/unit/raw"/>
@@ -11,7 +11,7 @@
     estimated_body: sensor
     missing_mount_body: missing_sensor
   </rosparam>
-  <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+  <include file="$(find pcd_filter)/launch/pcd_filter.launch">
     <arg name="enable_noise_filter" value="false"/>
     <arg name="robot_ns" value="late"/>
     <arg name="tf_prefix" value="unit"/>
@@ -35,6 +35,6 @@
     <arg name="markers_topic" value="unfiltered_occupied"/>
     <arg name="map_bound" value="[-10, 10, -10, 10, -2, 6]"/>
   </include>
-  <test test-name="pcd_self_filter_integration" pkg="pcd_self_filter"
+  <test test-name="pcd_filter_integration" pkg="pcd_filter"
         type="self_filter_test.py" time-limit="90"/>
 </launch>

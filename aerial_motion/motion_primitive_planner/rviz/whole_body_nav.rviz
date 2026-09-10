@@ -284,7 +284,7 @@ Visualization Manager:
       Size (Pixels): 3
       Size (m): 0.009999999776482582
       Style: Spheres
-      Topic: /dragon/cloud_self_filtered
+      Topic: /dragon/cloud_denoised
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true

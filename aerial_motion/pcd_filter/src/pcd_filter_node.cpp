@@ -1,5 +1,5 @@
-#include <pcd_self_filter/cloud_validation.h>
-#include <pcd_self_filter/model_adapter.h>
+#include <pcd_filter/cloud_validation.h>
+#include <pcd_filter/model_adapter.h>
 
 #include <diagnostic_msgs/DiagnosticArray.h>
 #include <pluginlib/class_loader.hpp>
@@ -13,7 +13,7 @@
 #include <set>
 #include <stdexcept>
 
-namespace pcd_self_filter
+namespace pcd_filter
 {
 class ConfirmedTfWatchdog : public robot_body_filter::TFFramesWatchdog
 {
@@ -441,14 +441,14 @@ private:
   std::map<std::string, uint64_t> failures_;
   ros::Time last_input_stamp_, last_success_stamp_;
 };
-}  // namespace pcd_self_filter
+}  // namespace pcd_filter
 
 int main(int argc, char** argv)
 {
   ros::init(argc, argv, "pcd_self_filter");
   try
   {
-    pcd_self_filter::SelfFilterNode node;
+    pcd_filter::SelfFilterNode node;
     ros::spin();
   }
   catch (const std::exception& error)
