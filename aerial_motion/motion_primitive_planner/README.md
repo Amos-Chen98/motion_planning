@@ -4,13 +4,13 @@
 
 For algorithm details, see [Algorithm Design](doc/algorithm_design.md).
 
-Candidate evaluation uses a persistent thread pool with one independent robot model per candidate. `PlanningThreads=0` (the default) uses the available CPUs, capped by `CandidateCount`; `1` selects the serial path, and a positive value sets the thread limit. The launch argument is `planning_threads`, for example `roslaunch motion_primitive_planner whole_body_motion_primitive_planner.launch planning_threads:=1`. Results retain candidate order and the existing ranking rules. Under a shared deadline, parallel execution may finish additional candidates and consequently select a different trajectory. Serial/parallel equivalence is covered by the joint bridge regression tests.
+Candidate evaluation uses a persistent thread pool with one independent robot model per candidate. `PlanningThreads=0` (the default) uses the available CPUs, capped by `CandidateCount`; `1` selects the serial path, and a positive value sets the thread limit. The launch argument is `planning_threads`, for example `roslaunch motion_primitive_planner whole_body_motion_primitive_planner.launch planning_threads:=1`. Results retain candidate order and the ranking rules. Under a shared deadline, parallel execution may finish additional candidates and consequently select a different trajectory. Serial/parallel equivalence is covered by the joint bridge regression tests.
 
 ## Source Organization
 
 The planning and geometry sources form `motion_primitive_planner_core`; the node source builds `whole_body_motion_primitive_planner_node` and contains `main()`.
 
-Public headers live in `include/motion_primitive_planner/`. Implementation files and private headers (`candidate_executor.h` and `trajectory_collision.h`) live directly in `src/`; tests live in `test/`. Only the tests that use private headers add `src/` to their include paths. Private headers are not installed.
+Public headers live in `include/motion_primitive_planner/`. Implementation files and private headers (`candidate_executor.h` and `trajectory_collision.h`) live directly in `src/`; tests live in `test/`. Tests that use private headers add `src/` to their include paths; the install ships the public headers.
 
 | Source | Responsibility |
 | --- | --- |
@@ -27,7 +27,7 @@ Headers follow the same responsibilities. `WholeBodyPlanner::plan()` receives a 
 
 ## Build
 
-Install Coal 3 with OctoMap support, OctoMap, and the URDF/KDL development dependencies. Make the Coal installation discoverable through `CMAKE_PREFIX_PATH` or `coal_DIR`; CMake links the `coal::coal` imported target and rejects builds without OctoMap support.
+Install Coal 3 with OctoMap support, OctoMap, and the URDF/KDL development dependencies. Make the Coal installation discoverable through `CMAKE_PREFIX_PATH` or `coal_DIR`; CMake links the `coal::coal` imported target.
 
 Install the [self-filter dependencies](../pcd_filter/README.md#dependencies-and-build) first; the default launch starts both the filter and mapper.
 
@@ -40,7 +40,7 @@ source devel/setup.bash
 
 ## Run
 
-Ensure that the DRAGON robot description and required input topics are available before launching the planner.
+The DRAGON robot description and its input topics must be available before launch.
 
 The whole-body planner starts `root_state_to_flu_odom.launch` automatically. It converts the root-tail pose from `/dragon/root/tail_pose` to FLU odometry on `/dragon/root/flu_odom`.
 
@@ -48,16 +48,16 @@ The whole-body planner starts `root_state_to_flu_odom.launch` automatically. It 
 roslaunch motion_primitive_planner whole_body_motion_primitive_planner.launch
 ```
 
-Do not start `gcopter/traj_server` or `multilink_copilot` full-state output with this chain.
+This chain is the sole full-state output source, replacing `gcopter/traj_server` and `multilink_copilot` full-state output.
 
 ## Configuration
 
-Environmental collision uses only the four `link1…4` URDF boxes and four `gimbal1…4_roll_module` cylinders. Their dimensions and collision origins come from the robot description, and KDL supplies their poses, including joint offsets. Collision queries use the six body-joint angles and always set gimbal roll/pitch to zero because the cylinders represent swept envelopes. No meshes are loaded.
+Environmental collision uses only the four `link1…4` URDF boxes and four `gimbal1…4_roll_module` cylinders. Their dimensions and collision origins come from the robot description, and KDL supplies their poses, including joint offsets. Collision queries use the six body-joint angles and always set gimbal roll/pitch to zero because the cylinders represent swept envelopes.
 
-The planner receives full probability trees on `octomap/full` from the official `octomap_server` through the small `octomap_mapper` integration package; occupied leaves (`p >= 0.5`) enter collision queries directly, with zero extra margin. The upstream server ray-traces timestamped scans from the physical sensor origin and incrementally fuses free and occupied observations. `DilateRadius` (`dilate_radius`, default 0.20 m) applies only to root-route guidance. Each map message is decoded once and atomically replaces the route backend and collision tree in one immutable scene snapshot. Pruned leaves cover their complete volume in both representations. Missing cells inside the map are free; the entire box/cylinder volume must remain inside the grid bounds. `CommandHz` sets discrete trajectory collision sampling, including the first and final configurations, and does not provide continuous collision detection.
+The planner receives full probability trees on `octomap/full` from the official `octomap_server` through the small `octomap_mapper` integration package; occupied leaves (`p >= 0.5`) enter collision queries directly, with zero extra margin. The upstream server ray-traces timestamped scans from the physical sensor origin and incrementally fuses free and occupied observations. `DilateRadius` (`dilate_radius`, default 0.20 m) applies only to root-route guidance. Each map message is decoded once and atomically replaces the route backend and collision tree in one immutable scene snapshot. Pruned leaves cover their complete volume in both representations. Missing cells inside the map are free; the entire box/cylinder volume must remain inside the grid bounds. `CommandHz` sets discrete trajectory collision sampling, including the first and final configurations.
 
-The `pcd_filter` launch enables [single-frame noise filtering](../pcd_filter/README.md#usage) by default, requiring two other points within 0.20 m before a point can contribute a hit or free ray. The planner launch forwards `enable_noise_filter`, `noise_filter_radius`, and `noise_filter_min_neighbors`; for example, append `noise_filter_min_neighbors:=3` to require three neighbors or `enable_noise_filter:=false` to admit isolated returns. The neighbor radius is independent of `voxel_width` and the planner's obstacle dilation radius.
+The `pcd_filter` launch enables [single-frame noise filtering](../pcd_filter/README.md#usage) by default, requiring two other points within 0.20 m before a point can contribute a hit or free ray. The planner launch forwards `enable_noise_filter`, `noise_filter_radius`, and `noise_filter_min_neighbors`; for example, append `noise_filter_min_neighbors:=3` to require three neighbors or `enable_noise_filter:=false` to admit isolated returns.
 
-A standard TF publisher locates `dragon/octomap_grid`, and the official server publishes latched occupancy markers at `/dragon/octomap/occupied_cells`. Run `roslaunch motion_primitive_planner rviz.launch` to visualize the actual occupied leaf volumes. `sensor_frame_id` and `sensor_origin_offset` select the physical ray origin; defaults use the DRAGON IMU frame and the existing MID360 extrinsic translation. The filter outputs XYZ in `sensor_origin_frame_id` (default `dragon/lidar_origin`) so the server casts rays from the physical LiDAR origin. MapBound constrains planning only; the tree and RViz can include outside obstacles. Empty scans retain history; use `/dragon/octomap/reset` to clear it. See the [mapper interfaces and coordinate conventions](../octomap_mapper/README.md).
+A standard TF publisher locates `dragon/octomap_grid`, and the official server publishes latched occupancy markers at `/dragon/octomap/occupied_cells`. Run `roslaunch motion_primitive_planner rviz.launch` to visualize the occupied leaf volumes. `sensor_origin_frame_id` (default `dragon/lidar_origin`) selects the physical ray origin: the filter outputs XYZ in that frame so the server casts rays from the physical LiDAR origin. The frame is a link in the robot description, published by `robot_state_publisher`. MapBound constrains planning only; the tree and RViz can include outside obstacles. Empty scans retain history; use `/dragon/octomap/reset` to clear it. See the [mapper interfaces and coordinate conventions](../octomap_mapper/README.md).
 
 [whole_body_motion_primitive_planner.yaml](config/whole_body_motion_primitive_planner.yaml) contains the map/path, primitive, root-attitude, terminal IK, flight-feasibility, joint-planning, and execution settings. `JointReferenceDt` controls root-attitude prediction; terminal tail targets are computed directly on the remaining MINCO curve and aligned initial-body segments, independently of trajectory-history sampling. The launch file loads this configuration and then applies its launch-argument overrides. The default replanning ratio is `0.3`, the activation lead time is `0.75 s`, and commands are published at `40 Hz`.

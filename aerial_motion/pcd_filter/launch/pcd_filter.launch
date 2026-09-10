@@ -16,15 +16,9 @@
   <arg name="noise_filter_radius" default="0.20" />
   <arg name="noise_filter_min_neighbors" default="2" />
   <arg name="output_frame_id" default="$(arg world_frame_id)" />
-  <arg name="sensor_frame_id" default="$(arg robot_ns)/lidar_imu" />
-  <arg name="sensor_origin_offset" default="[-0.011, -0.02329, 0.04412]" />
-  <arg name="publish_sensor_origin_tf" default="false" />
   <arg name="body_output_topic" default="/$(arg robot_ns)/cloud_self_filtered" />
 
   <group ns="$(arg robot_ns)">
-    <node if="$(arg publish_sensor_origin_tf)" pkg="tf2_ros" type="static_transform_publisher"
-          name="pcd_filter_sensor_tf"
-          args="$(eval '%s %s %s 0 0 0 %s %s' % (float(arg('sensor_origin_offset').strip('[]').split(',')[0]), float(arg('sensor_origin_offset').strip('[]').split(',')[1]), float(arg('sensor_origin_offset').strip('[]').split(',')[2]), arg('sensor_frame_id'), arg('output_frame_id')))" />
     <node if="$(arg enable_self_filter)" pkg="pcd_filter" type="pcd_filter_node" name="pcd_self_filter" output="screen">
       <rosparam command="load" file="$(arg config)" />
       <param if="$(eval arg('body_frame') != '')" name="input_frame_aliases/body" value="$(arg body_frame)" />

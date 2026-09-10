@@ -16,7 +16,7 @@ source devel/setup.bash
 
 ## Usage
 
-Start [point-cloud preprocessing](../pcd_filter/README.md#usage) first. Input must be individual scans expressed in the physical LiDAR-origin frame, with TF available at each scan timestamp.
+Start [point-cloud preprocessing](../pcd_filter/README.md#usage) first. Input is individual scans in the physical LiDAR-origin frame, with TF available at each scan timestamp.
 
 ```bash
 roslaunch octomap_mapper octomap_mapper.launch
@@ -24,7 +24,7 @@ roslaunch octomap_mapper octomap_mapper.launch
 
 The default input is `/dragon/cloud_denoised`; change it with `pcl_topic`. Set `voxel_width` for resolution (default `0.10` m) and `max_range` for ray distance (default `-1`, unlimited).
 
-The [whole-body planner launch](../motion_primitive_planner/launch/whole_body_motion_primitive_planner.launch) starts preprocessing and mapping automatically; when using it, skip the standalone command above.
+The [whole-body planner launch](../motion_primitive_planner/launch/whole_body_motion_primitive_planner.launch) starts preprocessing and mapping automatically.
 
 ## Map Output and RViz
 
@@ -33,9 +33,9 @@ The [whole-body planner launch](../motion_primitive_planner/launch/whole_body_mo
 | `/dragon/octomap/full` | `octomap_msgs/Octomap` | Full probability map for the planner |
 | `/dragon/octomap/occupied_cells` | `visualization_msgs/MarkerArray` | Occupied cells for RViz |
 
-In RViz, set Fixed Frame to `world` and add a MarkerArray display for `/dragon/octomap/occupied_cells`. No additional RViz plugin is required.
+In RViz, set Fixed Frame to `world` and add a MarkerArray display for `/dragon/octomap/occupied_cells`.
 
-`map_bound` sets the grid origin from its lower corner. Mapping and visualization may extend outside these bounds; the planner enforces its planning bounds.
+`map_bound` sets the grid origin from its lower corner. Mapping and visualization extend past these bounds; the planner enforces its own planning bounds.
 
 Empty scans retain the accumulated map. To clear it and its visualization:
 

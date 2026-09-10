@@ -27,9 +27,9 @@ class FilterPipelineTest(unittest.TestCase):
         raise AssertionError('Timed out waiting for filter pipeline')
 
     @staticmethod
-    def tf(child, xyz, stamp=None, yaw=0):
+    def tf(child, xyz, stamp=None, yaw=0, parent='world'):
         result = TransformStamped()
-        result.header.frame_id = 'world'
+        result.header.frame_id = parent
         result.header.stamp = stamp or rospy.Time.now()
         result.child_frame_id = child
         result.transform.translation.x, result.transform.translation.y, result.transform.translation.z = xyz
@@ -55,7 +55,11 @@ class FilterPipelineTest(unittest.TestCase):
         cls.static.sendTransform([cls.tf('pipe/base', (0, 0, 10)),
                                   cls.tf('pipe/tip', (.8, 0, 10)),
                                   cls.tf('pipe/mesh', (0, 1, 10)),
-                                  cls.tf('pipe/imu', (1, 2, .4), yaw=math.pi / 2)])
+                                  cls.tf('pipe/imu', (1, 2, .4), yaw=math.pi / 2),
+                                  # robot_state_publisher supplies lidar_origin on the real
+                                  # robot; stand in for it with the same MID360 extrinsic.
+                                  cls.tf('pipe/lidar_origin', (-.011, -.02329, .04412),
+                                         parent='pipe/imu')])
         cls.wait(lambda: cls.publisher.get_num_connections() == 3, 15)
         # Wait for every filter's TF buffer and downstream subscriber to be ready.
         # A raw-input connection alone does not guarantee TF has propagated.

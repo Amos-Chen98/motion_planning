@@ -8,8 +8,6 @@
         <arg name="pcl_topic" value="/whole_body_planner_test/cloud" />
         <arg name="max_vel_mag" value="0.4" />
         <arg name="planning_horizon" value="0.6" />
-        <arg name="sensor_frame_id" value="world" />
-        <arg name="sensor_origin_offset" value="[0, 0, 1]" />
     </include>
     <param name="/dragon/whole_body_motion_primitive_planner/ReplanTriggerRatio" value="0.5" />
     <test test-name="whole_body_node_integration_test" pkg="motion_primitive_planner"
