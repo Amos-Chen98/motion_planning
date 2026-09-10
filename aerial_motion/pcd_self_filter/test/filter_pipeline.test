@@ -1,0 +1,36 @@
+<launch>
+  <param name="/pipe/robot_description" textfile="$(find pcd_self_filter)/test/robot.urdf"/>
+  <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+    <arg name="robot_ns" value="pipe"/>
+    <arg name="node_name" value="filter2"/>
+    <arg name="input_topic" value="/pipe/raw"/>
+    <arg name="output_topic" value="/pipe/cloud2"/>
+    <arg name="output_frame_id" value="pipe/lidar_origin"/>
+    <arg name="sensor_frame_id" value="pipe/imu"/>
+    <arg name="body_frame" value="pipe/imu"/>
+    <arg name="publish_sensor_origin_tf" value="true"/>
+  </include>
+  <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+    <arg name="robot_ns" value="pipe"/>
+    <arg name="node_name" value="filter6"/>
+    <arg name="input_topic" value="/pipe/raw"/>
+    <arg name="output_topic" value="/pipe/cloud6"/>
+    <arg name="output_frame_id" value="pipe/lidar_origin"/>
+    <arg name="body_frame" value="pipe/imu"/>
+    <arg name="noise_filter_min_neighbors" value="6"/>
+  </include>
+  <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+    <arg name="robot_ns" value="pipe"/>
+    <arg name="node_name" value="missing_output"/>
+    <arg name="input_topic" value="/pipe/raw"/>
+    <arg name="output_topic" value="/pipe/missing"/>
+    <arg name="output_frame_id" value="nonexistent_output"/>
+    <arg name="enable_noise_filter" value="false"/>
+  </include>
+  <include file="$(find octomap_mapper)/launch/octomap_mapper.launch">
+    <arg name="robot_ns" value="pipe"/>
+    <arg name="pcl_topic" value="/pipe/cloud2"/>
+    <arg name="map_bound" value="[-5, 5, -5, 5, -1, 4]"/>
+  </include>
+  <test test-name="pcd_filter_pipeline" pkg="pcd_self_filter" type="filter_pipeline_test.py" time-limit="90"/>
+</launch>

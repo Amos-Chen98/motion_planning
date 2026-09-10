@@ -1,3 +1,6 @@
+#include "test_octomap.h"
+#include <motion_primitive_planner/octomap_message.h>
+#include <octomap_msgs/conversions.h>
 #include <motion_primitive_planner/whole_body_planner.h>
 #include <motion_primitive_planner/whole_body_planner_node.h>
 #include <motion_primitive_planner/joint_trajectory_planner.h>
@@ -276,97 +279,6 @@ TEST(PrimitiveGenerator, RejectsNonfiniteStatesAndNearZeroChords)
   }
 }
 
-TEST(WholeBodyCollision, DetectsTrailingLinkWhenRootTailIsClear)
-{
-  WholeBodyConfiguration configuration;
-  configuration.root_link_rotation =
-      multilink_copilot::follow_the_leader::rotationAroundZ(M_PI);
-  configuration.joint_positions = Eigen::VectorXd::Zero(6);
-  DragonCollisionGeometry geometry;
-  geometry.link_num = 4;
-  geometry.link_length = 1.0;
-  geometry.pitch_joint_indices = {0, 2, 4};
-  geometry.yaw_joint_indices = {1, 3, 5};
-  const auto occupied = [](const Eigen::Vector3d& point) {
-    return (point - Eigen::Vector3d(-2.5, 0.0, 0.0)).norm() < 0.08;
-  };
-  EXPECT_FALSE(occupied(Eigen::Vector3d::Zero()));
-  EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
-}
-
-TEST(WholeBodyCollision, UsesOneInstantaneousConfigurationCheckerForEveryLink)
-{
-  WholeBodyConfiguration configuration;
-  configuration.root_link_rotation =
-      multilink_copilot::follow_the_leader::rotationAroundZ(M_PI);
-  configuration.joint_positions = Eigen::VectorXd::Zero(6);
-  DragonCollisionGeometry geometry;
-  geometry.link_num = 4;
-  geometry.link_length = 1.0;
-  geometry.pitch_joint_indices = {0, 2, 4};
-  geometry.yaw_joint_indices = {1, 3, 5};
-
-  const auto free = [](const Eigen::Vector3d&) { return false; };
-  EXPECT_FALSE(wholeBodyCollides(configuration, geometry, 0.05, free));
-  for (const double link_midpoint : {0.5, -0.5, -1.5, -2.5})
-  {
-    const auto occupied = [link_midpoint](const Eigen::Vector3d& point) {
-      return (point - Eigen::Vector3d(link_midpoint, 0.0, 0.0)).norm() < 0.01;
-    };
-    EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
-  }
-  for (const double endpoint : {1.0, -3.0})
-  {
-    const auto occupied = [endpoint](const Eigen::Vector3d& point) {
-      return (point - Eigen::Vector3d(endpoint, 0.0, 0.0)).norm() < 0.01;
-    };
-    EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
-  }
-}
-
-TEST(WholeBodyCollision, TreatsInvalidGeometryAsCollisionAndStopsAtFirstHit)
-{
-  WholeBodyConfiguration configuration;
-  configuration.joint_positions = Eigen::VectorXd::Zero(6);
-  DragonCollisionGeometry invalid_geometry;
-  int query_count = 0;
-  const auto occupied = [&query_count](const Eigen::Vector3d&) {
-    ++query_count;
-    return true;
-  };
-  EXPECT_TRUE(wholeBodyCollides(configuration, invalid_geometry, 0.05, occupied));
-  EXPECT_EQ(query_count, 0);
-
-  DragonCollisionGeometry geometry;
-  geometry.link_num = 4;
-  geometry.link_length = 1.0;
-  geometry.pitch_joint_indices = {0, 2, 4};
-  geometry.yaw_joint_indices = {1, 3, 5};
-  EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
-  EXPECT_EQ(query_count, 1);
-}
-
-TEST(WholeBodyCollision, TreatsAConfigurationOutsideTheMapAsCollision)
-{
-  PlanningEnvironment environment(validSharedConfig());
-  const std::shared_ptr<const gcopter_planner::PlannerBackend> occupancy =
-      environment.occupancySnapshot();
-  WholeBodyConfiguration configuration;
-  configuration.link1_tail = Eigen::Vector3d(-1.0, 0.0, 1.0);
-  configuration.root_link_rotation =
-      multilink_copilot::follow_the_leader::rotationAroundZ(M_PI);
-  configuration.joint_positions = Eigen::VectorXd::Zero(6);
-  DragonCollisionGeometry geometry;
-  geometry.link_num = 4;
-  geometry.link_length = 1.0;
-  geometry.pitch_joint_indices = {0, 2, 4};
-  geometry.yaw_joint_indices = {1, 3, 5};
-  const auto occupied = [&occupancy](const Eigen::Vector3d& point) {
-    return occupancy->query(point);
-  };
-  EXPECT_TRUE(wholeBodyCollides(configuration, geometry, 0.05, occupied));
-}
-
 TEST(WholeBodyCollision, UsesTheShortestYawDeltaAcrossTheWrapBoundary)
 {
   EXPECT_NEAR(shortestYawDelta(M_PI - 0.1, -M_PI + 0.1), 0.2, 1e-12);
@@ -438,7 +350,7 @@ TEST(RootAttitudePredictor, PreservesRateLimitsOffsetsSwitchesAndZeroSpeedTermin
 class TerminalJointTarget : public ::testing::Test
 {
 protected:
-  DragonCollisionGeometry geometry{4, 1.0, {0, 2, 4}, {1, 3, 5}};
+  DragonKinematicGeometry geometry{4, 1.0, {0, 2, 4}, {1, 3, 5}};
   WholeBodyConfiguration aligned{Eigen::Vector3d::Zero(), linkRotation(RootAttitude{}),
                                   Eigen::VectorXd::Zero(6)};
 
@@ -1117,36 +1029,6 @@ TEST(Joint1PriorityAllocation, SaturatesEachAxisAndLeavesOtherJointsUnchanged)
   }
 }
 
-TEST(PlanningEnvironment, ReplacesCollisionMapSnapshots)
-{
-  const Eigen::Vector3d first(-0.5, 0.0, 1.0);
-  const Eigen::Vector3d second(0.5, 0.0, 1.0);
-  PlanningEnvironment environment(validSharedConfig());
-  environment.replaceMap({first});
-  EXPECT_TRUE(environment.occupied(first));
-  environment.replaceMap({second});
-  EXPECT_FALSE(environment.occupied(first));
-  EXPECT_TRUE(environment.occupied(second));
-}
-
-TEST(PlanningEnvironment, PreservesImmutableOccupancySnapshotsAcrossMapUpdates)
-{
-  PlanningEnvironment environment(validSharedConfig());
-  const Eigen::Vector3d first(-0.5, 0.0, 1.0);
-  const Eigen::Vector3d second(0.5, 0.0, 1.0);
-  environment.replaceMap({first});
-  const std::shared_ptr<const gcopter_planner::PlannerBackend> first_snapshot =
-      environment.occupancySnapshot();
-  environment.replaceMap({second});
-  const std::shared_ptr<const gcopter_planner::PlannerBackend> second_snapshot =
-      environment.occupancySnapshot();
-
-  EXPECT_TRUE(first_snapshot->query(first));
-  EXPECT_FALSE(first_snapshot->query(second));
-  EXPECT_FALSE(second_snapshot->query(first));
-  EXPECT_TRUE(second_snapshot->query(second));
-}
-
 TEST(PlanningEnvironment, ClampsTargetsInsideTheConfiguredMap)
 {
   PlanningEnvironment environment(validSharedConfig());
@@ -1248,4 +1130,59 @@ int main(int argc, char** argv)
 {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+TEST(OctomapMessage, FullProbabilitiesEmptyAndInvalidStreams)
+{
+  octomap::OcTree source(.1);
+  source.updateNode(octomap::point3d(.15, .15, .15), true);
+  octomap_msgs::Octomap message;
+  ASSERT_TRUE(octomap_msgs::fullMapToMsg(source, message));
+  message.header.frame_id = "grid";
+  auto tree = motion_primitive_planner::readOctomap(message);
+  ASSERT_NE(tree->search(.15, .15, .15), nullptr);
+  EXPECT_DOUBLE_EQ(tree->search(.15, .15, .15)->getOccupancy(), source.search(.15, .15, .15)->getOccupancy());
+  auto invalid = message;
+  invalid.data.pop_back();
+  EXPECT_THROW(motion_primitive_planner::readOctomap(invalid), std::invalid_argument);
+  invalid = message;
+  invalid.data.push_back(0);
+  EXPECT_THROW(motion_primitive_planner::readOctomap(invalid), std::invalid_argument);
+  invalid = message;
+  invalid.binary = true;
+  EXPECT_THROW(motion_primitive_planner::readOctomap(invalid), std::invalid_argument);
+  invalid = message;
+  invalid.id = "ColorOcTree";
+  EXPECT_THROW(motion_primitive_planner::readOctomap(invalid), std::invalid_argument);
+  invalid = message;
+  invalid.resolution = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(motion_primitive_planner::readOctomap(invalid), std::invalid_argument);
+  message.data.clear();
+  EXPECT_EQ(motion_primitive_planner::readOctomap(message)->size(), 0u);
+  EXPECT_GT(tree->size(), 0u);
+}
+
+TEST(OctomapPlanningBounds, OutsideTreeAndPartialCoarseLeafAreAccepted)
+{
+  auto config = motion_primitive_planner::validSharedConfig();
+  config.common.voxelWidth = .1;
+  config.common.dilateRadius = 0;
+  config.common.mapBound = {-2, 2.13, -2, 2, 0, 3};
+  motion_primitive_planner::PlanningEnvironment environment(config);
+  const auto before = environment.snapshot();
+  const auto origin = before->route->mapOrigin();
+  auto tree = std::make_shared<octomap::OcTree>(.1);
+  for (int x = 0; x < 2; ++x) for (int y = 0; y < 2; ++y) for (int z = 0; z < 2; ++z)
+    tree->updateNode(octomap::point3d(4 + (x + .5) * .1, 2 + (y + .5) * .1, 1 + (z + .5) * .1), true, true);
+  tree->updateNode(octomap::point3d(6.05, 2.05, 1.05), true, true);
+  tree->updateInnerOccupancy();
+  tree->prune();
+  auto transform = Eigen::Isometry3d::Identity();
+  transform.translation() = origin;
+  environment.replaceMap(tree, transform, origin, before->route->mapCorner());
+  const auto after = environment.snapshot();
+  EXPECT_TRUE(after->route->query(origin + Eigen::Vector3d(4.05, 2.05, 1.05)));
+  EXPECT_FALSE(before->route->query(origin + Eigen::Vector3d(4.05, 2.05, 1.05)));
+  EXPECT_TRUE(after->route->query(origin + Eigen::Vector3d(6.05, 2.05, 1.05)));
+  EXPECT_EQ(tree->getNumLeafNodes(), 2u);
 }

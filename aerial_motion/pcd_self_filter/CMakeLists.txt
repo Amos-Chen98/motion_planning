@@ -31,9 +31,10 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET pcd_self_filter_model_test)
     target_link_libraries(pcd_self_filter_model_test pcd_self_filter_model)
   endif()
+  add_rostest(test/filter_pipeline.test)
   add_rostest(test/self_filter.test)
   add_rostest(test/paused_clock.test)
-  catkin_install_python(PROGRAMS test/self_filter_test.py test/paused_clock_test.py
+  catkin_install_python(PROGRAMS test/self_filter_test.py test/paused_clock_test.py test/filter_pipeline_test.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 endif()
 

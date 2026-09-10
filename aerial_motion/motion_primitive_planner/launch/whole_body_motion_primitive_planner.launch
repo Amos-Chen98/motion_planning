@@ -17,11 +17,15 @@
     <arg name="self_filter_config" default="$(find pcd_self_filter)/config/self_filter.yaml" />
     <arg name="self_filter_debug" default="false" />
 
-    <arg name="use_accumulated_map" default="true" />
     <arg name="enable_noise_filter" default="true" />
     <arg name="noise_filter_radius" default="0.20" />
     <arg name="noise_filter_min_neighbors" default="2" />
+    <arg name="sensor_frame_id" default="$(arg robot_ns)/lidar_imu" />
+    <arg name="sensor_origin_frame_id" default="$(arg robot_ns)/lidar_origin" />
+    <arg name="sensor_origin_offset" default="[-0.011, -0.02329, 0.04412]" />
+    <arg name="max_range" default="-1" />
     <arg name="voxel_width" default="0.10" />
+    <!-- Root-route guidance only; URDF/OctoMap collision uses zero extra margin. -->
     <arg name="dilate_radius" default="0.20" />
     <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
 
@@ -47,7 +51,7 @@
         <arg name="flu_odom_topic" value="$(arg odom_topic)" />
     </include>
 
-    <include if="$(arg enable_self_filter)" file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+    <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
         <arg name="robot_ns" value="$(arg robot_ns)" />
         <arg name="node_name" value="$(arg node_name)_self_filter" />
         <arg name="input_topic" value="$(arg pcl_topic)" />
@@ -55,19 +59,24 @@
         <arg name="world_frame_id" value="$(arg world_frame_id)" />
         <arg name="config" value="$(arg self_filter_config)" />
         <arg name="debug" value="$(arg self_filter_debug)" />
-    </include>
-
-    <include file="$(find voxel_mapping)/launch/voxel_mapping.launch">
-        <arg name="robot_ns" value="$(arg robot_ns)" />
-        <arg name="node_name" value="$(arg node_name)_voxel_mapping" />
-        <arg name="world_frame_id" value="$(arg world_frame_id)" />
-        <arg name="pcl_topic" value="$(eval arg('filtered_pcl_topic') if arg('enable_self_filter') else arg('pcl_topic'))" />
-        <arg name="voxel_width" value="$(arg voxel_width)" />
-        <arg name="map_bound" value="$(arg map_bound)" />
-        <arg name="use_accumulated_map" value="$(arg use_accumulated_map)" />
+        <arg name="enable_self_filter" value="$(arg enable_self_filter)" />
         <arg name="enable_noise_filter" value="$(arg enable_noise_filter)" />
         <arg name="noise_filter_radius" value="$(arg noise_filter_radius)" />
         <arg name="noise_filter_min_neighbors" value="$(arg noise_filter_min_neighbors)" />
+        <arg name="output_frame_id" value="$(arg sensor_origin_frame_id)" />
+        <arg name="publish_sensor_origin_tf" value="true" />
+        <arg name="sensor_frame_id" value="$(arg sensor_frame_id)" />
+        <arg name="sensor_origin_offset" value="$(arg sensor_origin_offset)" />
+    </include>
+
+    <include file="$(find octomap_mapper)/launch/octomap_mapper.launch">
+        <arg name="max_range" value="$(arg max_range)" />
+        <arg name="robot_ns" value="$(arg robot_ns)" />
+        <arg name="node_name" value="$(arg node_name)_octomap_server" />
+        <arg name="world_frame_id" value="$(arg world_frame_id)" />
+        <arg name="pcl_topic" value="$(eval arg('filtered_pcl_topic') if arg('enable_self_filter') or arg('enable_noise_filter') else arg('pcl_topic'))" />
+        <arg name="voxel_width" value="$(arg voxel_width)" />
+        <arg name="map_bound" value="$(arg map_bound)" />
     </include>
 
     <group ns="$(arg robot_ns)">

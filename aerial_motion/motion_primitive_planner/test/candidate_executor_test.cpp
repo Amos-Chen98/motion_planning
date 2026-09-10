@@ -1,10 +1,10 @@
-#include <motion_primitive_planner/detail/candidate_executor.h>
+#include "candidate_executor.h"
 #include <gtest/gtest.h>
 
 #include <atomic>
 #include <stdexcept>
 
-using motion_primitive_planner::detail::CandidateExecutor;
+using motion_primitive_planner::CandidateExecutor;
 
 int main(int argc, char** argv)
 {

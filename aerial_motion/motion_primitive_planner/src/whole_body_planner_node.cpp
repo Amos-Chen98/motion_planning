@@ -10,7 +10,9 @@
 #include <pluginlib/class_loader.h>
 #include <ros/master.h>
 #include <sensor_msgs/JointState.h>
-#include <sensor_msgs/PointCloud2.h>
+#include <motion_primitive_planner/octomap_message.h>
+#include <tf2_eigen/tf2_eigen.h>
+#include <tf2_ros/transform_listener.h>
 #include <std_msgs/Float64.h>
 #include <std_msgs/Int32.h>
 #include <visualization_msgs/MarkerArray.h>
@@ -128,6 +130,7 @@ public:
     , nh_(nh)
     , environment_(config.shared)
     , ros_interface_(config.shared.common, nh_)
+    , map_tf_listener_(map_tf_buffer_)
     , robot_model_loader_("aerial_robot_model", "aerial_robot_model::RobotModel")
     , executed_history_(config.joint.follower)
     , replan_trigger_(config.shared.replan_trigger_ratio)
@@ -137,7 +140,7 @@ public:
     selected_min_fc_pub_ = nh_.advertise<std_msgs::Float64>("selected_min_fc_rp", 1, true);
     selected_joint_motion_pub_ = nh_.advertise<std_msgs::Float64>("selected_joint_motion", 1, true);
     initializeRobotModels();
-    map_sub_ = nh_.subscribe("voxelmap/occupied", 1, &WholeBodyPlannerNode::mapCallback, this,
+    map_sub_ = nh_.subscribe("octomap/full", 1, &WholeBodyPlannerNode::mapCallback, this,
                              ros::TransportHints().tcpNoDelay());
     target_sub_ = nh_.subscribe("target", 1, &WholeBodyPlannerNode::targetCallback, this,
                                 ros::TransportHints().tcpNoDelay());
@@ -158,7 +161,8 @@ public:
                                              &WholeBodyPlannerNode::publisherGuardTimerCallback, this);
     planning_worker_ = std::thread(&WholeBodyPlannerNode::planningWorker, this);
     ROS_INFO("Whole-body motion primitive planner ready: candidates=%d, fc_rp_min>=%.2f, "
-             "collision radius=%.2f m, replan_ratio=%.2f.",
+             "collision=8 URDF primitives, gimbals=0, margin=0 m, "
+             "root route dilation=%.2f m, replan_ratio=%.2f.",
              config_.shared.primitive.candidate_count, config_.stability.fc_rp_min_threshold,
              config_.shared.common.dilateRadius, config_.shared.replan_trigger_ratio);
   }
@@ -240,28 +244,37 @@ private:
     }
 
     model_info_.reset(new DragonModelInfo(stability_evaluators_.front()->robotModel()));
-    planner_.reset(new WholeBodyPlanner(config_, model_info_->collisionGeometry(),
-                                         stability_evaluators_));
+    planner_.reset(new WholeBodyPlanner(config_, stability_evaluators_));
     current_joints_ = Eigen::VectorXd::Zero(model_info_->jointCount());
   }
 
-  void mapCallback(const sensor_msgs::PointCloud2::ConstPtr& message)
+  void mapCallback(const octomap_msgs::Octomap::ConstPtr& message)
   {
-    std::vector<Eigen::Vector3d> occupied_voxel_centers;
-    std::string error;
-    if (!ros_interface_.pointCloudToWorld(*message, occupied_voxel_centers, &error))
+    try
     {
-      if (error != "point-cloud transform is unavailable")
+      // Resolve the immutable grid transform at the map timestamp, then decode once.
+      const auto deadline = ros::WallTime::now() + ros::WallDuration(0.2);
+      while (!map_tf_buffer_.canTransform(config_.shared.common.worldFrameId,
+                                         message->header.frame_id, message->header.stamp))
       {
-        ROS_WARN_THROTTLE(1.0, "Invalid occupied voxel map: %s", error.c_str());
+        if (!ros::ok() || ros::WallTime::now() >= deadline)
+          throw std::runtime_error("OctoMap grid TF is unavailable at the map timestamp");
+        ros::WallDuration(0.002).sleep();
       }
-      return;
+      const auto transform = map_tf_buffer_.lookupTransform(
+          config_.shared.common.worldFrameId, message->header.frame_id, message->header.stamp);
+      auto tree = readOctomap(*message);
+      {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        environment_.replaceMap(std::move(tree), tf2::transformToEigen(transform),
+                                environment_.mapOrigin(), environment_.mapCorner(), message->header.stamp);
+      }
+      retryPlanningIfPending();
     }
+    catch (const std::exception& error)
     {
-      std::lock_guard<std::mutex> lock(map_mutex_);
-      environment_.replaceMap(occupied_voxel_centers);
+      ROS_WARN_THROTTLE(1.0, "Cannot accept OctoMap snapshot: %s", error.what());
     }
-    retryPlanningIfPending();
   }
 
   void targetCallback(const geometry_msgs::PoseStamped::ConstPtr& message)
@@ -556,7 +569,7 @@ private:
       std::chrono::steady_clock::time_point start_;
     } timing_logger(config_.verbose);
 
-    std::shared_ptr<const gcopter_planner::PlannerBackend> occupancy;
+    std::shared_ptr<const PlanningSceneSnapshot> scene;
     PrimitiveBatch batch;
     {
       std::lock_guard<std::mutex> lock(map_mutex_);
@@ -565,7 +578,7 @@ private:
       root_start.velocity = start.tail_velocity;
       root_start.acceleration = start.tail_acceleration;
       batch = environment_.generate(root_start, target);
-      occupancy = environment_.occupancySnapshot();
+      scene = environment_.snapshot();
     }
     if (!batch.success())
     {
@@ -576,7 +589,7 @@ private:
     const ros::Time joint_planning_deadline =
         activation_time - ros::Duration(kActivationSafetyMargin);
     const WholeBodyPlanResult result = planner_->plan(
-        batch, occupancy, start.joint_positions, start.attitude, nominal_context,
+        batch, scene, start.joint_positions, start.attitude, nominal_context,
         joint_planning_deadline);
     const std::vector<WholeBodyCandidate>& candidates = result.candidates;
     const int selected = result.selected;
@@ -816,6 +829,8 @@ private:
   ros::NodeHandle nh_;
   PlanningEnvironment environment_;
   gcopter_planner::PlannerRosInterface ros_interface_;
+  tf2_ros::Buffer map_tf_buffer_;
+  tf2_ros::TransformListener map_tf_listener_;
   pluginlib::ClassLoader<aerial_robot_model::RobotModel> robot_model_loader_;
   std::unique_ptr<DragonModelInfo> model_info_;
   std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>> stability_evaluators_;

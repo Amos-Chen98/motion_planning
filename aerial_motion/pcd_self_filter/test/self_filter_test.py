@@ -13,6 +13,7 @@ from geometry_msgs.msg import TransformStamped
 from sensor_msgs import point_cloud2
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Header
+from visualization_msgs.msg import MarkerArray
 
 
 class SelfFilterIntegration(unittest.TestCase):
@@ -27,8 +28,9 @@ class SelfFilterIntegration(unittest.TestCase):
                            ("direct", "/unit/unfiltered_occupied"), ("late", "/late/filtered")):
             def receive(message, key=key):
                 with cls.lock:
-                    cls.outputs[key][message.header.stamp.to_nsec()] = message
-            cls.subscribers.append(rospy.Subscriber(topic, PointCloud2, receive))
+                    stamp = message.markers[0].header.stamp if isinstance(message, MarkerArray) else message.header.stamp
+                    cls.outputs[key][stamp.to_nsec()] = message
+            cls.subscribers.append(rospy.Subscriber(topic, MarkerArray if key in ("map", "direct") else PointCloud2, receive))
         for key in ("unit", "late"):
             def diagnostic(message, key=key):
                 with cls.lock:
@@ -125,6 +127,9 @@ class SelfFilterIntegration(unittest.TestCase):
 
     @staticmethod
     def rows(message):
+        if isinstance(message, MarkerArray):
+            return [(p.x - 10, p.y - 10, p.z - 2) for m in message.markers
+                    if m.action == m.ADD for p in m.points]
         return list(point_cloud2.read_points(message, skip_nans=True))
 
     def assert_rejected(self, message, publisher=None, key="filtered", diagnostic="unit"):
@@ -214,7 +219,7 @@ class SelfFilterIntegration(unittest.TestCase):
             time.sleep(0.03)
             message = self.cloud([(x + 0.03, 0.03, 1.03, 1, 1), (8.03, 0.03, 1.03, 2, 2)])
             occupied = self.result(message, "map")
-            centers = list(point_cloud2.read_points(occupied, field_names=("x", "y", "z")))
+            centers = self.rows(occupied)
             self.assertTrue(any(abs(p[0] - 8.05) < 1e-4 for p in centers))
             for body_x in (5.05, 6.05):
                 self.assertFalse(any(abs(p[0] - body_x) < 1e-4 and abs(p[1] - 0.05) < 1e-4 for p in centers))

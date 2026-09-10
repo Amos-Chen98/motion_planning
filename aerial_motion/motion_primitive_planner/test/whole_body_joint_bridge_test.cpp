@@ -1,10 +1,10 @@
+#include "test_octomap.h"
 // Regression coverage for global joint-space RRT planning: every free-space
 // candidate batch must yield an executable whole-body trajectory, and the
 // archetypal fold flip must be connected without crossing an infeasible edge.
 #include <motion_primitive_planner/joint_trajectory_planner.h>
 #include <motion_primitive_planner/root_primitive_generator.h>
 #include <motion_primitive_planner/whole_body_planner.h>
-#include "plan_snapshot.h"
 
 #include <dragon/model/hydrus_like_robot_model.h>
 #include <pluginlib/class_loader.h>
@@ -26,6 +26,58 @@ namespace
 {
 //! Wall-clock budget the whole-body node gives one full candidate batch.
 constexpr double kBatchBudget = 0.60;
+
+// Ordered result fields for serial/parallel equivalence, including array shapes.
+struct PlanSnapshot
+{
+  std::vector<double> values;
+  std::vector<std::string> details;
+
+  template <typename Derived>
+  void matrix(const Eigen::MatrixBase<Derived>& value)
+  {
+    values.push_back(value.rows());
+    values.push_back(value.cols());
+    for (int row = 0; row < value.rows(); ++row)
+      for (int col = 0; col < value.cols(); ++col) values.push_back(value(row, col));
+  }
+
+  void trajectory(const Trajectory<5>& value)
+  {
+    values.push_back(value.getPieceNum());
+    for (int piece = 0; piece < value.getPieceNum(); ++piece)
+    {
+      values.push_back(value[piece].getDuration());
+      matrix(value[piece].getCoeffMat());
+    }
+  }
+
+  explicit PlanSnapshot(const WholeBodyPlanResult& result)
+  {
+    values = {static_cast<double>(result.selected), static_cast<double>(result.candidates.size())};
+    for (const auto& candidate : result.candidates)
+    {
+      const auto& joints = candidate.joints;
+      details.insert(details.end(), {candidate.detail, candidate.root.detail, joints.detail});
+      values.insert(values.end(), {static_cast<double>(candidate.status),
+          static_cast<double>(candidate.root.status), candidate.root.jerk_energy,
+          candidate.root.path_length, static_cast<double>(joints.success), joints.duration,
+          joints.time_scale, joints.root_translation_delay, joints.minimum_fc_rp,
+          joints.joint_motion, joints.tracking_error_rms, joints.tracking_error_max});
+      trajectory(candidate.root.trajectory);
+      trajectory(candidate.scaled_root);
+      values.push_back(joints.joint_waypoints.size());
+      for (const auto& point : joints.joint_waypoints)
+      {
+        values.push_back(point.time);
+        matrix(point.positions);
+      }
+      values.push_back(joints.attitude_waypoints.size());
+      for (const auto& point : joints.attitude_waypoints)
+        values.insert(values.end(), {point.time, point.attitude.yaw, point.attitude.pitch});
+    }
+  }
+};
 
 class WholeBodyJointBridge : public ::testing::Test
 {
@@ -201,7 +253,7 @@ protected:
       evaluators.push_back(std::make_shared<multilink_copilot::StabilityEvaluator>(
           model, config_->stability));
     }
-    planner_.reset(new WholeBodyPlanner(*config_, info_->collisionGeometry(), evaluators));
+    planner_.reset(new WholeBodyPlanner(*config_, evaluators));
     start_.position = Eigen::Vector3d(0.0, 0.0, 2.0);
     start_joints_.resize(6);
     start_joints_ << 0.0, M_PI_2, 0.0, M_PI_2, 0.0, M_PI_2;
@@ -228,10 +280,10 @@ protected:
 
 TEST_F(WholeBodyBatchPlanner, SelectsExecutableCandidateUsingTheCapturedMap)
 {
-  const auto occupancy = environment_->occupancySnapshot();
-  environment_->replaceMap({start_.position});
+  const auto occupancy = environment_->snapshot();
+  replaceTestMap(*environment_, {start_.position});
   ASSERT_TRUE(environment_->occupied(start_.position));
-  ASSERT_FALSE(occupancy->query(start_.position));
+  ASSERT_FALSE(occupancy->route->query(start_.position));
 
   const WholeBodyPlanResult result = planner_->plan(
       batch_, occupancy, start_joints_, RootAttitude{}, context_,
@@ -274,7 +326,7 @@ TEST_F(WholeBodyBatchPlanner, RejectsUnevaluatedCandidatesAfterTheSharedDeadline
   batch_.candidates.front().status = CandidateStatus::kGenerationFailed;
   batch_.candidates.front().detail = "generation failed before joint planning";
   const WholeBodyPlanResult result = planner_->plan(
-      batch_, environment_->occupancySnapshot(), start_joints_, RootAttitude{}, context_,
+      batch_, environment_->snapshot(), start_joints_, RootAttitude{}, context_,
       ros::Time::now() - ros::Duration(1.0));
   EXPECT_EQ(result.selected, -1);
   ASSERT_EQ(result.candidates.size(), batch_.candidates.size());
@@ -303,11 +355,11 @@ TEST_F(WholeBodyBatchPlanner, SerialAndParallelResultsMatchAcrossRepeatedBatches
           loader_->createInstance("dragon/hydrus_like_robot_model"));
       evaluators.push_back(std::make_shared<multilink_copilot::StabilityEvaluator>(model, config_->stability));
     }
-    return std::make_unique<WholeBodyPlanner>(*config_, info_->collisionGeometry(), evaluators);
+    return std::make_unique<WholeBodyPlanner>(*config_, evaluators);
   };
   auto serial = make_planner(1);
   auto parallel = make_planner(3);
-  const auto occupancy = environment_->occupancySnapshot();
+  const auto occupancy = environment_->snapshot();
   for (int repeat = 0; repeat < 3; ++repeat)
   {
     for (const auto& displacement : std::vector<Eigen::Vector3d>{
@@ -323,7 +375,7 @@ TEST_F(WholeBodyBatchPlanner, SerialAndParallelResultsMatchAcrossRepeatedBatches
       const auto b = parallel->plan(batch, occupancy, start_joints_, {}, context_,
                                     ros::Time::now() + ros::Duration(30.0));
       EXPECT_EQ(a.selected, b.selected);
-      const test::PlanSnapshot sa(a), sb(b);
+      const PlanSnapshot sa(a), sb(b);
       ASSERT_EQ(sa.details, sb.details);
       ASSERT_EQ(sa.values.size(), sb.values.size());
       for (size_t i = 0; i < sa.values.size(); ++i)
@@ -338,7 +390,7 @@ TEST_F(WholeBodyBatchPlanner, SerialAndParallelResultsMatchAcrossRepeatedBatches
 
 TEST_F(WholeBodyBatchPlanner, HandlesEmptySingleFailedAndCollidingBatches)
 {
-  auto occupancy = environment_->occupancySnapshot();
+  auto occupancy = environment_->snapshot();
   const auto deadline = []() { return ros::Time::now() + ros::Duration(10.0); };
   PrimitiveBatch empty;
   EXPECT_EQ(planner_->plan(empty, occupancy, start_joints_, {}, context_, deadline()).selected, -1);
@@ -357,8 +409,8 @@ TEST_F(WholeBodyBatchPlanner, HandlesEmptySingleFailedAndCollidingBatches)
   const auto none = planner_->plan(failed, occupancy, start_joints_, {}, context_, deadline());
   EXPECT_EQ(none.selected, -1);
   for (const auto& c : none.candidates) EXPECT_EQ(c.detail, "deliberate generation failure");
-  environment_->replaceMap({start_.position});
-  const auto collision = planner_->plan(batch_, environment_->occupancySnapshot(), start_joints_,
+  replaceTestMap(*environment_, {start_.position});
+  const auto collision = planner_->plan(batch_, environment_->snapshot(), start_joints_,
                                          {}, context_, deadline());
   EXPECT_EQ(collision.selected, -1);
   for (const auto& c : collision.candidates)
@@ -374,11 +426,11 @@ TEST_F(WholeBodyBatchPlanner, RejectsInvalidThreadCountsAndAliasedModels)
   nh.setParam("PlanningThreads", 0);
   config_->planning_threads = 3;
   std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>> aliases(3, evaluator_);
-  EXPECT_THROW(WholeBodyPlanner(*config_, info_->collisionGeometry(), aliases), std::invalid_argument);
+  EXPECT_THROW(WholeBodyPlanner(*config_, aliases), std::invalid_argument);
   aliases[1] = std::make_shared<multilink_copilot::StabilityEvaluator>(model_, config_->stability);
-  EXPECT_THROW(WholeBodyPlanner(*config_, info_->collisionGeometry(), aliases), std::invalid_argument);
+  EXPECT_THROW(WholeBodyPlanner(*config_, aliases), std::invalid_argument);
   aliases[0].reset();
-  EXPECT_THROW(WholeBodyPlanner(*config_, info_->collisionGeometry(), aliases), std::invalid_argument);
+  EXPECT_THROW(WholeBodyPlanner(*config_, aliases), std::invalid_argument);
 }
 
 // Targets behind the robot force the nominal follow-the-leader terminal shape
@@ -733,7 +785,7 @@ TEST_F(WholeBodyJointBridge, ProjectsTerminalAndMapsGlobalRrtAcrossTheRootHorizo
       start_position, linkRotation(alignment_attitude), alignment_joints};
   const auto nominal = computeTerminalJointTarget(
       candidate.trajectory, 0.0, attitudes.back().attitude, aligned_body,
-      info_->collisionGeometry(), config.follower.ik_singularity_threshold);
+      info_->kinematicGeometry(), config.follower.ik_singularity_threshold);
   ASSERT_TRUE(nominal.success) << nominal.detail;
   const Eigen::Quaterniond terminal_rotation(linkRotation(attitudes.back().attitude));
   evaluator_->setRootLinkRotation(KDL::Rotation::Quaternion(

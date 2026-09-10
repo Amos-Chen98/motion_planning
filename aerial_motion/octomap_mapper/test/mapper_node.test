@@ -1,0 +1,14 @@
+<launch>
+  <include file="$(find octomap_mapper)/launch/octomap_mapper.launch">
+    <arg name="robot_ns" value="mapper_test"/>
+    <arg name="pcl_topic" value="/mapper_test/cloud"/>
+    <arg name="map_bound" value="[0.023, 4.023, -1.017, 2.983, 0.037, 4.037]"/>
+  </include>
+  <include file="$(find octomap_mapper)/launch/octomap_mapper.launch">
+    <arg name="robot_ns" value="limited_test"/>
+    <arg name="pcl_topic" value="/limited_test/cloud"/>
+    <arg name="map_bound" value="[0.023, 4.023, -1.017, 2.983, 0.037, 4.037]"/>
+    <arg name="max_range" value="2.0"/>
+  </include>
+  <test test-name="octomap_mapper_node" pkg="octomap_mapper" type="mapper_node_test.py" time-limit="90"/>
+</launch>

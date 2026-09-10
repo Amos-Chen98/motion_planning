@@ -2,6 +2,7 @@
   <param name="/use_sim_time" value="true"/>
   <param name="/paused/robot_description" textfile="$(find pcd_self_filter)/test/robot.urdf"/>
   <include file="$(find pcd_self_filter)/launch/pcd_self_filter.launch">
+    <arg name="enable_noise_filter" value="false"/>
     <arg name="robot_ns" value="paused"/>
   </include>
   <test test-name="pcd_self_filter_paused_clock" pkg="pcd_self_filter"

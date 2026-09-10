@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+    <group ns="dragon">
+        <param name="robot_description" command="$(find xacro)/xacro '$(find dragon)/robots/quad/v1_5_202601.urdf.xacro' robot_name:=dragon" />
+        <test test-name="dragon_collision_checker_test" pkg="motion_primitive_planner"
+              type="dragon_collision_checker_test" time-limit="90.0">
+            <rosparam command="load" file="$(find motion_primitive_planner)/config/whole_body_motion_primitive_planner.yaml" />
+            <rosparam param="MapBound">[-4.033, 4.033, -4.027, 4.027, 0.013, 4.013]</rosparam>
+            <param name="VoxelWidth" value="0.02" />
+            <param name="MaxVelMag" value="1.0" />
+        </test>
+    </group>
+</launch>

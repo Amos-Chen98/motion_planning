@@ -405,7 +405,7 @@ std::vector<TimedRootAttitudeWaypoint> predictRootAttitudes(
 TerminalJointTargetResult computeTerminalJointTarget(
     const Trajectory<5>& root_trajectory, double trajectory_start_time,
     const RootAttitude& terminal_attitude, const WholeBodyConfiguration& aligned_body,
-    const DragonCollisionGeometry& geometry, double ik_singularity_threshold,
+    const DragonKinematicGeometry& geometry, double ik_singularity_threshold,
     PlanningClock::time_point deadline)
 {
   TerminalJointTargetResult result;
@@ -930,7 +930,7 @@ JointPlanResult JointTrajectoryPlanner::plan(const Trajectory<5>& root_trajector
   const RootAttitude terminal_attitude = attitude_schedule.back().attitude;
   const WholeBodyConfiguration aligned_body{
       root_trajectory.getPos(trajectory_start_time), linkRotation(alignment_goal), alignment_joints};
-  const DragonCollisionGeometry geometry{
+  const DragonKinematicGeometry geometry{
       context.link_num, context.link_length, context.pitch_joint_indices, context.yaw_joint_indices};
   const TerminalJointTargetResult terminal = computeTerminalJointTarget(
       root_trajectory, trajectory_start_time, terminal_attitude, aligned_body, geometry,

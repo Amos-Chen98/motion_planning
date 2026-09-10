@@ -1,5 +1,6 @@
 #include <motion_primitive_planner/whole_body_planner.h>
-#include <motion_primitive_planner/detail/candidate_executor.h>
+#include "candidate_executor.h"
+#include "trajectory_collision.h"
 
 #include <algorithm>
 #include <cmath>
@@ -90,9 +91,9 @@ int selectBestWholeBodyCandidate(const std::vector<WholeBodyCandidateScore>& can
 }
 
 WholeBodyPlanner::WholeBodyPlanner(
-    const WholeBodyPlannerConfig& config, const DragonCollisionGeometry& geometry,
+    const WholeBodyPlannerConfig& config,
     const std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>>& evaluators)
-  : config_(config), collision_geometry_(geometry)
+  : config_(config)
 {
   if (config_.planning_threads < 0 || evaluators.empty() ||
       evaluators.size() != static_cast<size_t>(config_.shared.primitive.candidate_count))
@@ -109,23 +110,26 @@ WholeBodyPlanner::WholeBodyPlanner(
     joint_config.random_seed += static_cast<unsigned int>(index);
     joint_planners_.emplace_back(new JointTrajectoryPlanner(joint_config, evaluators[index]));
   }
+  const auto collision_model = std::make_shared<DragonCollisionModel>(*evaluators.front()->robotModel());
+  for (size_t index = 0; index < evaluators.size(); ++index)
+    collision_checkers_.emplace_back(new DragonCollisionChecker(collision_model));
   const size_t threads = std::min(evaluators.size(), config_.planning_threads == 0
       ? availableCpus() : static_cast<size_t>(config_.planning_threads));
-  executor_.reset(new detail::CandidateExecutor(threads));
+  executor_.reset(new CandidateExecutor(threads));
 }
 
 WholeBodyPlanner::~WholeBodyPlanner() = default;
 
 WholeBodyPlanResult WholeBodyPlanner::plan(
     const PrimitiveBatch& batch,
-    const std::shared_ptr<const gcopter_planner::PlannerBackend>& occupancy,
+    const std::shared_ptr<const PlanningSceneSnapshot>& scene,
     const Eigen::VectorXd& start_joints, const RootAttitude& start_attitude,
     const NominalJointContext& nominal_context, const ros::Time& deadline)
 {
   std::lock_guard<std::mutex> plan_lock(plan_mutex_);
-  if (!occupancy || batch.candidates.size() > joint_planners_.size())
+  if (!scene || !scene->route || !scene->collision || batch.candidates.size() > joint_planners_.size())
   {
-    throw std::invalid_argument("Invalid whole-body candidate batch or occupancy snapshot");
+    throw std::invalid_argument("Invalid whole-body candidate batch or scene snapshot");
   }
   WholeBodyPlanResult result;
   std::vector<WholeBodyCandidate>& candidates = result.candidates;
@@ -156,7 +160,9 @@ WholeBodyPlanResult WholeBodyPlanner::plan(
     }
     candidate.scaled_root = gcopter_planner::PlannerBackend::timeScaledTrajectory(
         candidate.root.trajectory, candidate.joints.time_scale);
-    if (wholeBodyTrajectoryCollides(candidate.scaled_root, candidate.joints, occupancy))
+    if (trajectoryCollides(candidate.scaled_root, candidate.joints,
+                           config_.joint.follower.command_hz,
+                           *scene->collision, *collision_checkers_[index]))
     {
       candidate.status = CandidateStatus::kCollision;
       candidate.detail = "whole-body sampled collision";
@@ -174,17 +180,16 @@ WholeBodyPlanResult WholeBodyPlanner::plan(
   return result;
 }
 
-bool WholeBodyPlanner::wholeBodyTrajectoryCollides(
-    const Trajectory<5>& root, const JointPlanResult& joints,
-    const std::shared_ptr<const gcopter_planner::PlannerBackend>& occupancy) const
+bool trajectoryCollides(
+    const Trajectory<5>& root, const JointPlanResult& joints, double command_hz,
+    const CollisionEnvironment& environment, DragonCollisionChecker& checker)
 {
   const double duration = joints.duration;
-  const double command_dt = 1.0 / config_.joint.follower.command_hz;
-  const double spatial_resolution = 0.5 * occupancy->voxelScale();
-  const auto occupied = [&occupancy](const Eigen::Vector3d& point) {
-    return occupancy->query(point);
-  };
-
+  if (!std::isfinite(command_hz) || command_hz <= 0.0 || root.getPieceNum() == 0 ||
+      !std::isfinite(root.getTotalDuration()) || root.getTotalDuration() < 0.0 ||
+      !std::isfinite(joints.root_translation_delay) || joints.root_translation_delay < 0.0)
+    return true;
+  const double command_dt = 1.0 / command_hz;
   const auto collides_at_time = [&](double time) {
     WholeBodyConfiguration configuration;
     const double root_time = std::max(
@@ -193,10 +198,11 @@ bool WholeBodyPlanner::wholeBodyTrajectoryCollides(
     configuration.link1_tail = root.getPos(root_time);
     configuration.root_link_rotation = joints.rootLinkRotation(time);
     configuration.joint_positions = joints.jointPositions(time);
-    return wholeBodyCollides(configuration, collision_geometry_, spatial_resolution, occupied);
+    return checker.collides(configuration, environment);
   };
 
-  if (!std::isfinite(duration) || duration < 0.0)
+  if (!std::isfinite(duration) || duration < 0.0 ||
+      duration / command_dt >= static_cast<double>(std::numeric_limits<int>::max()))
   {
     return true;
   }

@@ -18,10 +18,14 @@
   <depend>tf2_sensor_msgs</depend>
   <depend>urdf</depend>
   <depend>tinyxml2</depend>
+  <exec_depend>pcl_ros</exec_depend>
+  <exec_depend>nodelet</exec_depend>
   <test_depend>rostest</test_depend>
   <test_depend>rospy</test_depend>
   <test_depend>geometry_msgs</test_depend>
-  <test_depend>voxel_mapping</test_depend>
+  <test_depend>octomap_mapper</test_depend>
+  <test_depend>octomap_msgs</test_depend>
+  <test_depend>visualization_msgs</test_depend>
   <test_depend>dragon</test_depend>
   <test_depend>xacro</test_depend>
 </package>

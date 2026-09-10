@@ -10,7 +10,6 @@
 
 #include <Eigen/Geometry>
 
-#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -31,7 +30,7 @@ struct WholeBodyConfiguration
   Eigen::VectorXd joint_positions;
 };
 
-struct DragonCollisionGeometry
+struct DragonKinematicGeometry
 {
   int link_num = 0;
   double link_length = 0.0;
@@ -82,7 +81,7 @@ public:
   const std::vector<std::string>& jointNames() const { return link_joint_names_; }
   const std::vector<int>& pitchJointIndices() const { return pitch_joint_indices_; }
   const std::vector<int>& yawJointIndices() const { return yaw_joint_indices_; }
-  DragonCollisionGeometry collisionGeometry() const;
+  DragonKinematicGeometry kinematicGeometry() const;
 
 private:
   int link_num_ = 0;
@@ -107,15 +106,6 @@ std::vector<Eigen::Vector3d> linkEndpoints(const Eigen::Vector3d& link1_tail,
                                            const std::vector<int>& yaw_joint_indices,
                                            int link_num,
                                            double link_length);
-
-bool bodyCollides(const std::vector<Eigen::Vector3d>& endpoints,
-                  double sample_spacing,
-                  const std::function<bool(const Eigen::Vector3d&)>& occupied);
-
-bool wholeBodyCollides(const WholeBodyConfiguration& configuration,
-                       const DragonCollisionGeometry& geometry,
-                       double sample_spacing,
-                       const std::function<bool(const Eigen::Vector3d&)>& occupied);
 
 double shortestYawDelta(double start_yaw, double end_yaw);
 

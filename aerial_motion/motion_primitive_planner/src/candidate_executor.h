@@ -1,5 +1,5 @@
-#ifndef MOTION_PRIMITIVE_PLANNER_DETAIL_CANDIDATE_EXECUTOR_H
-#define MOTION_PRIMITIVE_PLANNER_DETAIL_CANDIDATE_EXECUTOR_H
+#ifndef MOTION_PRIMITIVE_PLANNER_CANDIDATE_EXECUTOR_H
+#define MOTION_PRIMITIVE_PLANNER_CANDIDATE_EXECUTOR_H
 
 #include <condition_variable>
 #include <cstddef>
@@ -10,8 +10,6 @@
 #include <vector>
 
 namespace motion_primitive_planner
-{
-namespace detail
 {
 //! A synchronous indexed batch on persistent workers. Each index executes once;
 //! callers own the result slots and may read them after run() returns.
@@ -100,7 +98,6 @@ private:
   size_t remaining_ = 0;
   bool stopping_ = false;
 };
-}  // namespace detail
 }  // namespace motion_primitive_planner
 
 #endif

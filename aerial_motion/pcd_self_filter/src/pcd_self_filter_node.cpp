@@ -104,6 +104,7 @@ public:
     const ros::WallTime deadline = ros::WallTime::now() + ros::WallDuration(timeout);
     auto frames = frames_;
     frames.push_back(cloud.header.frame_id);
+    frames.push_back(state(&FilterMembers::outputFrame));
     const auto& tfBuffer = state(&FilterMembers::tfBuffer);
     const auto& filteringFrame = state(&FilterMembers::filteringFrame);
     // Share the exact buffer used by upstream, not a second independently
@@ -144,7 +145,7 @@ public:
               std::string& error)
   {
     // Upstream's iterators assume nonempty storage. An empty, valid observation
-    // is still meaningful to a mapper configured to replace its map.
+    // preserves observation timing without clearing the accumulated map.
     if (input.width == 0)
     {
       output = input;
@@ -198,6 +199,8 @@ public:
     nh_.param<std::string>("tf_prefix", tf_prefix_, robot_ns_);
     nh_.param<std::string>("world_frame_id", world_frame_, "world");
     world_frame_ = normalizedFrame(world_frame_);
+    nh_.param<std::string>("output_frame_id", output_frame_, world_frame_);
+    output_frame_ = normalizedFrame(output_frame_);
     XmlRpc::XmlRpcValue aliases;
     if (nh_.getParam("input_frame_aliases", aliases))
     {
@@ -219,7 +222,7 @@ public:
     nh_.param("debug", debug_, false);
     int queue_size;
     nh_.param("queue_size", queue_size, 5);
-    if (world_frame_.empty() || !std::isfinite(padding_) || padding_ < 0.0 ||
+    if (world_frame_.empty() || output_frame_.empty() || !std::isfinite(padding_) || padding_ < 0.0 ||
         !std::isfinite(tf_timeout_) || tf_timeout_ < 0.0 || queue_size <= 0)
       throw std::invalid_argument("Invalid frame, padding, TF timeout or queue size");
 
@@ -289,7 +292,7 @@ private:
       }
       params["frames/fixed"] = world_frame_;
       params["frames/filtering"] = world_frame_;
-      params["frames/output"] = world_frame_;
+      params["frames/output"] = output_frame_;
       params["frames/sensor"] = std::string("");
       params["sensor/point_by_point"] = false;
       params["filter/do_clipping"] = false;
@@ -429,7 +432,7 @@ private:
   ros::Publisher output_pub_, diagnostics_pub_;
   ros::WallTimer timer_;
   std::unique_ptr<StrictBodyFilter> filter_;
-  std::string robot_ns_, model_param_, tf_prefix_, world_frame_, last_attempted_model_, last_error_;
+  std::string robot_ns_, model_param_, tf_prefix_, world_frame_, output_frame_, last_attempted_model_, last_error_;
   std::map<std::string, std::string> input_frame_aliases_;
   std::string input_frame_, effective_input_frame_;
   double padding_ = 0.02, tf_timeout_ = 0.2, processing_ms_ = 0.0;

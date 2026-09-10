@@ -1,4 +1,5 @@
 #include "gcopter/planner_common.hpp"
+#include "gcopter/geo_utils.hpp"
 
 #include <gtest/gtest.h>
 
@@ -199,6 +200,28 @@ TEST(TrajectoryScalingTest, PreservesPathAndReducesVelocity)
         gcopter_planner::PlannerBackend::timeScaledTrajectory(
             trajectory, 0.0),
         std::invalid_argument);
+}
+
+TEST(CorridorVerticesTest, DuplicatedAndNearlyParallelPlanesStayInsideBounds)
+{
+    Eigen::Matrix<double, 6, 4> box;
+    box << 1, 0, 0, -8, -1, 0, 0, -8,
+           0, 1, 0, -8, 0, -1, 0, -8,
+           0, 0, 1, -6, 0, 0, -1, -0.5;
+    for (const double epsilon : {0.0, 1e-10, 1e-7})
+    {
+        Eigen::MatrixX4d planes(18, 4);
+        planes << box, box, box;
+        planes(12, 1) = epsilon;
+        planes(14, 2) = -epsilon;
+        Eigen::Matrix3Xd vertices;
+        ASSERT_TRUE(geo_utils::enumerateVs(planes, vertices));
+        ASSERT_GE(vertices.cols(), 8);
+        ASSERT_TRUE(vertices.allFinite());
+        for (int i = 0; i < vertices.cols(); ++i)
+            EXPECT_LE((planes.leftCols<3>() * vertices.col(i) +
+                       planes.rightCols<1>()).maxCoeff(), 1e-6);
+    }
 }
 
 int main(int argc, char **argv)

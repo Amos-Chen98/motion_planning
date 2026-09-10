@@ -1,4 +1,5 @@
 #include <motion_primitive_planner/root_primitive_generator.h>
+#include <motion_primitive_planner/dragon_collision_checker.h>
 
 #include <gcopter/minco.hpp>
 
@@ -155,48 +156,77 @@ double PrimitiveGenerator::sampledLength(const Trajectory<5>& trajectory)
 PlanningEnvironment::PlanningEnvironment(const SharedPlannerConfig& config)
   : config_(config), generator_(config.primitive)
 {
-  replaceMap({});
+  const gcopter_planner::PlannerBackend backend(config_.common);
+  Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+  transform.translation() = backend.mapOrigin();
+  replaceMap(std::make_shared<const octomap::OcTree>(backend.voxelScale()), transform,
+             backend.mapOrigin(), backend.mapCorner());
 }
 
 void PlanningEnvironment::replaceMap(
-    const std::vector<Eigen::Vector3d>& occupied_voxel_centers)
+    std::shared_ptr<const octomap::OcTree> tree, const Eigen::Isometry3d& world_from_grid,
+    const Eigen::Vector3d& origin, const Eigen::Vector3d& corner, const ros::Time& stamp)
 {
-  std::shared_ptr<gcopter_planner::PlannerBackend> backend(
-      new gcopter_planner::PlannerBackend(config_.common));
-  backend->setMapPoints(occupied_voxel_centers);
-  std::atomic_store(&backend_, backend);
+  auto backend = std::make_shared<gcopter_planner::PlannerBackend>(config_.common);
+  if (!tree || std::abs(tree->getResolution() - backend->voxelScale()) > 1e-9 ||
+      !origin.isApprox(backend->mapOrigin(), 1e-9) || !corner.isApprox(backend->mapCorner(), 1e-9))
+    throw std::invalid_argument("OctoMap grid does not match the planning grid");
+  auto collision = std::make_shared<CollisionEnvironment>(tree, world_from_grid, origin, corner);
+  std::vector<Eigen::Vector3d> cells;
+  const double width = tree->getResolution();
+  for (auto it = tree->begin_leafs(); it != tree->end_leafs(); ++it)
+  {
+    if (!tree->isNodeOccupied(*it)) continue;
+    const Eigen::Vector3d center(it.getX(), it.getY(), it.getZ());
+    // A pruned leaf covers 2^k base cells per axis. Integer bounds avoid floating
+    // gaps and do not expand or mutate the OctoMap used by collision queries.
+    const Eigen::Vector3d lower = (center.array() - it.getSize() / 2).matrix() / width;
+    const Eigen::Vector3d upper = (center.array() + it.getSize() / 2).matrix() / width;
+    const Eigen::Vector3i begin = lower.array().round().cast<int>().matrix().cwiseMax(Eigen::Vector3i::Zero());
+    const Eigen::Vector3i end = upper.array().round().cast<int>().matrix().cwiseMin(backend->mapSize());
+    for (int x = begin.x(); x < end.x(); ++x)
+      for (int y = begin.y(); y < end.y(); ++y)
+        for (int z = begin.z(); z < end.z(); ++z)
+          cells.push_back(origin + width * Eigen::Vector3d(x + .5, y + .5, z + .5));
+  }
+  backend->setMapPoints(cells);
+  auto scene = std::make_shared<PlanningSceneSnapshot>();
+  scene->route = backend;
+  scene->collision = std::move(collision);
+  scene->map_stamp = stamp;
+  std::atomic_store(&scene_, std::shared_ptr<const PlanningSceneSnapshot>(scene));
 }
 
-std::shared_ptr<const gcopter_planner::PlannerBackend>
-PlanningEnvironment::occupancySnapshot() const
+std::shared_ptr<const PlanningSceneSnapshot>
+PlanningEnvironment::snapshot() const
 {
-  return std::atomic_load(&backend_);
+  return std::atomic_load(&scene_);
 }
 
 bool PlanningEnvironment::occupied(const Eigen::Vector3d& point) const
 {
-  return occupancySnapshot()->query(point);
+  return snapshot()->route->query(point);
 }
 
 double PlanningEnvironment::voxelScale() const
 {
-  return occupancySnapshot()->voxelScale();
+  return snapshot()->route->voxelScale();
 }
 
 Eigen::Vector3d PlanningEnvironment::mapOrigin() const
 {
-  return occupancySnapshot()->mapOrigin();
+  return snapshot()->route->mapOrigin();
 }
 
 Eigen::Vector3d PlanningEnvironment::mapCorner() const
 {
-  return occupancySnapshot()->mapCorner();
+  return snapshot()->route->mapCorner();
 }
 
 Eigen::Vector3d PlanningEnvironment::clampTarget(const Eigen::Vector3d& requested,
                                                  double clearance) const
 {
-  return occupancySnapshot()->clampInsideMap(requested, clearance);
+  return snapshot()->route->clampInsideMap(requested, clearance);
 }
 
 Eigen::Vector3d PlanningEnvironment::truncateRoute(const std::vector<Eigen::Vector3d>& full_route,
@@ -228,7 +258,7 @@ Eigen::Vector3d PlanningEnvironment::truncateRoute(const std::vector<Eigen::Vect
 PrimitiveBatch PlanningEnvironment::generate(const RootState& start, const Eigen::Vector3d& target)
 {
   PrimitiveBatch result;
-  const std::shared_ptr<gcopter_planner::PlannerBackend> backend = std::atomic_load(&backend_);
+  const auto backend = snapshot()->route;
   if (backend->query(start.position))
   {
     result.failure = PrimitiveBatchFailure::kStartCollision;

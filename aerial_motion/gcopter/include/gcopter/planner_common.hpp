@@ -69,7 +69,7 @@ public:
 
     bool searchPath(const Eigen::Vector3d &start,
                     const Eigen::Vector3d &goal,
-                    std::vector<Eigen::Vector3d> &route);
+                    std::vector<Eigen::Vector3d> &route) const;
     bool buildCorridor(const std::vector<Eigen::Vector3d> &route,
                        std::vector<Eigen::MatrixX4d> &hPolys);
     bool optimizeTrajectory(const Eigen::Matrix3d &initialState,

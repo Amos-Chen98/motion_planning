@@ -21,9 +21,16 @@
   <depend>pluginlib</depend>
   <depend>tf</depend>
   <depend>ompl</depend>
-  <exec_depend>voxel_mapping</exec_depend>
+  <depend>coal</depend>
+  <depend>octomap</depend>
+  <exec_depend>octomap_mapper</exec_depend>
+  <depend>octomap_msgs</depend>
+  <depend>tf2_eigen</depend>
+  <depend>tf2_ros</depend>
+  <depend>std_srvs</depend>
+  <depend>orocos_kdl</depend>
+  <depend>urdf</depend>
   <exec_depend>pcd_self_filter</exec_depend>
   <test_depend>rostest</test_depend>
   <test_depend>geo_robot_model</test_depend>
-  <test_depend>voxel_mapping</test_depend>
 </package>

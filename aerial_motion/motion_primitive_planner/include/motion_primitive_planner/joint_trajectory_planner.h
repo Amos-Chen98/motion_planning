@@ -87,7 +87,7 @@ struct TerminalJointTargetResult
 TerminalJointTargetResult computeTerminalJointTarget(
     const Trajectory<5>& root_trajectory, double trajectory_start_time,
     const RootAttitude& terminal_attitude, const WholeBodyConfiguration& aligned_body,
-    const DragonCollisionGeometry& geometry, double ik_singularity_threshold,
+    const DragonKinematicGeometry& geometry, double ik_singularity_threshold,
     std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max());
 
 struct JointPlanResult

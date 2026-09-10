@@ -3,6 +3,7 @@
 #define MOTION_PRIMITIVE_PLANNER_WHOLE_BODY_PLANNER_H
 
 #include <motion_primitive_planner/joint_trajectory_planner.h>
+#include <motion_primitive_planner/dragon_collision_checker.h>
 #include <motion_primitive_planner/root_primitive_generator.h>
 
 #include <ros/time.h>
@@ -10,7 +11,7 @@
 
 namespace motion_primitive_planner
 {
-namespace detail { class CandidateExecutor; }
+class CandidateExecutor;
 
 struct WholeBodyCandidateScore
 {
@@ -47,30 +48,27 @@ class WholeBodyPlanner
 {
 public:
   WholeBodyPlanner(
-      const WholeBodyPlannerConfig& config, const DragonCollisionGeometry& geometry,
+      const WholeBodyPlannerConfig& config,
       const std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>>& evaluators);
   ~WholeBodyPlanner();
 
-  //! The root batch and occupancy must come from the same map snapshot.
+  //! The root batch and scene must come from the same map snapshot.
   //! The shared deadline uses ROS time, as does the node's activation schedule.
   WholeBodyPlanResult plan(
       const PrimitiveBatch& batch,
-      const std::shared_ptr<const gcopter_planner::PlannerBackend>& occupancy,
+      const std::shared_ptr<const PlanningSceneSnapshot>& scene,
       const Eigen::VectorXd& start_joints, const RootAttitude& start_attitude,
       const NominalJointContext& nominal_context, const ros::Time& deadline);
 
 private:
-  bool wholeBodyTrajectoryCollides(
-      const Trajectory<5>& root, const JointPlanResult& joints,
-      const std::shared_ptr<const gcopter_planner::PlannerBackend>& occupancy) const;
   int selectBest(const std::vector<WholeBodyCandidate>& candidates) const;
 
   WholeBodyPlannerConfig config_;
-  DragonCollisionGeometry collision_geometry_;
+  std::vector<std::unique_ptr<DragonCollisionChecker>> collision_checkers_;
   std::vector<std::unique_ptr<JointTrajectoryPlanner>> joint_planners_;
   std::mutex plan_mutex_;
   // Destroy and join workers before destroying their candidate planners.
-  std::unique_ptr<detail::CandidateExecutor> executor_;
+  std::unique_ptr<CandidateExecutor> executor_;
 };
 
 }  // namespace motion_primitive_planner

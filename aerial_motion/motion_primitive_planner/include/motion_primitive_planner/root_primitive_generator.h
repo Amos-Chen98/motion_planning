@@ -7,6 +7,8 @@
 #include <gcopter/trajectory.hpp>
 
 #include <memory>
+#include <octomap/OcTree.h>
+#include <Eigen/Geometry>
 #include <string>
 #include <vector>
 
@@ -81,12 +83,25 @@ struct PrimitiveBatch
   bool success() const { return failure == PrimitiveBatchFailure::kNone; }
 };
 
+class CollisionEnvironment;
+
+//! Published atomically: route guidance and exact body collision use the same OctoMap version.
+struct PlanningSceneSnapshot
+{
+  std::shared_ptr<const gcopter_planner::PlannerBackend> route;
+  std::shared_ptr<const CollisionEnvironment> collision;
+  ros::Time map_stamp;
+};
+
 class PlanningEnvironment
 {
 public:
   explicit PlanningEnvironment(const SharedPlannerConfig& config);
 
-  void replaceMap(const std::vector<Eigen::Vector3d>& occupied_voxel_centers);
+  void replaceMap(std::shared_ptr<const octomap::OcTree> tree,
+                  const Eigen::Isometry3d& world_from_grid,
+                  const Eigen::Vector3d& origin, const Eigen::Vector3d& corner,
+                  const ros::Time& stamp = ros::Time());
   Eigen::Vector3d clampTarget(const Eigen::Vector3d& requested, double clearance) const;
   PrimitiveBatch generate(const RootState& start, const Eigen::Vector3d& target);
 
@@ -94,7 +109,7 @@ public:
   double voxelScale() const;
   Eigen::Vector3d mapOrigin() const;
   Eigen::Vector3d mapCorner() const;
-  std::shared_ptr<const gcopter_planner::PlannerBackend> occupancySnapshot() const;
+  std::shared_ptr<const PlanningSceneSnapshot> snapshot() const;
 
   static Eigen::Vector3d truncateRoute(const std::vector<Eigen::Vector3d>& full_route,
                                        double horizon,
@@ -102,7 +117,7 @@ public:
 
 private:
   SharedPlannerConfig config_;
-  std::shared_ptr<gcopter_planner::PlannerBackend> backend_;
+  std::shared_ptr<const PlanningSceneSnapshot> scene_;
   PrimitiveGenerator generator_;
 };
 

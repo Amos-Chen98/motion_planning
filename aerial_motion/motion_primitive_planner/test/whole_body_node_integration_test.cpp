@@ -6,6 +6,7 @@
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/point_cloud2_iterator.h>
+#include <std_srvs/Empty.h>
 #include <std_msgs/Float64.h>
 
 #include <Eigen/Core>
@@ -265,9 +266,8 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
     }
     if (failure_hold_observed && !clearing_cloud_published)
     {
-      sensor_msgs::PointCloud2 cloud = emptyCloud();
-      cloud.header.stamp = ros::Time::now();
-      cloud_publisher.publish(cloud);
+      std_srvs::Empty reset;
+      ASSERT_TRUE(ros::service::call("/dragon/octomap/reset", reset));
       clearing_cloud_published = true;
     }
     const bool second_goal_reached = !root_targets_.empty() &&

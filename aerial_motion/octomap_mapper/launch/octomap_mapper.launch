@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="robot_ns" default="dragon"/>
+  <arg name="node_name" default="octomap_server"/>
+  <arg name="world_frame_id" default="world"/>
+  <arg name="grid_frame_id" default="$(arg robot_ns)/octomap_grid"/>
+  <arg name="pcl_topic" default="/$(arg robot_ns)/cloud_self_filtered"/>
+  <arg name="map_topic" default="octomap/full"/>
+  <arg name="markers_topic" default="octomap/occupied_cells"/>
+  <arg name="reset_service" default="octomap/reset"/>
+  <arg name="voxel_width" default="0.10"/>
+  <!-- Only the lower bound locates the grid. The server also maps outside MapBound. -->
+  <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]"/>
+  <arg name="max_range" default="-1"/>
+  <arg name="prob_hit" default="0.7"/>
+  <arg name="prob_miss" default="0.4"/>
+  <arg name="clamp_min" default="0.12"/>
+  <arg name="clamp_max" default="0.97"/>
+  <group ns="$(arg robot_ns)">
+    <node pkg="tf2_ros" type="static_transform_publisher" name="$(arg node_name)_grid_tf"
+          args="$(eval '%s %s %s 0 0 0 %s %s' % (float(arg('map_bound').strip('[]').split(',')[0]), float(arg('map_bound').strip('[]').split(',')[2]), float(arg('map_bound').strip('[]').split(',')[4]), arg('world_frame_id'), arg('grid_frame_id')))"/>
+    <node pkg="octomap_mapper" type="octomap_server_adapter" name="$(arg node_name)" output="screen">
+      <remap from="cloud_in" to="$(arg pcl_topic)"/>
+      <remap from="octomap_full" to="$(arg map_topic)"/>
+      <remap from="occupied_cells_vis_array" to="$(arg markers_topic)"/>
+      <remap from="~reset" to="$(arg reset_service)"/>
+      <param name="frame_id" value="$(arg grid_frame_id)"/>
+      <param name="resolution" value="$(arg voxel_width)"/>
+      <param name="sensor_model/max_range" value="$(arg max_range)"/>
+      <param name="sensor_model/hit" value="$(arg prob_hit)"/>
+      <param name="sensor_model/miss" value="$(arg prob_miss)"/>
+      <param name="sensor_model/min" value="$(arg clamp_min)"/>
+      <param name="sensor_model/max" value="$(arg clamp_max)"/>
+      <param name="compress_map" value="true"/>
+      <param name="latch" value="true"/>
+      <param name="height_map" value="true"/>
+      <param name="colored_map" value="false"/>
+      <param name="filter_ground" value="false"/>
+      <param name="filter_speckles" value="false"/>
+    </node>
+  </group>
+</launch>

@@ -216,9 +216,9 @@ bool DragonModelInfo::readCompleteJointState(const sensor_msgs::JointState& mess
   return true;
 }
 
-DragonCollisionGeometry DragonModelInfo::collisionGeometry() const
+DragonKinematicGeometry DragonModelInfo::kinematicGeometry() const
 {
-  DragonCollisionGeometry geometry;
+  DragonKinematicGeometry geometry;
   geometry.link_num = link_num_;
   geometry.link_length = link_length_;
   geometry.pitch_joint_indices = pitch_joint_indices_;
@@ -275,41 +275,6 @@ std::vector<Eigen::Vector3d> linkEndpoints(const Eigen::Vector3d& link1_tail,
     endpoints.push_back(position);
   }
   return endpoints;
-}
-
-bool bodyCollides(const std::vector<Eigen::Vector3d>& endpoints,
-                  double sample_spacing,
-                  const std::function<bool(const Eigen::Vector3d&)>& occupied)
-{
-  if (endpoints.size() < 2 || sample_spacing <= 0.0 || !occupied)
-  {
-    return true;
-  }
-  for (size_t segment = 1; segment < endpoints.size(); ++segment)
-  {
-    const Eigen::Vector3d delta = endpoints[segment] - endpoints[segment - 1];
-    const int sample_count = std::max(1, static_cast<int>(std::ceil(delta.norm() / sample_spacing)));
-    for (int sample = 0; sample <= sample_count; ++sample)
-    {
-      if (occupied(endpoints[segment - 1] + static_cast<double>(sample) / sample_count * delta))
-      {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-bool wholeBodyCollides(const WholeBodyConfiguration& configuration,
-                       const DragonCollisionGeometry& geometry,
-                       double sample_spacing,
-                       const std::function<bool(const Eigen::Vector3d&)>& occupied)
-{
-  const std::vector<Eigen::Vector3d> endpoints =
-      linkEndpoints(configuration.link1_tail, configuration.root_link_rotation,
-                    configuration.joint_positions, geometry.pitch_joint_indices,
-                    geometry.yaw_joint_indices, geometry.link_num, geometry.link_length);
-  return bodyCollides(endpoints, sample_spacing, occupied);
 }
 
 double shortestYawDelta(double start_yaw, double end_yaw)

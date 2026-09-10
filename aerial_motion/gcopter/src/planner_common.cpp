@@ -257,7 +257,7 @@ Eigen::Vector3d PlannerBackend::clampInsideMap(
 bool PlannerBackend::searchPath(
     const Eigen::Vector3d &start,
     const Eigen::Vector3d &goal,
-    std::vector<Eigen::Vector3d> &route)
+    std::vector<Eigen::Vector3d> &route) const
 {
     route.clear();
     try
