@@ -28,6 +28,7 @@
 #include "voxel_dilater.hpp"
 #include <algorithm>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 #include <Eigen/Eigen>
 
@@ -92,6 +93,15 @@ namespace voxel_map
         inline const std::vector<uint8_t> &getVoxels(void) const
         {
             return voxels;
+        }
+
+        inline void setOccupancyBits(const std::vector<uint8_t>& bits)
+        {
+            if (bits.size() != (size_t(voxNum) + 7) / 8)
+                throw std::invalid_argument("Invalid occupancy bitmap size");
+            surf.clear();
+            for (size_t i = 0; i < voxels.size(); ++i)
+                voxels[i] = ((bits[i/8] >> (i%8)) & 1) ? Occupied : Unoccupied;
         }
 
         inline void clear(void)

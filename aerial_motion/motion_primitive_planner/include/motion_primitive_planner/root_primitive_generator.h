@@ -86,12 +86,14 @@ struct PrimitiveBatch
 
 class CollisionEnvironment;
 
-//! Published atomically: route guidance and exact body collision use the same OctoMap version.
+//! Published atomically: route guidance and exact body collision use the same local snapshot version.
 struct PlanningSceneSnapshot
 {
   std::shared_ptr<const gcopter_planner::RoutePlannerBackend> route;
   std::shared_ptr<const CollisionEnvironment> collision;
   ros::Time map_stamp;
+  uint64_t epoch = 0;
+  uint64_t version = 0;
 };
 
 class PlanningEnvironment
@@ -105,6 +107,10 @@ public:
                   const ros::Time& stamp = ros::Time());
   Eigen::Vector3d clampTarget(const Eigen::Vector3d& requested, double clearance) const;
   PrimitiveBatch generate(const RootState& start, const Eigen::Vector3d& target);
+
+  PrimitiveBatch generate(const RootState& start, const Eigen::Vector3d& target,
+                          std::shared_ptr<const PlanningSceneSnapshot> scene);
+  void replaceScene(std::shared_ptr<const PlanningSceneSnapshot> scene);
 
   bool occupied(const Eigen::Vector3d& point) const;
   double voxelScale() const;

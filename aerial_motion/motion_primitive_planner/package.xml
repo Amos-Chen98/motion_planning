@@ -22,7 +22,9 @@
   <depend>ompl</depend>
   <depend>coal</depend>
   <depend>octomap</depend>
-  <exec_depend>octomap_mapper</exec_depend>
+  <exec_depend>rog_map</exec_depend>
+  <depend>rog_map_msgs</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>octomap_msgs</depend>
   <depend>tf2_eigen</depend>
   <depend>tf2_ros</depend>

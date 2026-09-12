@@ -1,3 +1,5 @@
+#include <motion_primitive_planner/local_map.h>
+#include <rog_map_msgs/validation.h>
 #include "test_octomap.h"
 #include <motion_primitive_planner/dragon_collision_checker.h>
 #include <motion_primitive_planner/root_primitive_generator.h>
@@ -105,6 +107,26 @@ TEST_F(DragonCollision, LoadsEightPrimitivesAndCoversTheirVolumeBeyondCenterline
     }
   }
   EXPECT_FALSE(checker_->collides(configuration_, *at(Eigen::Vector3d(0.0, 0.0, 2.0))));
+}
+
+TEST_F(DragonCollision, LocalSnapshotPreservesCoalGeometryAndOldScene)
+{
+  rog_map_msgs::LocalMap m;
+  m.header.frame_id="world";m.epoch=1;m.version=1;m.resolution=.1;m.inflation_steps=0;
+  m.origin.x=-4;m.origin.y=-4;m.origin.z=-2;m.size={81,81,81};
+  m.occupied_bits.resize((81*81*81+7)/8);m.inflated_bits=m.occupied_bits;
+  gcopter_planner::RoutePlannerConfig c;c.voxelWidth=.1;c.dilateRadius=0;c.timeoutRRT=.01;c.maxVelMag=1;
+  c.mapBound={-4,4.1,-4,4.1,-2,6.1};
+  const auto empty=buildLocalScene(m,c);
+  EXPECT_FALSE(checker_->collides(configuration_,*empty->collision));
+  const Eigen::Vector3d p=pose("gimbal4_roll_module").translation();
+  const Eigen::Vector3i id=((p-Eigen::Vector3d(-4,-4,-2))/.1).array().floor().cast<int>();
+  rog_map_msgs::setBit(m.occupied_bits,id.x()+81*(id.y()+81*id.z()));m.inflated_bits=m.occupied_bits;
+  auto obstacle=buildLocalScene(m,c);
+  EXPECT_TRUE(checker_->collides(configuration_,*obstacle->collision));
+  EXPECT_FALSE(checker_->collides(configuration_,*empty->collision));
+  m.origin.x=20;auto moved=buildLocalScene(m,c);
+  EXPECT_TRUE(checker_->collides(configuration_,*moved->collision));
 }
 
 TEST_F(DragonCollision, IncludesUrdfJointOffsetsAndCollisionOrigins)

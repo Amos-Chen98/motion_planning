@@ -32,12 +32,16 @@ bool allFinite(const std::vector<double> &values)
 
 } // namespace
 
-RoutePlannerConfig::RoutePlannerConfig(const ros::NodeHandle &nhPriv)
+RoutePlannerConfig::RoutePlannerConfig(const ros::NodeHandle &nhPriv, bool fixedBounds)
 {
     nhPriv.param<std::string>("WorldFrameId", worldFrameId, "world");
     nhPriv.param("DilateRadius", dilateRadius, 0.0);
     nhPriv.param("VoxelWidth", voxelWidth, 0.0);
-    nhPriv.getParam("MapBound", mapBound);
+    if (!nhPriv.getParam("MapBound", mapBound) && !fixedBounds) {
+        // Construction placeholder only. Local-map users replace this with the
+        // exact dimensions of their first received snapshot before planning.
+        mapBound = {0.0, voxelWidth, 0.0, voxelWidth, 0.0, voxelWidth};
+    }
     nhPriv.param("TimeoutRRT", timeoutRRT, 0.0);
     nhPriv.param("MaxVelMag", maxVelMag, 0.0);
     nhPriv.param("FixTargetHeight", fixTargetHeight, false);
@@ -196,6 +200,26 @@ RoutePlannerBackend::RoutePlannerBackend(const RoutePlannerConfig &config)
         static_cast<int>(std::ceil(config_.dilateRadius / voxelMap_.getScale()));
 }
 
+RoutePlannerBackend::RoutePlannerBackend(const RoutePlannerConfig &config,
+                                               const Eigen::Vector3d &origin,
+                                               const Eigen::Vector3i &size)
+    : config_(config), dilateVoxelRadius_(0)
+{
+    if (!origin.allFinite() || (size.array() <= 0).any() ||
+        size.cast<int64_t>().prod() > 16000000 || !std::isfinite(config.voxelWidth) || config.voxelWidth <= 0)
+        throw std::invalid_argument("Invalid local route grid");
+    const Eigen::Vector3d corner = origin + size.cast<double>() * config.voxelWidth;
+    config_.mapBound = {origin.x(), corner.x(), origin.y(), corner.y(), origin.z(), corner.z()};
+    config_.validateOrThrow();
+    voxelMap_ = voxel_map::VoxelMap(size, origin, config.voxelWidth);
+    dilateVoxelRadius_ = static_cast<int>(std::ceil(config.dilateRadius / config.voxelWidth));
+}
+
+void RoutePlannerBackend::setInflatedBits(const std::vector<uint8_t>& bits)
+{
+    voxelMap_.setOccupancyBits(bits);
+}
+
 void RoutePlannerBackend::setMapPoints(
     const std::vector<Eigen::Vector3d> &points)
 {
@@ -286,7 +310,7 @@ bool RoutePlannerBackend::searchPath(
     const Eigen::Vector3d &start,
     const Eigen::Vector3d &goal,
     std::vector<Eigen::Vector3d> &route,
-    RouteSearchTiming *timing) const
+    RouteSearchTiming *timing, double timeout) const
 {
     struct TimingRecorder
     {
@@ -311,7 +335,7 @@ bool RoutePlannerBackend::searchPath(
         sfc_gen::planPath<voxel_map::VoxelMap>(
             start, goal,
             voxelMap_.getOrigin(), voxelMap_.getCorner(),
-            &voxelMap_, config_.timeoutRRT, route,
+            &voxelMap_, timeout < 0 ? config_.timeoutRRT : timeout, route,
             timing ? &timing->first_exact_solution_ms : nullptr);
     }
     catch (const std::exception &exception)

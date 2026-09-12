@@ -291,7 +291,7 @@ Visualization Manager:
       Value: true
     - Class: rviz/MarkerArray
       Enabled: true
-      Marker Topic: /dragon/octomap/occupied_cells
+      Marker Topic: /dragon/rog_map/occupied_cells
       Name: OctoMap Occupied Cells
       Namespaces:
         map: true

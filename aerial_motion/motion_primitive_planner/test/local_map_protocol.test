@@ -1,0 +1,15 @@
+<launch>
+  <group ns="dragon">
+    <param name="robot_description" command="$(find xacro)/xacro '$(find dragon)/robots/quad/v1_5_202601.urdf.xacro' robot_name:=dragon"/>
+    <node pkg="motion_primitive_planner" type="whole_body_motion_primitive_planner_node" name="whole_body_motion_primitive_planner" output="screen">
+      <rosparam file="$(find motion_primitive_planner)/config/whole_body_motion_primitive_planner.yaml"/>
+      <param name="VoxelWidth" value="0.1"/><param name="DilateRadius" value="0.2"/>
+      <param name="MaxVelMag" value="1.0"/><param name="WorldFrameId" value="world"/>
+      <param name="FixTargetHeight" value="false"/>
+      <remap from="target" to="/move_base_simple/goal"/>
+      <remap from="odom" to="/dragon/root/flu_odom"/>
+    </node>
+  </group>
+  <test pkg="motion_primitive_planner" type="local_map_protocol_test.py"
+        test-name="local_map_protocol_test" time-limit="35"/>
+</launch>

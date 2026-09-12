@@ -23,13 +23,11 @@
     <!-- Physical LiDAR ray origin; the frame comes from the robot description. -->
     <arg name="sensor_origin_frame_id" default="$(arg robot_ns)/lidar_origin" />
     <arg name="max_range" default="12.0" />
-    <arg name="octomap_latch" default="false" />
-    <arg name="octomap_compress_map" default="true" />
-    <arg name="octomap_height_map" default="false" />
+    <arg name="local_map_size" default="[12.0, 12.0, 8.0]" />
+    <arg name="map_topic" default="/$(arg robot_ns)/rog_map/local_map" />
     <arg name="voxel_width" default="0.10" />
     <!-- Root-route guidance only; URDF/OctoMap collision uses zero extra margin. -->
     <arg name="dilate_radius" default="0.20" />
-    <arg name="map_bound" default="[-10.0, 10.0, -10.0, 10.0, 0.2, 8.0]" />
 
     <arg name="planning_horizon" default="3.0" />
     <arg name="planning_threads" default="0" />
@@ -65,23 +63,23 @@
         <arg name="output_frame_id" value="$(arg sensor_origin_frame_id)" />
     </include>
 
-    <include file="$(find octomap_mapper)/launch/octomap_mapper.launch">
+    <include file="$(find rog_map)/launch/local_map.launch">
         <arg name="max_range" value="$(arg max_range)" />
-        <arg name="latch" value="$(arg octomap_latch)" />
-        <arg name="compress_map" value="$(arg octomap_compress_map)" />
-        <arg name="height_map" value="$(arg octomap_height_map)" />
         <arg name="robot_ns" value="$(arg robot_ns)" />
-        <arg name="node_name" value="octomap_mapper" />
         <arg name="world_frame_id" value="$(arg world_frame_id)" />
+        <arg name="sensor_origin_frame_id" value="$(arg sensor_origin_frame_id)" />
         <arg name="pcl_topic" value="$(eval arg('filtered_pcl_topic') if arg('enable_self_filter') or arg('enable_noise_filter') else arg('pcl_topic'))" />
         <arg name="voxel_width" value="$(arg voxel_width)" />
-        <arg name="map_bound" value="$(arg map_bound)" />
+        <arg name="dilate_radius" value="$(arg dilate_radius)" />
+        <arg name="local_map_size" value="$(arg local_map_size)" />
+        <arg name="map_topic" value="$(arg map_topic)" />
     </include>
 
     <group ns="$(arg robot_ns)">
       <node pkg="motion_primitive_planner" type="whole_body_motion_primitive_planner_node"
             name="$(arg node_name)" output="screen">
         <rosparam file="$(find motion_primitive_planner)/config/whole_body_motion_primitive_planner.yaml" command="load" />
+        <remap from="rog_map/local_map" to="$(arg map_topic)" />
         <remap from="target" to="$(arg target_topic)" />
         <remap from="odom" to="$(arg odom_topic)" />
         <remap from="joint_states" to="$(arg joint_states_topic)" />
@@ -92,7 +90,6 @@
         <param name="RootChildFrameId" value="$(arg root_child_frame_id)" />
         <param name="VoxelWidth" value="$(arg voxel_width)" />
         <param name="DilateRadius" value="$(arg dilate_radius)" />
-        <rosparam param="MapBound" subst_value="true">$(arg map_bound)</rosparam>
         <param name="PlanningHorizon" value="$(arg planning_horizon)" />
         <param name="PlanningThreads" value="$(arg planning_threads)" />
         <param name="MaxVelMag" value="$(arg max_vel_mag)" />

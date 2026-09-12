@@ -215,9 +215,22 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
   int selections_after_first_goal = 0;
   ros::WallTime blocking_cloud_wall_time;
   ros::WallTime second_goal_wall_time;
+  ros::WallTime last_scan;
   while (ros::ok() && (ros::WallTime::now() - start).toSec() < 60.0)
   {
     const ros::WallTime now = ros::WallTime::now();
+    // Local mapping requires a real timestamped observation before planning.
+    // Three colocated distant returns survive the radius filter without blocking the route.
+    if (!first_goal_stopped && (now-last_scan).toSec() > .1) {
+      sensor_msgs::PointCloud2 cloud;
+      cloud.header.frame_id = "world";
+      cloud.header.stamp = ros::Time::now();
+      sensor_msgs::PointCloud2Modifier modifier(cloud);
+      modifier.setPointCloud2FieldsByString(1,"xyz");modifier.resize(3);
+      sensor_msgs::PointCloud2Iterator<float> x(cloud,"x"), y(cloud,"y"), z(cloud,"z");
+      for(int i=0;i<3;++i,++x,++y,++z) { *x=5;*y=5;*z=1; }
+      cloud_publisher.publish(cloud);last_scan=now;
+    }
     if (!first_goal_published && (now - start).toSec() > 1.0)
     {
       first_goal.header.stamp = ros::Time::now();
@@ -245,6 +258,10 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
       blocking_cloud_published = true;
       blocking_cloud_wall_time = now;
     }
+    if (blocking_cloud_published && !clearing_cloud_published && (now-last_scan).toSec() > .1) {
+      auto cloud = blockingCloud();cloud.header.stamp=ros::Time::now();
+      cloud_publisher.publish(cloud);last_scan=now;
+    }
     if (blocking_cloud_published && !second_goal_published &&
         (now - blocking_cloud_wall_time).toSec() >= 0.50)
     {
@@ -267,7 +284,7 @@ TEST_F(WholeBodyNodeIntegration, StopsAfterEachGoalAndAcceptsASecondGoal)
     if (failure_hold_observed && !clearing_cloud_published)
     {
       std_srvs::Empty reset;
-      ASSERT_TRUE(ros::service::call("/dragon/octomap/reset", reset));
+      ASSERT_TRUE(ros::service::call("/dragon/rog_map/reset", reset));
       clearing_cloud_published = true;
     }
     const bool second_goal_reached = !root_targets_.empty() &&

@@ -51,7 +51,7 @@ void FollowerConfig::validateOrThrow() const
   }
 }
 
-SharedPlannerConfig::SharedPlannerConfig(const ros::NodeHandle& private_nh) : common(private_nh)
+SharedPlannerConfig::SharedPlannerConfig(const ros::NodeHandle& private_nh) : common(private_nh, false)
 {
   loadParam(private_nh, "ReplanTriggerRatio", replan_trigger_ratio);
   loadParam(private_nh, "GoalTolerance", goal_tolerance);

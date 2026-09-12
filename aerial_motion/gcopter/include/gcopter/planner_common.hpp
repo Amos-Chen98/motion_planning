@@ -42,7 +42,7 @@ struct RoutePlannerConfig
     double targetHeight = 1.0;
 
     RoutePlannerConfig() = default;
-    explicit RoutePlannerConfig(const ros::NodeHandle &nhPriv);
+    explicit RoutePlannerConfig(const ros::NodeHandle &nhPriv, bool fixedBounds = true);
 
     std::string validationError() const;
     void validateOrThrow() const;
@@ -73,6 +73,10 @@ class RoutePlannerBackend
 public:
     explicit RoutePlannerBackend(const RoutePlannerConfig &config);
 
+    RoutePlannerBackend(const RoutePlannerConfig &config, const Eigen::Vector3d &origin,
+                        const Eigen::Vector3i &size);
+    void setInflatedBits(const std::vector<uint8_t>& bits);
+
     void setMapPoints(const std::vector<Eigen::Vector3d> &points);
     void setMapVoxels(const std::vector<Eigen::Vector3i> &voxelIds);
 
@@ -89,7 +93,7 @@ public:
     bool searchPath(const Eigen::Vector3d &start,
                     const Eigen::Vector3d &goal,
                     std::vector<Eigen::Vector3d> &route,
-                    RouteSearchTiming *timing = nullptr) const;
+                    RouteSearchTiming *timing = nullptr, double timeout = -1.0) const;
 
 protected:
     voxel_map::VoxelMap voxelMap_;

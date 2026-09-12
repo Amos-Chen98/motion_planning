@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <tuple>
 
 namespace motion_primitive_planner
 {
@@ -255,21 +257,104 @@ Eigen::Vector3d PlanningEnvironment::truncateRoute(const std::vector<Eigen::Vect
   return local_route.back();
 }
 
+void PlanningEnvironment::replaceScene(std::shared_ptr<const PlanningSceneSnapshot> scene)
+{
+  if (!scene || !scene->route || !scene->collision) throw std::invalid_argument("Incomplete planning scene");
+  std::atomic_store(&scene_, std::move(scene));
+}
+
 PrimitiveBatch PlanningEnvironment::generate(const RootState& start, const Eigen::Vector3d& target)
 {
+  return generate(start, target, snapshot());
+}
+
+PrimitiveBatch PlanningEnvironment::generate(const RootState& start, const Eigen::Vector3d& target,
+                                           std::shared_ptr<const PlanningSceneSnapshot> scene)
+{
   PrimitiveBatch result;
-  const auto backend = snapshot()->route;
-  if (backend->query(start.position))
+  const auto backend = scene->route;
+  if (!start.position.allFinite() || !target.allFinite() || backend->query(start.position))
   {
     result.failure = PrimitiveBatchFailure::kStartCollision;
-    result.detail = "root start is in collision";
+    result.detail = "root start is in collision or outside local coverage";
     return result;
   }
+  using Clock = std::chrono::steady_clock;
+  const auto search_start = Clock::now();
+  const auto deadline = search_start + std::chrono::duration<double>(config_.common.timeoutRRT);
+  const double clearance = config_.common.dilateRadius + backend->voxelScale();
+  const Eigen::Vector3d low = backend->mapOrigin() + Eigen::Vector3d::Constant(clearance);
+  const Eigen::Vector3d high = backend->mapCorner() - Eigen::Vector3d::Constant(clearance);
+  const bool target_inside = (target.array() >= low.array()).all() && (target.array() < high.array()).all();
+  Eigen::Vector3d projected = target;
+  if (!target_inside && scene->epoch != 0) {
+    // Clip the actual start-to-goal segment against the inset window. In
+    // particular, a start near a window edge must not change this direction.
+    const Eigen::Vector3d direction = target - start.position;
+    double enter = 0, leave = 1;
+    for (int a = 0; a < 3; ++a) {
+      const double upper = std::nextafter(high[a], low[a]);
+      if (std::abs(direction[a]) <= kEpsilon) {
+        if (start.position[a] < low[a] || start.position[a] > upper) leave = -1;
+        continue;
+      }
+      double first = (low[a]-start.position[a])/direction[a];
+      double last = (upper-start.position[a])/direction[a];
+      if (first > last) std::swap(first, last);
+      enter = std::max(enter, first);
+      leave = std::min(leave, last);
+    }
+    if (leave < enter) {
+      result.failure = PrimitiveBatchFailure::kRouteSearchFailed;
+      result.detail = "goal direction does not enter the inset local window";
+      return result;
+    }
+    projected = start.position + leave * direction;
+  }
+  std::vector<Eigen::Vector3d> endpoints;
+  if (!backend->query(projected)) endpoints.push_back(projected);
+  // Keep fixed-map fixtures and legacy users' endpoint behavior. Received local
+  // snapshots carry an epoch and enable rolling goal selection.
+  if (scene->epoch != 0) {
+    struct Endpoint { Eigen::Vector3d point; double projection_distance, goal_distance; long key; };
+    std::vector<Endpoint> nearby;
+    const double width = backend->voxelScale();
+    const Eigen::Vector3i begin = ((projected-Eigen::Vector3d::Ones()-backend->mapOrigin())/width)
+        .array().floor().cast<int>().matrix().cwiseMax(Eigen::Vector3i::Zero());
+    const Eigen::Vector3i end = ((projected+Eigen::Vector3d::Ones()-backend->mapOrigin())/width)
+        .array().floor().cast<int>().matrix().cwiseMin(backend->mapSize()-Eigen::Vector3i::Ones());
+    for (int z = begin.z(); z <= end.z(); ++z) for (int y = begin.y(); y <= end.y(); ++y)
+      for (int x = begin.x(); x <= end.x(); ++x) {
+        const Eigen::Vector3d p = backend->mapOrigin()+width*Eigen::Vector3d(x+.5,y+.5,z+.5);
+        const double pd = (p-projected).squaredNorm(), gd = (p-target).squaredNorm();
+        if (pd > 1 || pd < 1e-12 || gd >= (start.position-target).squaredNorm() ||
+            (p.array() < low.array()).any() || (p.array() >= high.array()).any() || backend->query(p)) continue;
+        nearby.push_back({p, pd, gd, backend->voxelKey(p)});
+      }
+    auto less = [](const Endpoint& a, const Endpoint& b) {
+      return std::tie(a.projection_distance,a.goal_distance,a.key) < std::tie(b.projection_distance,b.goal_distance,b.key);
+    };
+    const size_t count = std::min(9-endpoints.size(), nearby.size());
+    std::partial_sort(nearby.begin(), nearby.begin()+count, nearby.end(), less);
+    for (size_t i = 0; i < count; ++i) endpoints.push_back(nearby[i].point);
+  }
   std::vector<Eigen::Vector3d> full_route;
-  if (!backend->searchPath(start.position, target, full_route, &result.route_search_timing))
-  {
+  bool found = false;
+  for (size_t i = 0; i < endpoints.size(); ++i) {
+    const double remaining = std::chrono::duration<double>(deadline-Clock::now()).count();
+    if (remaining <= 0) break;
+    const double budget = i == 0 && endpoints.size() > 1 ? remaining*.5 : remaining/(endpoints.size()-i);
+    gcopter_planner::RouteSearchTiming timing;
+    if (backend->searchPath(start.position, endpoints[i], full_route, &timing, budget)) {
+      found = true;
+      result.route_search_timing.first_exact_solution_ms = timing.first_exact_solution_ms;
+      break;
+    }
+  }
+  result.route_search_timing.total_ms = std::chrono::duration<double,std::milli>(Clock::now()-search_start).count();
+  if (!found) {
     result.failure = PrimitiveBatchFailure::kRouteSearchFailed;
-    result.detail = "root route search failed";
+    result.detail = "root route search failed within local window";
     return result;
   }
   result.local_target = truncateRoute(full_route, config_.planning_horizon, result.local_route);
@@ -279,7 +364,7 @@ PrimitiveBatch PlanningEnvironment::generate(const RootState& start, const Eigen
     result.detail = "local route is empty";
     return result;
   }
-  result.terminal = (result.local_target - full_route.back()).norm() <= kEpsilon;
+  result.terminal = (result.local_target - target).norm() <= kEpsilon;
   Eigen::Vector3d final_velocity = Eigen::Vector3d::Zero();
   const Eigen::Vector3d tangent =
       result.local_route.back() - result.local_route[result.local_route.size() - 2];

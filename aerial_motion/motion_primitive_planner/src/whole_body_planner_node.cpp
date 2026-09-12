@@ -10,9 +10,9 @@
 #include <pluginlib/class_loader.h>
 #include <ros/master.h>
 #include <sensor_msgs/JointState.h>
-#include <motion_primitive_planner/octomap_message.h>
-#include <tf2_eigen/tf2_eigen.h>
-#include <tf2_ros/transform_listener.h>
+#include <motion_primitive_planner/local_map.h>
+#include <rog_map_msgs/validation.h>
+#include <diagnostic_msgs/DiagnosticArray.h>
 #include <std_msgs/Float64.h>
 #include <std_msgs/Int32.h>
 #include <visualization_msgs/MarkerArray.h>
@@ -131,7 +131,6 @@ public:
     , nh_(nh)
     , environment_(config.shared)
     , ros_interface_(config.shared.common, nh_)
-    , map_tf_listener_(map_tf_buffer_)
     , robot_model_loader_("aerial_robot_model", "aerial_robot_model::RobotModel")
     , executed_history_(config.joint.follower)
     , replan_trigger_(config.shared.replan_trigger_ratio)
@@ -141,7 +140,7 @@ public:
     selected_min_fc_pub_ = nh_.advertise<std_msgs::Float64>("selected_min_fc_rp", 1, true);
     selected_joint_motion_pub_ = nh_.advertise<std_msgs::Float64>("selected_joint_motion", 1, true);
     initializeRobotModels();
-    map_sub_ = nh_.subscribe("octomap/full", 1, &WholeBodyPlannerNode::mapCallback, this,
+    map_sub_ = nh_.subscribe("rog_map/local_map", 1, &WholeBodyPlannerNode::mapCallback, this,
                              ros::TransportHints().tcpNoDelay());
     target_sub_ = nh_.subscribe("target", 1, &WholeBodyPlannerNode::targetCallback, this,
                                 ros::TransportHints().tcpNoDelay());
@@ -160,6 +159,10 @@ public:
                                      &WholeBodyPlannerNode::commandTimerCallback, this);
     publisher_guard_timer_ = nh_.createTimer(ros::Duration(1.0),
                                              &WholeBodyPlannerNode::publisherGuardTimerCallback, this);
+    map_ready_pub_ = nh_.advertise<std_msgs::Header>("planning/map_ready", 1);
+    map_diagnostics_pub_ = nh_.advertise<diagnostic_msgs::DiagnosticArray>("planning/map_diagnostics", 1);
+    map_diagnostics_timer_ = nh_.createWallTimer(ros::WallDuration(1), &WholeBodyPlannerNode::mapDiagnostics, this);
+    map_worker_ = std::thread(&WholeBodyPlannerNode::mapWorker, this);
     planning_worker_ = std::thread(&WholeBodyPlannerNode::planningWorker, this);
     ROS_INFO("Whole-body motion primitive planner ready: candidates=%d, fc_rp_min>=%.2f, "
              "collision=8 URDF primitives, gimbals=0, margin=0 m, "
@@ -171,6 +174,8 @@ public:
   ~WholeBodyPlannerNode()
   {
     planning_shutdown_.store(true);
+    map_input_cv_.notify_all();
+    if (map_worker_.joinable()) map_worker_.join();
     planning_request_cv_.notify_one();
     if (planning_worker_.joinable())
     {
@@ -249,33 +254,70 @@ private:
     current_joints_ = Eigen::VectorXd::Zero(model_info_->jointCount());
   }
 
-  void mapCallback(const octomap_msgs::Octomap::ConstPtr& message)
+  void mapCallback(const rog_map_msgs::LocalMap::ConstPtr& message)
   {
-    try
-    {
-      // Resolve the immutable grid transform at the map timestamp, then decode once.
-      const auto deadline = ros::WallTime::now() + ros::WallDuration(0.2);
-      while (!map_tf_buffer_.canTransform(config_.shared.common.worldFrameId,
-                                         message->header.frame_id, message->header.stamp))
+    std::lock_guard<std::mutex> lock(map_input_mutex_);
+    if (pending_map_) ++maps_dropped_;
+    pending_map_ = message;
+    map_received_at_ = std::chrono::steady_clock::now();
+    map_input_cv_.notify_one();
+  }
+
+  void mapWorker()
+  {
+    while (!planning_shutdown_.load()) {
+      rog_map_msgs::LocalMap::ConstPtr message;
+      std::chrono::steady_clock::time_point received;
       {
-        if (!ros::ok() || ros::WallTime::now() >= deadline)
-          throw std::runtime_error("OctoMap grid TF is unavailable at the map timestamp");
-        ros::WallDuration(0.002).sleep();
+        std::unique_lock<std::mutex> lock(map_input_mutex_);
+        map_input_cv_.wait(lock, [this] { return planning_shutdown_.load() || pending_map_; });
+        if (planning_shutdown_.load()) return;
+        message.swap(pending_map_);
+        received = map_received_at_;
       }
-      const auto transform = map_tf_buffer_.lookupTransform(
-          config_.shared.common.worldFrameId, message->header.frame_id, message->header.stamp);
-      auto tree = readOctomap(*message);
-      {
-        std::lock_guard<std::mutex> lock(map_mutex_);
-        environment_.replaceMap(std::move(tree), tf2::transformToEigen(transform),
-                                environment_.mapOrigin(), environment_.mapCorner(), message->header.stamp);
+      try {
+        const auto start = std::chrono::steady_clock::now();
+        // There is exactly one scene writer. Check against the last installed
+        // generation here, so malformed future epochs cannot poison the mailbox
+        // and callbacks never scan bitmaps or construct maps.
+        const auto current = environment_.snapshot();
+        if (message->epoch < current->epoch ||
+            (message->epoch == current->epoch && message->version <= current->version)) continue;
+        auto scene = buildLocalScene(*message, config_.shared.common);
+        map_build_ms_ = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+        environment_.replaceScene(std::move(scene));
+        if (map_ready_pub_.getNumSubscribers()) map_ready_pub_.publish(message->header);
+        ++maps_built_;
+        map_receive_ms_ = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-received).count();
+        retryPlanningIfPending();
+      } catch (const std::exception& error) {
+        ++maps_rejected_;
+        ROS_WARN_THROTTLE(1.0, "Cannot build local scene: %s", error.what());
       }
-      retryPlanningIfPending();
     }
-    catch (const std::exception& error)
-    {
-      ROS_WARN_THROTTLE(1.0, "Cannot accept OctoMap snapshot: %s", error.what());
-    }
+  }
+
+  void mapDiagnostics(const ros::WallTimerEvent&)
+  {
+    diagnostic_msgs::DiagnosticArray out;
+    out.header.stamp = ros::Time::now();
+    diagnostic_msgs::DiagnosticStatus status;
+    status.name = "whole_body_planner/local_map";
+    const auto scene = environment_.snapshot();
+    status.level = scene->epoch ? diagnostic_msgs::DiagnosticStatus::OK : diagnostic_msgs::DiagnosticStatus::WARN;
+    status.message = scene->epoch ? "Local scene available" : "Waiting for first local map";
+    auto add = [&](const std::string& key, double value) {
+      diagnostic_msgs::KeyValue pair; pair.key = key; pair.value = std::to_string(value); status.values.push_back(pair);
+    };
+    const auto now = std::chrono::steady_clock::now();
+    const double dt = std::chrono::duration<double>(now-map_diagnostic_at_).count();
+    const uint64_t count = maps_built_.load();
+    add("scene_hz", (count-map_diagnostic_count_)/dt);
+    map_diagnostic_at_ = now; map_diagnostic_count_ = count;
+    add("built", count); add("dropped", maps_dropped_); add("rejected", maps_rejected_);
+    add("build_ms", map_build_ms_); add("receive_to_scene_ms", map_receive_ms_);
+    if (scene->epoch) add("map_age_ms", (ros::Time::now()-scene->map_stamp).toSec()*1000);
+    out.status.push_back(status); map_diagnostics_pub_.publish(out);
   }
 
   void targetCallback(const geometry_msgs::PoseStamped::ConstPtr& message)
@@ -294,12 +336,8 @@ private:
     }
     const Eigen::Vector3d requested(message->pose.position.x, message->pose.position.y,
                                     config_.shared.common.resolveTargetHeight(*message));
-    Eigen::Vector3d target;
-    {
-      std::lock_guard<std::mutex> lock(map_mutex_);
-      target = environment_.clampTarget(
-          requested, config_.shared.common.dilateRadius + environment_.voxelScale());
-    }
+    if (!requested.allFinite()) { ROS_WARN("Ignoring nonfinite target"); return; }
+    const Eigen::Vector3d target = requested;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       target_ = target;
@@ -458,6 +496,7 @@ private:
 
   PlanAttemptResult planOnce()
   {
+    if (!environment_.snapshot()->epoch) return PlanAttemptResult::kRetry;
     if (goal_latched_.load())
     {
       return PlanAttemptResult::kIdle;
@@ -583,18 +622,13 @@ private:
       gcopter_planner::RouteSearchTiming route_search_timing;
     } timing_logger(config_.shared.common.timeoutRRT * 1000.0);
 
-    std::shared_ptr<const PlanningSceneSnapshot> scene;
-    PrimitiveBatch batch;
-    {
-      std::lock_guard<std::mutex> lock(map_mutex_);
-      RootState root_start;
-      root_start.position = start.tail_position;
-      root_start.velocity = start.tail_velocity;
-      root_start.acceleration = start.tail_acceleration;
-      batch = environment_.generate(root_start, target);
-      timing_logger.route_search_timing = batch.route_search_timing;
-      scene = environment_.snapshot();
-    }
+    const auto scene = environment_.snapshot();
+    RootState root_start;
+    root_start.position = start.tail_position;
+    root_start.velocity = start.tail_velocity;
+    root_start.acceleration = start.tail_acceleration;
+    PrimitiveBatch batch = environment_.generate(root_start, target, scene);
+    timing_logger.route_search_timing = batch.route_search_timing;
     if (!batch.success())
     {
       enterHold(currentCommandOr(start), target_sequence, batch.detail);
@@ -845,8 +879,6 @@ private:
   ros::NodeHandle nh_;
   PlanningEnvironment environment_;
   gcopter_planner::PlannerRosInterface ros_interface_;
-  tf2_ros::Buffer map_tf_buffer_;
-  tf2_ros::TransformListener map_tf_listener_;
   pluginlib::ClassLoader<aerial_robot_model::RobotModel> robot_model_loader_;
   std::unique_ptr<DragonModelInfo> model_info_;
   std::vector<std::shared_ptr<multilink_copilot::StabilityEvaluator>> stability_evaluators_;
@@ -868,7 +900,17 @@ private:
   ros::Timer publisher_guard_timer_;
   std::string full_state_topic_;
 
-  std::mutex map_mutex_;
+  std::mutex map_input_mutex_;
+  std::condition_variable map_input_cv_;
+  std::thread map_worker_;
+  rog_map_msgs::LocalMap::ConstPtr pending_map_;
+  std::chrono::steady_clock::time_point map_received_at_;
+  std::atomic<uint64_t> maps_built_{0}, maps_dropped_{0}, maps_rejected_{0};
+  std::atomic<double> map_build_ms_{0}, map_receive_ms_{0};
+  ros::Publisher map_diagnostics_pub_, map_ready_pub_;
+  ros::WallTimer map_diagnostics_timer_;
+  std::chrono::steady_clock::time_point map_diagnostic_at_ = std::chrono::steady_clock::now();
+  uint64_t map_diagnostic_count_ = 0;
 
   std::mutex state_mutex_;
   CommandState latest_odom_state_;

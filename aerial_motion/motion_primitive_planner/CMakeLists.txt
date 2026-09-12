@@ -35,6 +35,8 @@ find_package(catkin REQUIRED COMPONENTS
   nav_msgs
   sensor_msgs
   octomap_msgs
+  rog_map_msgs
+  diagnostic_msgs
   tf2_eigen
   tf2_ros
   std_srvs
@@ -49,7 +51,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES motion_primitive_planner_core
-  CATKIN_DEPENDS aerial_robot_msgs roscpp rospy std_msgs geometry_msgs nav_msgs sensor_msgs octomap_msgs tf2_eigen tf2_ros std_srvs visualization_msgs gcopter multilink_copilot dragon pluginlib urdf
+  CATKIN_DEPENDS aerial_robot_msgs roscpp rospy std_msgs geometry_msgs nav_msgs sensor_msgs octomap_msgs rog_map_msgs diagnostic_msgs tf2_eigen tf2_ros std_srvs visualization_msgs gcopter multilink_copilot dragon pluginlib urdf
   DEPENDS orocos_kdl
 )
 
@@ -57,6 +59,7 @@ include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${OMPL
 
 add_library(motion_primitive_planner_core
   src/octomap_message.cpp
+  src/local_map.cpp
   src/root_primitive_generator.cpp
   src/dragon_geometry.cpp
   src/dragon_collision_checker.cpp
@@ -82,6 +85,14 @@ add_dependencies(whole_body_motion_primitive_planner_node ${catkin_EXPORTED_TARG
 
 if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
+  add_rostest(test/local_map_protocol.test)
+  catkin_install_python(PROGRAMS test/local_map_protocol_test.py
+    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+  catkin_add_gtest(local_map_test test/local_map_test.cpp)
+  if(TARGET local_map_test)
+    target_link_libraries(local_map_test motion_primitive_planner_core ${catkin_LIBRARIES})
+    add_dependencies(local_map_test ${catkin_EXPORTED_TARGETS})
+  endif()
   add_rostest_gtest(dragon_collision_checker_test
     test/dragon_collision_checker.test test/dragon_collision_checker_test.cpp)
   if(TARGET dragon_collision_checker_test)
