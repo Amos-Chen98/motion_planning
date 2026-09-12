@@ -551,42 +551,38 @@ private:
 
     struct PlanningTimingLogger
     {
-      explicit PlanningTimingLogger(bool enabled, double rrt_timeout_ms)
-        : enabled_(enabled), rrt_timeout_ms_(rrt_timeout_ms), start_(std::chrono::steady_clock::now())
+      explicit PlanningTimingLogger(double rrt_timeout_ms)
+        : rrt_timeout_ms_(rrt_timeout_ms), start_(std::chrono::steady_clock::now())
       {
       }
 
-      ~PlanningTimingLogger()
+      void log() const
       {
-        if (enabled_)
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start_).count();
+        char first_solution[32];
+        if (route_search_timing.first_exact_solution_ms >= 0.0)
         {
-          const double elapsed_ms = std::chrono::duration<double, std::milli>(
-              std::chrono::steady_clock::now() - start_).count();
-          char first_solution[32];
-          if (route_search_timing.first_exact_solution_ms >= 0.0)
-          {
-            std::snprintf(first_solution, sizeof(first_solution), "%.3f",
-                          route_search_timing.first_exact_solution_ms);
-          }
-          else
-          {
-            std::snprintf(first_solution, sizeof(first_solution), "%s",
-                          route_search_timing.attempted ? "none" : "not_run");
-          }
-          // The remainder also includes primitive generation, diagnostics and
-          // plan activation/hold bookkeeping, not just candidate evaluation.
-          const double remaining_ms = std::max(0.0, elapsed_ms - route_search_timing.total_ms);
-          ROS_INFO("Local plan [ms]: total=%.1f, RRT=%.1f (first=%s, timeout=%.1f), other=%.1f",
-                   elapsed_ms, route_search_timing.total_ms, first_solution,
-                   rrt_timeout_ms_, remaining_ms);
+          std::snprintf(first_solution, sizeof(first_solution), "%.3f",
+                        route_search_timing.first_exact_solution_ms);
         }
+        else
+        {
+          std::snprintf(first_solution, sizeof(first_solution), "%s",
+                        route_search_timing.attempted ? "none" : "not_run");
+        }
+        // The remainder also includes primitive generation, diagnostics and
+        // pending-plan bookkeeping, not just candidate evaluation.
+        const double remaining_ms = std::max(0.0, elapsed_ms - route_search_timing.total_ms);
+        ROS_INFO("Local plan [ms]: total=%.1f, RRT=%.1f (first=%s, timeout=%.1f), other=%.1f",
+                 elapsed_ms, route_search_timing.total_ms, first_solution,
+                 rrt_timeout_ms_, remaining_ms);
       }
 
-      bool enabled_;
       double rrt_timeout_ms_;
       std::chrono::steady_clock::time_point start_;
       gcopter_planner::RouteSearchTiming route_search_timing;
-    } timing_logger(config_.verbose, config_.shared.common.timeoutRRT * 1000.0);
+    } timing_logger(config_.shared.common.timeoutRRT * 1000.0);
 
     std::shared_ptr<const PlanningSceneSnapshot> scene;
     PrimitiveBatch batch;
@@ -651,6 +647,7 @@ private:
              selected_candidate.joints.tracking_error_rms,
              selected_candidate.joints.tracking_error_max,
              selected_candidate.joints.time_scale);
+    timing_logger.log();
     return PlanAttemptResult::kSucceeded;
   }
 
