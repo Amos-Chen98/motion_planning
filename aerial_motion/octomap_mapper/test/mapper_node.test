@@ -1,11 +1,15 @@
 <launch>
   <include file="$(find octomap_mapper)/launch/octomap_mapper.launch">
     <arg name="robot_ns" value="mapper_test"/>
+    <!-- This fixture explicitly checks retained startup/reset maps. -->
+    <arg name="latch" value="true"/>
+    <arg name="max_range" value="-1"/>
     <arg name="pcl_topic" value="/mapper_test/cloud"/>
     <arg name="map_bound" value="[0.023, 4.023, -1.017, 2.983, 0.037, 4.037]"/>
   </include>
   <include file="$(find octomap_mapper)/launch/octomap_mapper.launch">
     <arg name="robot_ns" value="limited_test"/>
+    <arg name="latch" value="true"/>
     <arg name="pcl_topic" value="/limited_test/cloud"/>
     <arg name="map_bound" value="[0.023, 4.023, -1.017, 2.983, 0.037, 4.037]"/>
     <arg name="max_range" value="2.0"/>

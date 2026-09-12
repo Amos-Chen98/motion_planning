@@ -22,7 +22,10 @@
     <arg name="noise_filter_min_neighbors" default="2" />
     <!-- Physical LiDAR ray origin; the frame comes from the robot description. -->
     <arg name="sensor_origin_frame_id" default="$(arg robot_ns)/lidar_origin" />
-    <arg name="max_range" default="-1" />
+    <arg name="max_range" default="12.0" />
+    <arg name="octomap_latch" default="false" />
+    <arg name="octomap_compress_map" default="true" />
+    <arg name="octomap_height_map" default="false" />
     <arg name="voxel_width" default="0.10" />
     <!-- Root-route guidance only; URDF/OctoMap collision uses zero extra margin. -->
     <arg name="dilate_radius" default="0.20" />
@@ -64,6 +67,9 @@
 
     <include file="$(find octomap_mapper)/launch/octomap_mapper.launch">
         <arg name="max_range" value="$(arg max_range)" />
+        <arg name="latch" value="$(arg octomap_latch)" />
+        <arg name="compress_map" value="$(arg octomap_compress_map)" />
+        <arg name="height_map" value="$(arg octomap_height_map)" />
         <arg name="robot_ns" value="$(arg robot_ns)" />
         <arg name="node_name" value="octomap_mapper" />
         <arg name="world_frame_id" value="$(arg world_frame_id)" />
