@@ -7,6 +7,7 @@
 #include <sensor_msgs/point_cloud2_iterator.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <sstream>
@@ -257,15 +258,35 @@ Eigen::Vector3d PlannerBackend::clampInsideMap(
 bool PlannerBackend::searchPath(
     const Eigen::Vector3d &start,
     const Eigen::Vector3d &goal,
-    std::vector<Eigen::Vector3d> &route) const
+    std::vector<Eigen::Vector3d> &route,
+    RouteSearchTiming *timing) const
 {
+    struct TimingRecorder
+    {
+        RouteSearchTiming *timing;
+        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+        ~TimingRecorder()
+        {
+            if (timing)
+            {
+                timing->total_ms = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - start).count();
+            }
+        }
+    } recorder{timing};
+    if (timing)
+    {
+        *timing = RouteSearchTiming{};
+        timing->attempted = true;
+    }
     route.clear();
     try
     {
         sfc_gen::planPath<voxel_map::VoxelMap>(
             start, goal,
             voxelMap_.getOrigin(), voxelMap_.getCorner(),
-            &voxelMap_, config_.timeoutRRT, route);
+            &voxelMap_, config_.timeoutRRT, route,
+            timing ? &timing->first_exact_solution_ms : nullptr);
     }
     catch (const std::exception &exception)
     {

@@ -79,6 +79,7 @@ struct PrimitiveBatch
   Eigen::Vector3d local_target = Eigen::Vector3d::Zero();
   bool terminal = false;
   std::vector<Candidate> candidates;
+  gcopter_planner::RouteSearchTiming route_search_timing;
 
   bool success() const { return failure == PrimitiveBatchFailure::kNone; }
 };

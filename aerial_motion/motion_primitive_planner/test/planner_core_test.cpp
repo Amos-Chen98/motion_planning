@@ -1098,6 +1098,9 @@ TEST(PlanningEnvironment, TruncatesRoutesAndKeepsGlobalTargetVelocityZero)
     PlanningEnvironment environment(config);
     const PrimitiveBatch batch = environment.generate(start, Eigen::Vector3d(0.5, 0.0, 1.0));
     ASSERT_TRUE(batch.success()) << batch.detail;
+    EXPECT_TRUE(batch.route_search_timing.attempted);
+    EXPECT_GE(batch.route_search_timing.first_exact_solution_ms, 0.0);
+    EXPECT_GE(batch.route_search_timing.total_ms, batch.route_search_timing.first_exact_solution_ms);
     EXPECT_TRUE(batch.terminal);
     ASSERT_EQ(batch.candidates.size(), 3u);
     for (const Candidate& candidate : batch.candidates)

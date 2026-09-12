@@ -266,7 +266,7 @@ PrimitiveBatch PlanningEnvironment::generate(const RootState& start, const Eigen
     return result;
   }
   std::vector<Eigen::Vector3d> full_route;
-  if (!backend->searchPath(start.position, target, full_route))
+  if (!backend->searchPath(start.position, target, full_route, &result.route_search_timing))
   {
     result.failure = PrimitiveBatchFailure::kRouteSearchFailed;
     result.detail = "root route search failed";

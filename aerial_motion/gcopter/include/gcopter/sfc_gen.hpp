@@ -31,12 +31,14 @@
 #include <ompl/util/Console.h>
 #include <ompl/base/SpaceInformation.h>
 #include <ompl/base/spaces/RealVectorStateSpace.h>
-#include <ompl/geometric/planners/rrt/InformedRRTstar.h>
+#include <ompl/geometric/planners/informedtrees/AITstar.h>
 #include <ompl/base/objectives/PathLengthOptimizationObjective.h>
 #include <ompl/base/DiscreteMotionValidator.h>
+#include <ompl/base/PlannerTerminationCondition.h>
 
 #include <ros/console.h>
 
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <Eigen/Eigen>
@@ -51,8 +53,13 @@ namespace sfc_gen
                            const Eigen::Vector3d &hb,
                            const Map *mapPtr,
                            const double &timeout,
-                           std::vector<Eigen::Vector3d> &p)
+                           std::vector<Eigen::Vector3d> &p,
+                           double *first_exact_solution_ms = nullptr)
     {
+        if (first_exact_solution_ms)
+        {
+            *first_exact_solution_ms = -1.0;
+        }
         auto space(std::make_shared<ompl::base::RealVectorStateSpace>(3));
 
         ompl::base::RealVectorBounds bounds(3);
@@ -90,16 +97,40 @@ namespace sfc_gen
         auto pdef(std::make_shared<ompl::base::ProblemDefinition>(si));
         pdef->setStartAndGoalStates(start, goal);
         pdef->setOptimizationObjective(std::make_shared<ompl::base::PathLengthOptimizationObjective>(si));
-        auto planner(std::make_shared<ompl::geometric::RRTstar>(si));
+        auto planner(std::make_shared<ompl::geometric::AITstar>(si));
         planner->setProblemDefinition(pdef);
         planner->setup();
 
-        ompl::base::PlannerStatus solved;
-        solved = planner->ompl::base::Planner::solve(timeout);
+        // AITstar in OMPL 1.6.0 does not invoke the intermediate-solution
+        // callback. Observe the first exact solution at the next synchronous
+        // termination check instead; finding it must not stop optimization.
+        double first_solution_ms = -1.0;
+        const auto search_start = std::chrono::steady_clock::now();
+        const auto elapsed_ms = [&]() {
+            return std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - search_start).count();
+        };
+        const auto observe_first_solution = [&]() {
+            if (first_solution_ms < 0.0 && pdef->hasExactSolution())
+            {
+                first_solution_ms = elapsed_ms();
+            }
+        };
+        const auto timeout_condition = ompl::base::timedPlannerTerminationCondition(timeout);
+        const ompl::base::PlannerTerminationCondition termination_condition([&]() {
+            observe_first_solution();
+            return timeout_condition();
+        });
+        const ompl::base::PlannerStatus solved = planner->solve(termination_condition);
+        observe_first_solution();
+        if (first_exact_solution_ms)
+        {
+            *first_exact_solution_ms = first_solution_ms;
+        }
 
         if (!solved || solved == ompl::base::PlannerStatus::APPROXIMATE_SOLUTION)
         {
-            ROS_WARN("RRT failed to find an exact path within %.3fs (status: %s).",
+            ROS_WARN("AIT* failed to find an exact path within %.3fs (status: %s).",
                      timeout, solved.asString().c_str());
         }
 

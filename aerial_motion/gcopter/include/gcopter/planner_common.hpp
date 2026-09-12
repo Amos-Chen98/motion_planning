@@ -21,6 +21,15 @@
 namespace gcopter_planner
 {
 
+struct RouteSearchTiming
+{
+    bool attempted = false;
+    // Measured from solve() entry; negative means no exact solution observed.
+    double first_exact_solution_ms = -1.0;
+    // Complete searchPath() duration, including setup and path extraction.
+    double total_ms = 0.0;
+};
+
 struct CommonPlannerConfig
 {
     std::string worldFrameId = "world";
@@ -69,7 +78,8 @@ public:
 
     bool searchPath(const Eigen::Vector3d &start,
                     const Eigen::Vector3d &goal,
-                    std::vector<Eigen::Vector3d> &route) const;
+                    std::vector<Eigen::Vector3d> &route,
+                    RouteSearchTiming *timing = nullptr) const;
     bool buildCorridor(const std::vector<Eigen::Vector3d> &route,
                        std::vector<Eigen::MatrixX4d> &hPolys);
     bool optimizeTrajectory(const Eigen::Matrix3d &initialState,

@@ -1,5 +1,5 @@
 # GCOPTER map/path configuration.
-TimeoutRRT: 0.1
+TimeoutRRT: 0.01
 MaxBdrMag: 2.1
 MaxTiltAngle: 1.05
 GravAcc: 9.8
