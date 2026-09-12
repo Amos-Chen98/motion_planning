@@ -89,7 +89,7 @@ class CollisionEnvironment;
 //! Published atomically: route guidance and exact body collision use the same OctoMap version.
 struct PlanningSceneSnapshot
 {
-  std::shared_ptr<const gcopter_planner::PlannerBackend> route;
+  std::shared_ptr<const gcopter_planner::RoutePlannerBackend> route;
   std::shared_ptr<const CollisionEnvironment> collision;
   ros::Time map_stamp;
 };

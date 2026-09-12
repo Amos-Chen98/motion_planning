@@ -42,8 +42,6 @@
     <arg name="fix_target_height" default="true" />
     <arg name="target_height" default="1.0" />
 
-    <arg name="verbose" default="true" />
-
     <include file="$(find motion_primitive_planner)/launch/root_state_to_flu_odom.launch">
         <arg name="robot_ns" value="$(arg robot_ns)" />
         <arg name="root_pose_topic" value="$(arg root_pose_topic)" />
@@ -100,7 +98,6 @@
         <param name="OverlapMinClearance" value="$(arg overlap_min_clearance)" />
         <param name="FixTargetHeight" value="$(arg fix_target_height)" />
         <param name="TargetHeight" value="$(arg target_height)" />
-        <param name="Verbose" value="$(arg verbose)" />
       </node>
     </group>
 </launch>

@@ -123,7 +123,6 @@ WholeBodyPlannerConfig::WholeBodyPlannerConfig(const ros::NodeHandle& private_nh
   loadParam(private_nh, "JointMotionCostWeight", joint_motion_cost_weight);
   loadParam(private_nh, "TrackingErrorCostWeight", tracking_error_cost_weight);
   loadParam(private_nh, "RootChildFrameId", root_child_frame_id);
-  loadParam(private_nh, "Verbose", verbose);
 
   if (planning_threads < 0 ||
       !std::isfinite(activation_lead_time) || activation_lead_time <= 0.0 ||

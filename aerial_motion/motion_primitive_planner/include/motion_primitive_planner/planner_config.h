@@ -37,7 +37,7 @@ struct FollowerConfig
 
 struct SharedPlannerConfig
 {
-  gcopter_planner::CommonPlannerConfig common;
+  gcopter_planner::RoutePlannerConfig common;
   PrimitiveConfig primitive;
   double replan_trigger_ratio = 0.5;
   double goal_tolerance = 0.2;
@@ -77,7 +77,6 @@ struct WholeBodyPlannerConfig
   //! Equivalent seconds charged per metre of downstream-link tracking RMS.
   double tracking_error_cost_weight = 6.0;
   std::string root_child_frame_id = "root";
-  bool verbose = true;
 
   explicit WholeBodyPlannerConfig(const ros::NodeHandle& private_nh);
 };

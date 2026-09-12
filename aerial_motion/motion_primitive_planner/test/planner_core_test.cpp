@@ -46,14 +46,6 @@ SharedPlannerConfig validSharedConfig()
   config.common.mapBound = {-2.0, 2.0, -2.0, 2.0, 0.0, 3.0};
   config.common.timeoutRRT = 0.1;
   config.common.maxVelMag = 0.5;
-  config.common.maxBdrMag = 2.1;
-  config.common.maxTiltAngle = 1.05;
-  config.common.gravAcc = 9.8;
-  config.common.weightT = 20.0;
-  config.common.chiVec = {1.0e4, 1.0e4, 1.0e4, 1.0e4};
-  config.common.smoothingEps = 1.0e-2;
-  config.common.integralIntervs = 16;
-  config.common.relCostTol = 1.0e-5;
   config.primitive.candidate_count = 3;
   config.primitive.max_offset = 0.4;
   config.primitive.max_velocity = 0.5;
@@ -1098,7 +1090,6 @@ TEST(PlanningEnvironment, TruncatesRoutesAndKeepsGlobalTargetVelocityZero)
     PlanningEnvironment environment(config);
     const PrimitiveBatch batch = environment.generate(start, Eigen::Vector3d(0.5, 0.0, 1.0));
     ASSERT_TRUE(batch.success()) << batch.detail;
-    EXPECT_TRUE(batch.route_search_timing.attempted);
     EXPECT_GE(batch.route_search_timing.first_exact_solution_ms, 0.0);
     EXPECT_GE(batch.route_search_timing.total_ms, batch.route_search_timing.first_exact_solution_ms);
     EXPECT_TRUE(batch.terminal);

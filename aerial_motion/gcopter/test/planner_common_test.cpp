@@ -14,15 +14,23 @@
 namespace
 {
 
-gcopter_planner::CommonPlannerConfig validConfig()
+gcopter_planner::RoutePlannerConfig validRouteConfig()
 {
-    gcopter_planner::CommonPlannerConfig config;
+    gcopter_planner::RoutePlannerConfig config;
     config.worldFrameId = "world";
     config.dilateRadius = 0.5;
     config.voxelWidth = 0.25;
     config.mapBound = {-5.0, 5.0, -4.0, 4.0, 0.0, 3.0};
     config.timeoutRRT = 0.02;
     config.maxVelMag = 2.0;
+    config.targetHeight = 1.0;
+    return config;
+}
+
+gcopter_planner::CommonPlannerConfig validConfig()
+{
+    gcopter_planner::CommonPlannerConfig config;
+    static_cast<gcopter_planner::RoutePlannerConfig &>(config) = validRouteConfig();
     config.maxBdrMag = 2.1;
     config.maxTiltAngle = 1.05;
     config.gravAcc = 9.8;
@@ -31,7 +39,6 @@ gcopter_planner::CommonPlannerConfig validConfig()
     config.smoothingEps = 1.0e-2;
     config.integralIntervs = 16;
     config.relCostTol = 1.0e-5;
-    config.targetHeight = 1.0;
     return config;
 }
 
@@ -78,9 +85,9 @@ TEST(CommonPlannerConfigTest, ValidatesRequiredValues)
               config.validationError());
 }
 
-TEST(CommonPlannerConfigTest, ResolvesTargetHeightModes)
+TEST(RoutePlannerConfigTest, ResolvesTargetHeightModes)
 {
-    gcopter_planner::CommonPlannerConfig config = validConfig();
+    gcopter_planner::RoutePlannerConfig config = validRouteConfig();
     geometry_msgs::PoseStamped target;
     target.pose.position.z = 2.25;
 
@@ -233,22 +240,44 @@ int main(int argc, char **argv)
 TEST(RouteSearchTimingTest, ReportsFirstExactSolutionAndResetsOnTimeout)
 {
     ros::Time::init();
-    gcopter_planner::CommonPlannerConfig config = validConfig();
+    gcopter_planner::RoutePlannerConfig config = validRouteConfig();
     gcopter_planner::RouteSearchTiming timing;
     std::vector<Eigen::Vector3d> route;
     const Eigen::Vector3d start(-1.0, 0.0, 1.0);
     const Eigen::Vector3d goal(1.0, 0.0, 1.0);
-    gcopter_planner::PlannerBackend backend(config);
+    gcopter_planner::RoutePlannerBackend backend(config);
     ASSERT_TRUE(backend.searchPath(start, goal, route, &timing));
-    EXPECT_TRUE(timing.attempted);
     EXPECT_GE(timing.first_exact_solution_ms, 0.0);
     EXPECT_GE(timing.total_ms, timing.first_exact_solution_ms);
 
     // Reusing the output must not report the previous search's first solution.
     config.timeoutRRT = 1e-9;
-    gcopter_planner::PlannerBackend timed_out(config);
+    gcopter_planner::RoutePlannerBackend timed_out(config);
     EXPECT_FALSE(timed_out.searchPath(start, goal, route, &timing));
-    EXPECT_TRUE(timing.attempted);
     EXPECT_LT(timing.first_exact_solution_ms, 0.0);
     EXPECT_GE(timing.total_ms, 0.0);
+}
+
+TEST(RoutePlannerConfigTest, ValidatesRouteSettingsWithoutOptimizerSettings)
+{
+    auto config = validRouteConfig();
+    EXPECT_NO_THROW(config.validateOrThrow());
+    EXPECT_NO_THROW({ gcopter_planner::RoutePlannerBackend backend(config); });
+    config.maxVelMag = 0.0;
+    EXPECT_THROW(config.validateOrThrow(), std::invalid_argument);
+    config = validRouteConfig();
+    config.timeoutRRT = 0.0;
+    EXPECT_THROW(config.validateOrThrow(), std::invalid_argument);
+}
+
+TEST(CommonPlannerConfigTest, OptimizerBackendStillRequiresOptimizerSettings)
+{
+    gcopter_planner::CommonPlannerConfig config;
+    static_cast<gcopter_planner::RoutePlannerConfig &>(config) = validRouteConfig();
+    EXPECT_THROW(config.validateOrThrow(), std::invalid_argument);
+    EXPECT_THROW({ gcopter_planner::PlannerBackend backend(config); }, std::invalid_argument);
+    config = validConfig();
+    EXPECT_NO_THROW({ gcopter_planner::PlannerBackend backend(config); });
+    config.chiVec.clear();
+    EXPECT_THROW({ gcopter_planner::PlannerBackend backend(config); }, std::invalid_argument);
 }

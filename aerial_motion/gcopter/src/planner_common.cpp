@@ -32,7 +32,7 @@ bool allFinite(const std::vector<double> &values)
 
 } // namespace
 
-CommonPlannerConfig::CommonPlannerConfig(const ros::NodeHandle &nhPriv)
+RoutePlannerConfig::RoutePlannerConfig(const ros::NodeHandle &nhPriv)
 {
     nhPriv.param<std::string>("WorldFrameId", worldFrameId, "world");
     nhPriv.param("DilateRadius", dilateRadius, 0.0);
@@ -40,6 +40,13 @@ CommonPlannerConfig::CommonPlannerConfig(const ros::NodeHandle &nhPriv)
     nhPriv.getParam("MapBound", mapBound);
     nhPriv.param("TimeoutRRT", timeoutRRT, 0.0);
     nhPriv.param("MaxVelMag", maxVelMag, 0.0);
+    nhPriv.param("FixTargetHeight", fixTargetHeight, false);
+    nhPriv.param("TargetHeight", targetHeight, 1.0);
+}
+
+CommonPlannerConfig::CommonPlannerConfig(const ros::NodeHandle &nhPriv)
+    : RoutePlannerConfig(nhPriv)
+{
     nhPriv.param("MaxBdrMag", maxBdrMag, 0.0);
     nhPriv.param("MaxTiltAngle", maxTiltAngle, 0.0);
     nhPriv.param("GravAcc", gravAcc, 0.0);
@@ -48,12 +55,10 @@ CommonPlannerConfig::CommonPlannerConfig(const ros::NodeHandle &nhPriv)
     nhPriv.param("SmoothingEps", smoothingEps, 0.0);
     nhPriv.param("IntegralIntervs", integralIntervs, 0);
     nhPriv.param("RelCostTol", relCostTol, 0.0);
-    nhPriv.param("FixTargetHeight", fixTargetHeight, false);
-    nhPriv.param("TargetHeight", targetHeight, 1.0);
     nhPriv.param("ShowPolytopeCorridor", showPolytopeCorridor, true);
 }
 
-std::string CommonPlannerConfig::validationError() const
+std::string RoutePlannerConfig::validationError() const
 {
     if (worldFrameId.empty())
     {
@@ -88,11 +93,28 @@ std::string CommonPlannerConfig::validationError() const
     {
         return "TimeoutRRT must be finite and positive";
     }
-    if (!isFinite(maxVelMag) || maxVelMag <= 0.0 ||
-        !isFinite(maxBdrMag) || maxBdrMag <= 0.0 ||
+    if (!isFinite(maxVelMag) || maxVelMag <= 0.0)
+    {
+        return "MaxVelMag must be finite and positive";
+    }
+    if (!isFinite(targetHeight))
+    {
+        return "TargetHeight must be finite";
+    }
+    return std::string();
+}
+
+std::string CommonPlannerConfig::validationError() const
+{
+    const std::string routeError = RoutePlannerConfig::validationError();
+    if (!routeError.empty())
+    {
+        return routeError;
+    }
+    if (!isFinite(maxBdrMag) || maxBdrMag <= 0.0 ||
         !isFinite(maxTiltAngle) || maxTiltAngle <= 0.0)
     {
-        return "MaxVelMag, MaxBdrMag, and MaxTiltAngle must be finite and positive";
+        return "MaxBdrMag and MaxTiltAngle must be finite and positive";
     }
     if (!isFinite(gravAcc) || gravAcc <= 0.0)
     {
@@ -121,12 +143,17 @@ std::string CommonPlannerConfig::validationError() const
     {
         return "RelCostTol must be finite and positive";
     }
-    if (!isFinite(targetHeight))
-    {
-        return "TargetHeight must be finite";
-    }
 
     return std::string();
+}
+
+void RoutePlannerConfig::validateOrThrow() const
+{
+    const std::string error = validationError();
+    if (!error.empty())
+    {
+        throw std::invalid_argument(error);
+    }
 }
 
 void CommonPlannerConfig::validateOrThrow() const
@@ -138,7 +165,7 @@ void CommonPlannerConfig::validateOrThrow() const
     }
 }
 
-double CommonPlannerConfig::resolveTargetHeight(
+double RoutePlannerConfig::resolveTargetHeight(
     const geometry_msgs::PoseStamped &msg) const
 {
     if (fixTargetHeight)
@@ -148,7 +175,7 @@ double CommonPlannerConfig::resolveTargetHeight(
     return msg.pose.position.z;
 }
 
-PlannerBackend::PlannerBackend(const CommonPlannerConfig &config)
+RoutePlannerBackend::RoutePlannerBackend(const RoutePlannerConfig &config)
     : config_(config),
       dilateVoxelRadius_(0)
 {
@@ -169,7 +196,7 @@ PlannerBackend::PlannerBackend(const CommonPlannerConfig &config)
         static_cast<int>(std::ceil(config_.dilateRadius / voxelMap_.getScale()));
 }
 
-void PlannerBackend::setMapPoints(
+void RoutePlannerBackend::setMapPoints(
     const std::vector<Eigen::Vector3d> &points)
 {
     voxelMap_.clear();
@@ -180,7 +207,7 @@ void PlannerBackend::setMapPoints(
     voxelMap_.dilate(dilateVoxelRadius_);
 }
 
-void PlannerBackend::setMapVoxels(
+void RoutePlannerBackend::setMapVoxels(
     const std::vector<Eigen::Vector3i> &voxelIds)
 {
     voxelMap_.clear();
@@ -191,32 +218,32 @@ void PlannerBackend::setMapVoxels(
     voxelMap_.dilate(dilateVoxelRadius_);
 }
 
-bool PlannerBackend::query(const Eigen::Vector3d &position) const
+bool RoutePlannerBackend::query(const Eigen::Vector3d &position) const
 {
     return voxelMap_.query(position);
 }
 
-double PlannerBackend::voxelScale() const
+double RoutePlannerBackend::voxelScale() const
 {
     return voxelMap_.getScale();
 }
 
-Eigen::Vector3i PlannerBackend::mapSize() const
+Eigen::Vector3i RoutePlannerBackend::mapSize() const
 {
     return voxelMap_.getSize();
 }
 
-Eigen::Vector3d PlannerBackend::mapOrigin() const
+Eigen::Vector3d RoutePlannerBackend::mapOrigin() const
 {
     return voxelMap_.getOrigin();
 }
 
-Eigen::Vector3d PlannerBackend::mapCorner() const
+Eigen::Vector3d RoutePlannerBackend::mapCorner() const
 {
     return voxelMap_.getCorner();
 }
 
-long PlannerBackend::voxelKey(const Eigen::Vector3d &position) const
+long RoutePlannerBackend::voxelKey(const Eigen::Vector3d &position) const
 {
     const Eigen::Vector3i id = voxelMap_.posD2I(position);
     const Eigen::Vector3i size = voxelMap_.getSize();
@@ -232,7 +259,7 @@ long PlannerBackend::voxelKey(const Eigen::Vector3d &position) const
                 static_cast<long>(size(1)) * static_cast<long>(id(2)));
 }
 
-Eigen::Vector3i PlannerBackend::voxelIdFromKey(const long key) const
+Eigen::Vector3i RoutePlannerBackend::voxelIdFromKey(const long key) const
 {
     const Eigen::Vector3i size = voxelMap_.getSize();
     const long xy = static_cast<long>(size(0)) * static_cast<long>(size(1));
@@ -244,7 +271,7 @@ Eigen::Vector3i PlannerBackend::voxelIdFromKey(const long key) const
     return Eigen::Vector3i(x, y, z);
 }
 
-Eigen::Vector3d PlannerBackend::clampInsideMap(
+Eigen::Vector3d RoutePlannerBackend::clampInsideMap(
     const Eigen::Vector3d &point,
     const double clearance) const
 {
@@ -255,7 +282,7 @@ Eigen::Vector3d PlannerBackend::clampInsideMap(
     return point.cwiseMax(lower).cwiseMin(upper);
 }
 
-bool PlannerBackend::searchPath(
+bool RoutePlannerBackend::searchPath(
     const Eigen::Vector3d &start,
     const Eigen::Vector3d &goal,
     std::vector<Eigen::Vector3d> &route,
@@ -277,7 +304,6 @@ bool PlannerBackend::searchPath(
     if (timing)
     {
         *timing = RouteSearchTiming{};
-        timing->attempted = true;
     }
     route.clear();
     try
@@ -297,10 +323,16 @@ bool PlannerBackend::searchPath(
 
     if (route.size() <= 1)
     {
-        ROS_WARN_THROTTLE(1.0, "RRT did not produce a usable route.");
+        ROS_WARN_THROTTLE(1.0, "Route search did not produce a usable path.");
         return false;
     }
     return true;
+}
+
+PlannerBackend::PlannerBackend(const CommonPlannerConfig &config)
+    : RoutePlannerBackend(config), config_(config)
+{
+    config_.validateOrThrow();
 }
 
 bool PlannerBackend::buildCorridor(
@@ -486,7 +518,7 @@ bool PlannerBackend::enforceVelocityLimit(
 }
 
 PlannerRosInterface::PlannerRosInterface(
-    const CommonPlannerConfig &config,
+    const RoutePlannerConfig &config,
     ros::NodeHandle &nh)
     : config_(config),
       nh_(nh),

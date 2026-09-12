@@ -23,14 +23,14 @@ namespace gcopter_planner
 
 struct RouteSearchTiming
 {
-    bool attempted = false;
     // Measured from solve() entry; negative means no exact solution observed.
     double first_exact_solution_ms = -1.0;
     // Complete searchPath() duration, including setup and path extraction.
     double total_ms = 0.0;
 };
 
-struct CommonPlannerConfig
+// Shared by root-route guidance and the GCOPTER trajectory optimizer.
+struct RoutePlannerConfig
 {
     std::string worldFrameId = "world";
     double dilateRadius = 0.0;
@@ -38,6 +38,19 @@ struct CommonPlannerConfig
     std::vector<double> mapBound;
     double timeoutRRT = 0.0;
     double maxVelMag = 0.0;
+    bool fixTargetHeight = false;
+    double targetHeight = 1.0;
+
+    RoutePlannerConfig() = default;
+    explicit RoutePlannerConfig(const ros::NodeHandle &nhPriv);
+
+    std::string validationError() const;
+    void validateOrThrow() const;
+    double resolveTargetHeight(const geometry_msgs::PoseStamped &msg) const;
+};
+
+struct CommonPlannerConfig : RoutePlannerConfig
+{
     double maxBdrMag = 0.0;
     double maxTiltAngle = 0.0;
     double gravAcc = 0.0;
@@ -46,8 +59,6 @@ struct CommonPlannerConfig
     double smoothingEps = 0.0;
     int integralIntervs = 0;
     double relCostTol = 0.0;
-    bool fixTargetHeight = false;
-    double targetHeight = 1.0;
     bool showPolytopeCorridor = true;
 
     CommonPlannerConfig() = default;
@@ -55,13 +66,12 @@ struct CommonPlannerConfig
 
     std::string validationError() const;
     void validateOrThrow() const;
-    double resolveTargetHeight(const geometry_msgs::PoseStamped &msg) const;
 };
 
-class PlannerBackend
+class RoutePlannerBackend
 {
 public:
-    explicit PlannerBackend(const CommonPlannerConfig &config);
+    explicit RoutePlannerBackend(const RoutePlannerConfig &config);
 
     void setMapPoints(const std::vector<Eigen::Vector3d> &points);
     void setMapVoxels(const std::vector<Eigen::Vector3i> &voxelIds);
@@ -80,6 +90,20 @@ public:
                     const Eigen::Vector3d &goal,
                     std::vector<Eigen::Vector3d> &route,
                     RouteSearchTiming *timing = nullptr) const;
+
+protected:
+    voxel_map::VoxelMap voxelMap_;
+
+private:
+    RoutePlannerConfig config_;
+    int dilateVoxelRadius_;
+};
+
+class PlannerBackend : public RoutePlannerBackend
+{
+public:
+    explicit PlannerBackend(const CommonPlannerConfig &config);
+
     bool buildCorridor(const std::vector<Eigen::Vector3d> &route,
                        std::vector<Eigen::MatrixX4d> &hPolys);
     bool optimizeTrajectory(const Eigen::Matrix3d &initialState,
@@ -96,14 +120,12 @@ private:
                               const std::string &plannerLabel) const;
 
     CommonPlannerConfig config_;
-    voxel_map::VoxelMap voxelMap_;
-    int dilateVoxelRadius_;
 };
 
 class PlannerRosInterface
 {
 public:
-    PlannerRosInterface(const CommonPlannerConfig &config,
+    PlannerRosInterface(const RoutePlannerConfig &config,
                         ros::NodeHandle &nh);
 
     bool odomReceived() const;
@@ -131,7 +153,7 @@ private:
         const geometry_msgs::Quaternion &quaternion);
     void odomCallback(const nav_msgs::Odometry::ConstPtr &msg);
 
-    CommonPlannerConfig config_;
+    RoutePlannerConfig config_;
     ros::NodeHandle nh_;
     tf2_ros::Buffer tfBuffer_;
     tf2_ros::TransformListener tfListener_;

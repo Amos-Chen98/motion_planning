@@ -156,7 +156,7 @@ double PrimitiveGenerator::sampledLength(const Trajectory<5>& trajectory)
 PlanningEnvironment::PlanningEnvironment(const SharedPlannerConfig& config)
   : config_(config), generator_(config.primitive)
 {
-  const gcopter_planner::PlannerBackend backend(config_.common);
+  const gcopter_planner::RoutePlannerBackend backend(config_.common);
   Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
   transform.translation() = backend.mapOrigin();
   replaceMap(std::make_shared<const octomap::OcTree>(backend.voxelScale()), transform,
@@ -167,7 +167,7 @@ void PlanningEnvironment::replaceMap(
     std::shared_ptr<const octomap::OcTree> tree, const Eigen::Isometry3d& world_from_grid,
     const Eigen::Vector3d& origin, const Eigen::Vector3d& corner, const ros::Time& stamp)
 {
-  auto backend = std::make_shared<gcopter_planner::PlannerBackend>(config_.common);
+  auto backend = std::make_shared<gcopter_planner::RoutePlannerBackend>(config_.common);
   if (!tree || std::abs(tree->getResolution() - backend->voxelScale()) > 1e-9 ||
       !origin.isApprox(backend->mapOrigin(), 1e-9) || !corner.isApprox(backend->mapCorner(), 1e-9))
     throw std::invalid_argument("OctoMap grid does not match the planning grid");

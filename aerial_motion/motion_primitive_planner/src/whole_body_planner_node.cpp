@@ -568,8 +568,7 @@ private:
         }
         else
         {
-          std::snprintf(first_solution, sizeof(first_solution), "%s",
-                        route_search_timing.attempted ? "none" : "not_run");
+          std::snprintf(first_solution, sizeof(first_solution), "none");
         }
         // The remainder also includes primitive generation, diagnostics and
         // pending-plan bookkeeping, not just candidate evaluation.

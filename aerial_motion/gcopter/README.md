@@ -85,7 +85,7 @@ Common parameters:
 - `DilateRadius`: obstacle inflation radius.
 - `MapBound`: planning map bounds, formatted as `[xmin, xmax, ymin, ymax, zmin, zmax]`.
 - `FixTargetHeight`, `TargetHeight`: use `TargetHeight` as the goal height when `FixTargetHeight` is enabled; otherwise use the target message's `position.z`.
-- `TimeoutRRT`: RRT search timeout.
+- `TimeoutRRT`: AITstar route-search time budget in seconds.
 - `MaxVelMag`, `MaxBdrMag`, `MaxTiltAngle`: velocity, body-rate, and tilt constraints. Both modes verify the continuous optimized trajectory against `MaxVelMag` and time-scale any violating trajectory before publishing it.
 - `GravAcc`: gravitational acceleration.
 - `WeightT`, `ChiVec`, `SmoothingEps`, `IntegralIntervs`, `RelCostTol`: optimizer parameters.
@@ -94,6 +94,8 @@ Trajectory execution parameters are consumed only by `traj_server`:
 
 - `CommandHz`: streaming rate of position commands.
 - `PublishYawCommand`: align command yaw with horizontal trajectory velocity; otherwise preserve measured yaw. The standalone demo forwards this setting to the Pose-to-FlightNav bridge.
+
+`RoutePlannerConfig` and `RoutePlannerBackend` provide map and route-search support without GCOPTER optimizer settings. `CommonPlannerConfig` and `PlannerBackend` extend them with corridor generation and trajectory optimization for the two GCOPTER planner modes.
 
 Both planners validate map bounds, voxel resolution, dynamic limits, and optimizer vectors during startup. Invalid configurations terminate with a descriptive fatal error. Point clouds are decoded by XYZ field name, so field reordering and padding are supported while non-finite points are ignored.
 

@@ -1,13 +1,5 @@
 # GCOPTER map/path configuration.
 TimeoutRRT: 0.01
-MaxBdrMag: 2.1
-MaxTiltAngle: 1.05
-GravAcc: 9.8
-WeightT: 20.0
-ChiVec: [1.0e+4, 1.0e+4, 1.0e+4, 1.0e+4]
-SmoothingEps: 1.0e-2
-IntegralIntervs: 16
-RelCostTol: 1.0e-5
 
 # Online replanning, plan activation, and goal handling.
 ReplanTriggerRatio: 0.3
