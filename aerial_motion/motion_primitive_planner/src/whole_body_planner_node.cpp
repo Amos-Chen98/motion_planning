@@ -496,7 +496,13 @@ private:
 
   PlanAttemptResult planOnce()
   {
-    if (!environment_.snapshot()->epoch) return PlanAttemptResult::kRetry;
+    if (!environment_.snapshot()->epoch)
+    {
+      ROS_WARN_ONCE("Whole-body planning is waiting for the first valid local map on %s; "
+                    "check point-cloud input and the mapping pipeline.",
+                    nh_.resolveName("rog_map/local_map").c_str());
+      return PlanAttemptResult::kRetry;
+    }
     if (goal_latched_.load())
     {
       return PlanAttemptResult::kIdle;
