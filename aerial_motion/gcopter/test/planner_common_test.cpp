@@ -237,16 +237,23 @@ int main(int argc, char **argv)
     return RUN_ALL_TESTS();
 }
 
-TEST(RouteSearchTimingTest, ReportsFirstExactSolutionAndResetsOnTimeout)
+class RouteSearchTimingTest : public testing::TestWithParam<std::string> {};
+
+TEST_P(RouteSearchTimingTest, ReportsFirstExactSolutionAndResetsOnTimeout)
 {
     ros::Time::init();
     gcopter_planner::RoutePlannerConfig config = validRouteConfig();
+    config.routePlannerType = GetParam();
+    config.timeoutRRT = 0.1;
     gcopter_planner::RouteSearchTiming timing;
     std::vector<Eigen::Vector3d> route;
     const Eigen::Vector3d start(-1.0, 0.0, 1.0);
     const Eigen::Vector3d goal(1.0, 0.0, 1.0);
     gcopter_planner::RoutePlannerBackend backend(config);
     ASSERT_TRUE(backend.searchPath(start, goal, route, &timing));
+    ASSERT_GE(route.size(), 2u);
+    EXPECT_TRUE(route.front().isApprox(start));
+    EXPECT_TRUE(route.back().isApprox(goal));
     EXPECT_GE(timing.first_exact_solution_ms, 0.0);
     EXPECT_GE(timing.total_ms, timing.first_exact_solution_ms);
 
@@ -258,6 +265,9 @@ TEST(RouteSearchTimingTest, ReportsFirstExactSolutionAndResetsOnTimeout)
     EXPECT_GE(timing.total_ms, 0.0);
 }
 
+INSTANTIATE_TEST_SUITE_P(RoutePlanners, RouteSearchTimingTest,
+                        testing::Values(std::string("AITstar"), std::string("RRTstar")));
+
 TEST(RoutePlannerConfigTest, ValidatesRouteSettingsWithoutOptimizerSettings)
 {
     auto config = validRouteConfig();
@@ -267,6 +277,11 @@ TEST(RoutePlannerConfigTest, ValidatesRouteSettingsWithoutOptimizerSettings)
     EXPECT_THROW(config.validateOrThrow(), std::invalid_argument);
     config = validRouteConfig();
     config.timeoutRRT = 0.0;
+    EXPECT_THROW(config.validateOrThrow(), std::invalid_argument);
+    config = validRouteConfig();
+    config.routePlannerType = "RRTstar";
+    EXPECT_NO_THROW(config.validateOrThrow());
+    config.routePlannerType = "unsupported";
     EXPECT_THROW(config.validateOrThrow(), std::invalid_argument);
 }
 

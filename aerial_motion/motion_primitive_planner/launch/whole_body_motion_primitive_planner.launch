@@ -34,13 +34,14 @@
     <arg name="planning_max_z" default="3.0" />
     <arg name="boundary_clearance" default="0.10" />
     <arg name="planning_horizon" default="3.0" />
+    <arg name="root_planner_type" default="RRTstar" />
     <arg name="planning_threads" default="0" />
-    <arg name="max_vel_mag" default="1.0" />
-    <arg name="max_angular_vel" default="1.0" />
+    <arg name="max_vel_mag" default="0.3" />
+    <arg name="max_angular_vel" default="0.3" />
     <arg name="publish_yaw_command" default="true" />
 
     <arg name="stability_check_fc_t" default="false" />
-    <arg name="fc_rp_min_threshold" default="3.2" />
+    <arg name="fc_rp_min_threshold" default="4.0" />
     <arg name="fc_t_min_threshold" default="0.01" />
     <arg name="overlap_min_clearance" default="0.01" />
 
@@ -98,6 +99,7 @@
         <param name="PlanningMaxZ" value="$(arg planning_max_z)" />
         <param name="BoundaryClearance" value="$(arg boundary_clearance)" />
         <param name="PlanningHorizon" value="$(arg planning_horizon)" />
+        <param name="RoutePlannerType" value="$(arg root_planner_type)" />
         <param name="PlanningThreads" value="$(arg planning_threads)" />
         <param name="MaxVelMag" value="$(arg max_vel_mag)" />
         <param name="MaxAngularVel" value="$(arg max_angular_vel)" />

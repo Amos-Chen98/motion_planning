@@ -32,6 +32,7 @@
 #include <ompl/base/SpaceInformation.h>
 #include <ompl/base/spaces/RealVectorStateSpace.h>
 #include <ompl/geometric/planners/informedtrees/AITstar.h>
+#include <ompl/geometric/planners/rrt/RRTstar.h>
 #include <ompl/base/objectives/PathLengthOptimizationObjective.h>
 #include <ompl/base/DiscreteMotionValidator.h>
 #include <ompl/base/PlannerTerminationCondition.h>
@@ -41,6 +42,8 @@
 #include <chrono>
 #include <deque>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <Eigen/Eigen>
 
 namespace sfc_gen
@@ -54,7 +57,8 @@ namespace sfc_gen
                            const Map *mapPtr,
                            const double &timeout,
                            std::vector<Eigen::Vector3d> &p,
-                           double *first_exact_solution_ms = nullptr)
+                           double *first_exact_solution_ms = nullptr,
+                           const std::string &planner_type = "AITstar")
     {
         if (first_exact_solution_ms)
         {
@@ -97,7 +101,19 @@ namespace sfc_gen
         auto pdef(std::make_shared<ompl::base::ProblemDefinition>(si));
         pdef->setStartAndGoalStates(start, goal);
         pdef->setOptimizationObjective(std::make_shared<ompl::base::PathLengthOptimizationObjective>(si));
-        auto planner(std::make_shared<ompl::geometric::AITstar>(si));
+        ompl::base::PlannerPtr planner;
+        if (planner_type == "RRTstar")
+        {
+            planner = std::make_shared<ompl::geometric::RRTstar>(si);
+        }
+        else if (planner_type == "AITstar")
+        {
+            planner = std::make_shared<ompl::geometric::AITstar>(si);
+        }
+        else
+        {
+            throw std::invalid_argument("Unsupported route planner: " + planner_type);
+        }
         planner->setProblemDefinition(pdef);
         planner->setup();
 
@@ -110,6 +126,16 @@ namespace sfc_gen
             return std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - search_start).count();
         };
+        // RRTstar publishes its exact path to pdef only when solve returns.
+        // Its intermediate callback records discovery time during optimization.
+        pdef->setIntermediateSolutionCallback(
+            [&](const ompl::base::Planner *, const std::vector<const ompl::base::State *> &,
+                const ompl::base::Cost) {
+                if (first_solution_ms < 0.0)
+                {
+                    first_solution_ms = elapsed_ms();
+                }
+            });
         const auto observe_first_solution = [&]() {
             if (first_solution_ms < 0.0 && pdef->hasExactSolution())
             {
@@ -130,8 +156,8 @@ namespace sfc_gen
 
         if (!solved || solved == ompl::base::PlannerStatus::APPROXIMATE_SOLUTION)
         {
-            ROS_WARN("AIT* failed to find an exact path within %.3fs (status: %s).",
-                     timeout, solved.asString().c_str());
+            ROS_WARN("%s failed to find an exact path within %.3fs (status: %s).",
+                     planner->getName().c_str(), timeout, solved.asString().c_str());
         }
 
         double cost = INFINITY;

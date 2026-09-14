@@ -42,6 +42,7 @@ struct RoutePlannerConfig
     double planningMaxZ = std::numeric_limits<double>::infinity();
     double boundaryClearance = 0.0;
     double timeoutRRT = 0.0;
+    std::string routePlannerType = "AITstar";
     double maxVelMag = 0.0;
     bool fixTargetHeight = false;
     double targetHeight = 1.0;

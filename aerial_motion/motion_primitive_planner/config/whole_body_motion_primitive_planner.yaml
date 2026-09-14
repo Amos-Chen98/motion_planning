@@ -1,5 +1,5 @@
 # GCOPTER map/path configuration.
-TimeoutRRT: 0.01
+TimeoutRRT: 0.1
 
 # Online replanning, plan activation, and goal handling.
 ReplanTriggerRatio: 0.3

@@ -46,6 +46,7 @@ RoutePlannerConfig::RoutePlannerConfig(const ros::NodeHandle &nhPriv, bool fixed
     nhPriv.param("PlanningMaxZ", planningMaxZ, planningMaxZ);
     nhPriv.param("BoundaryClearance", boundaryClearance, 0.0);
     nhPriv.param("TimeoutRRT", timeoutRRT, 0.0);
+    nhPriv.param<std::string>("RoutePlannerType", routePlannerType, routePlannerType);
     nhPriv.param("MaxVelMag", maxVelMag, 0.0);
     nhPriv.param("FixTargetHeight", fixTargetHeight, false);
     nhPriv.param("TargetHeight", targetHeight, 1.0);
@@ -104,6 +105,10 @@ std::string RoutePlannerConfig::validationError() const
     if (!isFinite(timeoutRRT) || timeoutRRT <= 0.0)
     {
         return "TimeoutRRT must be finite and positive";
+    }
+    if (routePlannerType != "AITstar" && routePlannerType != "RRTstar")
+    {
+        return "RoutePlannerType must be AITstar or RRTstar";
     }
     if (!isFinite(maxVelMag) || maxVelMag <= 0.0)
     {
@@ -361,7 +366,8 @@ bool RoutePlannerBackend::searchPath(
             start, goal,
             planningLower(), planningUpper(),
             this, timeout < 0 ? config_.timeoutRRT : timeout, route,
-            timing ? &timing->first_exact_solution_ms : nullptr);
+            timing ? &timing->first_exact_solution_ms : nullptr,
+            config_.routePlannerType);
     }
     catch (const std::exception &exception)
     {

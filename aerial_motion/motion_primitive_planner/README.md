@@ -44,6 +44,8 @@ The DRAGON robot description and its input topics must be available before launc
 
 The whole-body planner starts `root_state_to_flu_odom.launch` automatically. It converts the root-tail pose from `/dragon/root/tail_pose` to FLU odometry on `/dragon/root/flu_odom`.
 
+Root-route search defaults to RRT* in this launch file (`root_planner_type:=RRTstar`, passed as `RoutePlannerType`). `root_planner_type:=AITstar` selects AIT*. Both use the `TimeoutRRT` budget.
+
 ```bash
 roslaunch motion_primitive_planner whole_body_motion_primitive_planner.launch
 ```

@@ -85,7 +85,8 @@ Common parameters:
 - `DilateRadius`: obstacle inflation radius.
 - `MapBound`: planning map bounds, formatted as `[xmin, xmax, ymin, ymax, zmin, zmax]`.
 - `FixTargetHeight`, `TargetHeight`: use `TargetHeight` as the goal height when `FixTargetHeight` is enabled; otherwise use the target message's `position.z`.
-- `TimeoutRRT`: AITstar route-search time budget in seconds.
+- `RoutePlannerType`: route-search algorithm (`AITstar` by default, or `RRTstar`).
+- `TimeoutRRT`: route-search time budget in seconds.
 - `MaxVelMag`, `MaxBdrMag`, `MaxTiltAngle`: velocity, body-rate, and tilt constraints. Both modes verify the continuous optimized trajectory against `MaxVelMag` and time-scale any violating trajectory before publishing it.
 - `GravAcc`: gravitational acceleration.
 - `WeightT`, `ChiVec`, `SmoothingEps`, `IntegralIntervs`, `RelCostTol`: optimizer parameters.
