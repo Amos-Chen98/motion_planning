@@ -129,6 +129,47 @@ TEST_F(DragonCollision, LocalSnapshotPreservesCoalGeometryAndOldScene)
   EXPECT_TRUE(checker_->collides(configuration_,*moved->collision));
 }
 
+TEST_F(DragonCollision, FixedHeightLimitsCheckBodyVolumeWithoutObservedGround)
+{
+  rog_map_msgs::LocalMap m;
+  m.header.frame_id = "world"; m.epoch = 1; m.version = 1;
+  m.resolution = .1; m.inflation_steps = 0;
+  m.origin.x = -4; m.origin.y = -4; m.origin.z = -2; m.size = {81,81,81};
+  m.occupied_bits.resize((81*81*81+7)/8);
+  m.inflated_bits = m.occupied_bits;
+  gcopter_planner::RoutePlannerConfig c;
+  c.voxelWidth = .1; c.timeoutRRT = .01; c.maxVelMag = 1;
+  c.planningMinZ = 0; c.planningMaxZ = 2.5; c.boundaryClearance = .1;
+  for (double origin_z : {-2.0, -1.0}) {
+    m.origin.z = origin_z;
+    const auto scene = buildLocalScene(m, c);
+    EXPECT_EQ(scene->collision->occupiedVoxelCount(), 0u);
+    for (double root_z : {0.11, 2.39}) {
+      configuration_.link1_tail.z() = root_z;
+      EXPECT_FALSE(scene->route->query(configuration_.link1_tail));
+      EXPECT_TRUE(checker_->collides(configuration_, *scene->collision));
+    }
+    configuration_.link1_tail.z() = 1.0;
+    EXPECT_FALSE(checker_->collides(configuration_, *scene->collision));
+    // Downstream links can cross the floor even with a root well inside the slab.
+    configuration_.root_link_rotation =
+        Eigen::AngleAxisd(0.8, Eigen::Vector3d::UnitY()).toRotationMatrix();
+    EXPECT_TRUE(checker_->collides(configuration_, *scene->collision));
+    configuration_.root_link_rotation.setIdentity();
+    JointPlanResult joints;
+    joints.duration = 1.0;
+    joints.joint_waypoints = {{0.0, configuration_.joint_positions},
+                             {1.0, configuration_.joint_positions}};
+    joints.attitude_waypoints = {{0.0, {0.0, 0.0}}, {1.0, {0.0, 0.0}}};
+    EXPECT_FALSE(trajectoryCollides(linearRoot(configuration_.link1_tail,
+        Eigen::Vector3d::Zero(), 1.0), joints, 40.0, *scene->collision, *checker_));
+    EXPECT_TRUE(trajectoryCollides(linearRoot(configuration_.link1_tail,
+        Eigen::Vector3d(0, 0, -0.89), 1.0), joints, 40.0, *scene->collision, *checker_));
+    EXPECT_TRUE(trajectoryCollides(linearRoot(configuration_.link1_tail,
+        Eigen::Vector3d(0, 0, 1.39), 1.0), joints, 40.0, *scene->collision, *checker_));
+  }
+}
+
 TEST_F(DragonCollision, IncludesUrdfJointOffsetsAndCollisionOrigins)
 {
   // The yaw joints add 0.0515 m per segment beyond the 0.474 m link length.

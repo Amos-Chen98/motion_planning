@@ -4,6 +4,7 @@
 
 #include <motion_primitive_planner/dragon_geometry.h>
 
+#include <limits>
 #include <memory>
 #include <octomap/OcTree.h>
 
@@ -14,11 +15,15 @@ namespace motion_primitive_planner
 class CollisionEnvironment
 {
 public:
+  //! Height limits restrict body geometry without changing the OctoMap grid transform.
   CollisionEnvironment(std::shared_ptr<const octomap::OcTree> tree,
                        const Eigen::Isometry3d& world_from_grid,
-                       const Eigen::Vector3d& origin, const Eigen::Vector3d& corner);
+                       const Eigen::Vector3d& origin, const Eigen::Vector3d& corner,
+                       double min_z = -std::numeric_limits<double>::infinity(),
+                       double max_z = std::numeric_limits<double>::infinity());
   ~CollisionEnvironment();
 
+  //! Effective allowed bounds, intersected with the fixed height limits.
   const Eigen::Vector3d& origin() const;
   const Eigen::Vector3d& corner() const;
   size_t occupiedVoxelCount() const;

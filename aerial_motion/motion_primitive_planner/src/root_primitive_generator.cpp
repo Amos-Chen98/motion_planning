@@ -173,7 +173,8 @@ void PlanningEnvironment::replaceMap(
   if (!tree || std::abs(tree->getResolution() - backend->voxelScale()) > 1e-9 ||
       !origin.isApprox(backend->mapOrigin(), 1e-9) || !corner.isApprox(backend->mapCorner(), 1e-9))
     throw std::invalid_argument("OctoMap grid does not match the planning grid");
-  auto collision = std::make_shared<CollisionEnvironment>(tree, world_from_grid, origin, corner);
+  auto collision = std::make_shared<CollisionEnvironment>(tree, world_from_grid, origin, corner,
+      backend->planningLower().z(), backend->planningUpper().z());
   std::vector<Eigen::Vector3d> cells;
   const double width = tree->getResolution();
   for (auto it = tree->begin_leafs(); it != tree->end_leafs(); ++it)
@@ -283,8 +284,13 @@ PrimitiveBatch PlanningEnvironment::generate(const RootState& start, const Eigen
   const auto search_start = Clock::now();
   const auto deadline = search_start + std::chrono::duration<double>(config_.common.timeoutRRT);
   const double clearance = config_.common.dilateRadius + backend->voxelScale();
-  const Eigen::Vector3d low = backend->mapOrigin() + Eigen::Vector3d::Constant(clearance);
-  const Eigen::Vector3d high = backend->mapCorner() - Eigen::Vector3d::Constant(clearance);
+  const Eigen::Vector3d low = backend->planningLower() + Eigen::Vector3d::Constant(clearance);
+  const Eigen::Vector3d high = backend->planningUpper() - Eigen::Vector3d::Constant(clearance);
+  if ((low.array() >= high.array()).any()) {
+    result.failure = PrimitiveBatchFailure::kRouteSearchFailed;
+    result.detail = "local map and planning height limits have no usable intersection";
+    return result;
+  }
   const bool target_inside = (target.array() >= low.array()).all() && (target.array() < high.array()).all();
   Eigen::Vector3d projected = target;
   if (!target_inside && scene->epoch != 0) {

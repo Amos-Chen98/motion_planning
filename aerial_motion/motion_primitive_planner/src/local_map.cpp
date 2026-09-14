@@ -46,7 +46,8 @@ std::shared_ptr<const PlanningSceneSnapshot> buildLocalScene(
   transform.translation() = origin;
   auto scene = std::make_shared<PlanningSceneSnapshot>();
   scene->route = route;
-  scene->collision = std::make_shared<CollisionEnvironment>(tree, transform, origin, route->mapCorner());
+  scene->collision = std::make_shared<CollisionEnvironment>(tree, transform, origin, route->mapCorner(),
+      route->planningLower().z(), route->planningUpper().z());
   scene->map_stamp = map.header.stamp;
   scene->epoch = map.epoch;
   scene->version = map.version;

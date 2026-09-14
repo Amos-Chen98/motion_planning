@@ -42,6 +42,9 @@ RoutePlannerConfig::RoutePlannerConfig(const ros::NodeHandle &nhPriv, bool fixed
         // exact dimensions of their first received snapshot before planning.
         mapBound = {0.0, voxelWidth, 0.0, voxelWidth, 0.0, voxelWidth};
     }
+    nhPriv.param("PlanningMinZ", planningMinZ, planningMinZ);
+    nhPriv.param("PlanningMaxZ", planningMaxZ, planningMaxZ);
+    nhPriv.param("BoundaryClearance", boundaryClearance, 0.0);
     nhPriv.param("TimeoutRRT", timeoutRRT, 0.0);
     nhPriv.param("MaxVelMag", maxVelMag, 0.0);
     nhPriv.param("FixTargetHeight", fixTargetHeight, false);
@@ -64,6 +67,11 @@ CommonPlannerConfig::CommonPlannerConfig(const ros::NodeHandle &nhPriv)
 
 std::string RoutePlannerConfig::validationError() const
 {
+    if (!std::isfinite(boundaryClearance) || boundaryClearance < 0.0 ||
+        !(planningMinZ + boundaryClearance < planningMaxZ - boundaryClearance))
+    {
+        return "PlanningMinZ + BoundaryClearance must be below PlanningMaxZ - BoundaryClearance; clearance must be finite and non-negative";
+    }
     if (worldFrameId.empty())
     {
         return "WorldFrameId must not be empty";
@@ -244,7 +252,9 @@ void RoutePlannerBackend::setMapVoxels(
 
 bool RoutePlannerBackend::query(const Eigen::Vector3d &position) const
 {
-    return voxelMap_.query(position);
+    return !position.allFinite() ||
+           (position.array() < planningLower().array()).any() ||
+           (position.array() >= planningUpper().array()).any() || voxelMap_.query(position);
 }
 
 double RoutePlannerBackend::voxelScale() const
@@ -265,6 +275,20 @@ Eigen::Vector3d RoutePlannerBackend::mapOrigin() const
 Eigen::Vector3d RoutePlannerBackend::mapCorner() const
 {
     return voxelMap_.getCorner();
+}
+
+Eigen::Vector3d RoutePlannerBackend::planningLower() const
+{
+    Eigen::Vector3d lower = mapOrigin();
+    lower.z() = std::max(lower.z(), config_.planningMinZ + config_.boundaryClearance);
+    return lower;
+}
+
+Eigen::Vector3d RoutePlannerBackend::planningUpper() const
+{
+    Eigen::Vector3d upper = mapCorner();
+    upper.z() = std::min(upper.z(), config_.planningMaxZ - config_.boundaryClearance);
+    return upper;
 }
 
 long RoutePlannerBackend::voxelKey(const Eigen::Vector3d &position) const
@@ -301,8 +325,8 @@ Eigen::Vector3d RoutePlannerBackend::clampInsideMap(
 {
     const Eigen::Vector3d offset =
         Eigen::Vector3d::Constant(std::max(0.0, clearance));
-    const Eigen::Vector3d lower = voxelMap_.getOrigin() + offset;
-    const Eigen::Vector3d upper = voxelMap_.getCorner() - offset;
+    const Eigen::Vector3d lower = planningLower() + offset;
+    const Eigen::Vector3d upper = planningUpper() - offset;
     return point.cwiseMax(lower).cwiseMin(upper);
 }
 
@@ -330,12 +354,13 @@ bool RoutePlannerBackend::searchPath(
         *timing = RouteSearchTiming{};
     }
     route.clear();
+    if (query(start) || query(goal)) return false;
     try
     {
-        sfc_gen::planPath<voxel_map::VoxelMap>(
+        sfc_gen::planPath<RoutePlannerBackend>(
             start, goal,
-            voxelMap_.getOrigin(), voxelMap_.getCorner(),
-            &voxelMap_, timeout < 0 ? config_.timeoutRRT : timeout, route,
+            planningLower(), planningUpper(),
+            this, timeout < 0 ? config_.timeoutRRT : timeout, route,
             timing ? &timing->first_exact_solution_ms : nullptr);
     }
     catch (const std::exception &exception)

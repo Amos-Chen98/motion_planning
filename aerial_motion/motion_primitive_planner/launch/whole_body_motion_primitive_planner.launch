@@ -29,6 +29,10 @@
     <!-- Root-route guidance only; URDF/OctoMap collision uses zero extra margin. -->
     <arg name="dilate_radius" default="0.20" />
 
+    <!-- Fixed heights in world_frame_id, applied to the full collision geometry. -->
+    <arg name="planning_min_z" default="0.3" />
+    <arg name="planning_max_z" default="3.0" />
+    <arg name="boundary_clearance" default="0.10" />
     <arg name="planning_horizon" default="3.0" />
     <arg name="planning_threads" default="0" />
     <arg name="max_vel_mag" default="1.0" />
@@ -90,6 +94,9 @@
         <param name="RootChildFrameId" value="$(arg root_child_frame_id)" />
         <param name="VoxelWidth" value="$(arg voxel_width)" />
         <param name="DilateRadius" value="$(arg dilate_radius)" />
+        <param name="PlanningMinZ" value="$(arg planning_min_z)" />
+        <param name="PlanningMaxZ" value="$(arg planning_max_z)" />
+        <param name="BoundaryClearance" value="$(arg boundary_clearance)" />
         <param name="PlanningHorizon" value="$(arg planning_horizon)" />
         <param name="PlanningThreads" value="$(arg planning_threads)" />
         <param name="MaxVelMag" value="$(arg max_vel_mag)" />

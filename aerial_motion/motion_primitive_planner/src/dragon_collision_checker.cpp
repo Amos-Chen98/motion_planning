@@ -57,9 +57,10 @@ struct CollisionEnvironment::Data
 
 CollisionEnvironment::CollisionEnvironment(
     std::shared_ptr<const octomap::OcTree> tree, const Eigen::Isometry3d& world_from_grid,
-    const Eigen::Vector3d& origin, const Eigen::Vector3d& corner)
+    const Eigen::Vector3d& origin, const Eigen::Vector3d& corner,
+    double min_z, double max_z)
 {
-  if (!tree || !std::isfinite(tree->getResolution()) || tree->getResolution() <= 0 ||
+  if (std::isnan(min_z) || std::isnan(max_z) || !tree || !std::isfinite(tree->getResolution()) || tree->getResolution() <= 0 ||
       !origin.allFinite() || !corner.allFinite() || (corner.array() <= origin.array()).any() ||
       !world_from_grid.matrix().allFinite() ||
       !world_from_grid.linear().isApprox(Eigen::Matrix3d::Identity(), 1e-9) ||
@@ -68,6 +69,9 @@ CollisionEnvironment::CollisionEnvironment(
   auto data = std::make_shared<Data>();
   data->origin = origin;
   data->corner = corner;
+  // Keep the OctoMap transform unchanged; an empty intersection rejects all bodies.
+  data->origin.z() = std::max(origin.z(), min_z);
+  data->corner.z() = std::min(corner.z(), max_z);
   data->tree = std::move(tree);
   auto geometry = std::make_shared<coal::OcTree>(data->tree);
   geometry->setOccupancyThres(0.5);

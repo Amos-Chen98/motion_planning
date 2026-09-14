@@ -84,6 +84,58 @@ TEST(LocalMap, ConcurrentPublicationKeepsOldScenesImmutable) {
   writer.join();
   EXPECT_EQ(environment.snapshot()->version,102u);
 }
+TEST(LocalMap, FixedHeightLimitsSurviveSlidingAndClipGoals) {
+  auto c = config();
+  c.common.planningMinZ = 0.0;
+  c.common.planningMaxZ = 2.5;
+  c.common.boundaryClearance = 0.1;
+  PlanningEnvironment environment(c);
+  auto m = emptyMap();
+  RootState start;
+  start.position = Eigen::Vector3d(0, 0, 1);
+  for (double origin_z : {-3.0, -1.0}) {
+    m.origin.z = origin_z;
+    auto scene = buildLocalScene(m, c.common);
+    EXPECT_DOUBLE_EQ(scene->route->mapOrigin().z(), origin_z);
+    EXPECT_DOUBLE_EQ(scene->route->planningLower().z(), 0.1);
+    EXPECT_DOUBLE_EQ(scene->route->planningUpper().z(), 2.4);
+    EXPECT_DOUBLE_EQ(scene->collision->origin().z(), 0.1);
+    EXPECT_DOUBLE_EQ(scene->collision->corner().z(), 2.4);
+    EXPECT_TRUE(scene->route->query(Eigen::Vector3d(0, 0, 0.05)));
+    EXPECT_TRUE(scene->route->query(Eigen::Vector3d(0, 0, 2.45)));
+    EXPECT_FALSE(scene->route->query(start.position));
+    for (double goal_z : {-2.0, 4.0}) {
+      auto batch = environment.generate(start, Eigen::Vector3d(1, 0, goal_z), scene);
+      ASSERT_TRUE(batch.success()) << batch.detail;
+      EXPECT_FALSE(batch.terminal);
+      for (const auto& point : batch.local_route) {
+        EXPECT_GE(point.z(), 0.1);
+        EXPECT_LT(point.z(), 2.4);
+      }
+    }
+  }
+  // Keep accepting map updates outside the permitted slab, but reject planning.
+  m.origin.z = 3.0;
+  auto outside = buildLocalScene(m, c.common);
+  start.position.z() = 4.0;
+  EXPECT_FALSE(environment.generate(start, Eigen::Vector3d(1, 0, 4), outside).success());
+}
+
+TEST(LocalMap, RejectsInvalidHeightConfiguration) {
+  auto c = config().common;
+  c.planningMinZ = 1.0;
+  c.planningMaxZ = 0.0;
+  EXPECT_THROW(c.validateOrThrow(), std::invalid_argument);
+  c.planningMaxZ = 2.0;
+  c.boundaryClearance = 0.5;
+  EXPECT_THROW(c.validateOrThrow(), std::invalid_argument);
+  c.boundaryClearance = -0.1;
+  EXPECT_THROW(c.validateOrThrow(), std::invalid_argument);
+  c.boundaryClearance = 0.0;
+  c.planningMinZ = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(c.validateOrThrow(), std::invalid_argument);
+}
+
 TEST(LocalMap, DistantGoalSurvivesWindowMovement) {
   ros::Time::init();auto c=config();auto m=emptyMap();PlanningEnvironment environment(c);
   RootState start;start.position=Eigen::Vector3d(0,0,1);

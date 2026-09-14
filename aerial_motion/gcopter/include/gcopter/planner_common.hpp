@@ -15,6 +15,7 @@
 
 #include <Eigen/Geometry>
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,10 @@ struct RoutePlannerConfig
     double dilateRadius = 0.0;
     double voxelWidth = 0.0;
     std::vector<double> mapBound;
+    // Fixed world-frame height limits; infinite defaults preserve other users.
+    double planningMinZ = -std::numeric_limits<double>::infinity();
+    double planningMaxZ = std::numeric_limits<double>::infinity();
+    double boundaryClearance = 0.0;
     double timeoutRRT = 0.0;
     double maxVelMag = 0.0;
     bool fixTargetHeight = false;
@@ -85,6 +90,8 @@ public:
     Eigen::Vector3i mapSize() const;
     Eigen::Vector3d mapOrigin() const;
     Eigen::Vector3d mapCorner() const;
+    Eigen::Vector3d planningLower() const;
+    Eigen::Vector3d planningUpper() const;
     long voxelKey(const Eigen::Vector3d &position) const;
     Eigen::Vector3i voxelIdFromKey(long key) const;
     Eigen::Vector3d clampInsideMap(const Eigen::Vector3d &point,
