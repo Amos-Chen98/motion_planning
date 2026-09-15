@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<launch>
+    <!-- Start this launch manually when flight-state monitoring is wanted. -->
+    <arg name="robot_ns" default="dragon" />
+    <arg name="flight_state_topic" default="/$(arg robot_ns)/flight_state" />
+    <arg name="planner_node" default="/$(arg robot_ns)/whole_body_motion_primitive_planner" />
+
+    <group ns="$(arg robot_ns)">
+        <node pkg="motion_primitive_planner" type="whole_body_planner_stop_monitor.py"
+              name="whole_body_planner_stop_monitor" output="screen" respawn="false">
+            <remap from="flight_state" to="$(arg flight_state_topic)" />
+            <param name="planner_node" value="$(arg planner_node)" />
+        </node>
+    </group>
+</launch>

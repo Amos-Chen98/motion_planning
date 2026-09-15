@@ -52,6 +52,28 @@ roslaunch motion_primitive_planner whole_body_motion_primitive_planner.launch
 
 This chain is the sole full-state output source, replacing `gcopter/traj_server` and `multilink_copilot` full-state output.
 
+### Manually enable flight-state stopping
+
+Start the independent monitor in another terminal when flight-state monitoring is wanted. The main planner launch does not start it.
+
+```bash
+roslaunch motion_primitive_planner whole_body_planner_stop_monitor.launch
+```
+
+The monitor subscribes to `std_msgs/UInt8` on `/dragon/flight_state`. It stays idle for `HOVER_STATE=5`; the first received value other than `5` immediately requests ROS shutdown of `/dragon/whole_body_motion_primitive_planner`, even if it has never observed HOVER. No messages, including a lost state stream, cause no stop request. Stop the monitor with Ctrl-C to disable monitoring without stopping the planner.
+
+| Launch argument | Default | Purpose |
+| --- | --- | --- |
+| `robot_ns` | `dragon` | Robot namespace for the monitor and default topic/target. |
+| `flight_state_topic` | `/$(arg robot_ns)/flight_state` | Flight-state input topic. |
+| `planner_node` | `/$(arg robot_ns)/whole_body_motion_primitive_planner` | Exact ROS node to shut down. |
+
+For example, `roslaunch motion_primitive_planner whole_body_planner_stop_monitor.launch robot_ns:=dragon2 flight_state_topic:=/dragon2/flight_state planner_node:=/dragon2/my_planner` monitors a renamed planner. Relative `planner_node` names resolve within the monitor's namespace.
+
+Shutdown uses the same ROS node API as `rosnode kill`, stopping ROS communication while allowing the planner's active planning threads to finish cleanup. Only the named planner receives the request; mapping, filtering, and flight-control nodes continue running. Each master/node RPC has a 3-second socket timeout. A successful reply confirms acceptance of the request, not completion of process cleanup. Lookup errors, communication failures (including a lost shutdown reply), and rejected requests are logged and make the monitor exit with a nonzero status; check the planner before restarting the monitor manually. Requests are not retried automatically.
+
+After an accepted shutdown, the monitor exits. Restart the planner and monitor manually when needed; returning to state `5` does not restart planning. The planner must keep automatic respawn disabled, as in the supplied main launch.
+
 ## Configuration
 
 Environmental collision uses only the four `link1…4` URDF boxes and four `gimbal1…4_roll_module` cylinders. Their dimensions and collision origins come from the robot description, and KDL supplies their poses, including joint offsets. Collision queries use the six body-joint angles and always set gimbal roll/pitch to zero because the cylinders represent swept envelopes.

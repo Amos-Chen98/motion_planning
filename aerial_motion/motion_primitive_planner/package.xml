@@ -10,6 +10,7 @@
   <depend>aerial_robot_msgs</depend>
   <depend>roscpp</depend>
   <depend>rospy</depend>
+  <exec_depend>rosgraph</exec_depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>

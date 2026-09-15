@@ -142,6 +142,7 @@ install(TARGETS motion_primitive_planner_core whole_body_motion_primitive_planne
 )
 catkin_install_python(PROGRAMS
   scripts/root_pose_to_flu_odom.py
+  scripts/whole_body_planner_stop_monitor.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(DIRECTORY include/${PROJECT_NAME}/ DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
