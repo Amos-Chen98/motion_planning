@@ -1,4 +1,10 @@
 <?xml version="1.0"?>
 <launch>
+    <arg name="frame_id" default="world" />
+
     <node pkg="rviz" type="rviz" name="rviz" output="screen" args="-d $(find motion_primitive_planner)/rviz/whole_body_nav.rviz" />
+
+    <node pkg="naraha_center" type="interactive_marker_node.py" name="nav_target_marker" output="screen">
+        <param name="frame_id" value="$(arg frame_id)" />
+    </node>
 </launch>
