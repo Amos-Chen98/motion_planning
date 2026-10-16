@@ -3,30 +3,105 @@
 import itertools
 import math
 import random
+from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import Tuple
 
-NUM_CASES = 100
-RANDOM_SEED = 0
-FRAME_ID = "world"
-OUTPUT_DIR = Path("test_data") / "geo_only_sim"
-FILE_PREFIX = "case_"
-ROOT_POSITION = (0.5, 0.0, 1.0)
-ROLL = 0.0
-PITCH_RANGE = (-0.2, 0.2)
-X_RANGE = (-2.0, 2.0)
-Y_RANGE = (-2.0, 2.0)
-Z_RANGE = (0.5, 4.0)
-MAX_ATTEMPTS_PER_CASE = 1000
-
-WAYPOINT_COUNT = 4
-ROUND_DIGITS = 9
-SEGMENT_EPSILON = 1e-9
-DOT_EPSILON = 1e-9
-ANGLE_TOLERANCE = 1e-9
+import yaml
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MONO_PLANNER_DIR = SCRIPT_DIR.parent.parent
-ROOT_FORWARD_AXIS = (-1.0, 0.0, 0.0)
+CONFIG_FILE = MONO_PLANNER_DIR / "config/waypoint_testcases/geo_only_sim.yaml"
+
+
+@dataclass(frozen=True)
+class GeneratorConfig:
+    num_cases: int
+    random_seed: int
+    frame_id: str
+    output_dir: Path
+    file_prefix: str
+    root_position: Tuple[float, float, float]
+    root_forward_axis: Tuple[float, float, float]
+    roll: float
+    pitch_range: Tuple[float, float]
+    x_range: Tuple[float, float]
+    y_range: Tuple[float, float]
+    z_range: Tuple[float, float]
+    max_attempts_per_case: int
+    waypoint_count: int
+    round_digits: int
+    segment_epsilon: float
+    dot_epsilon: float
+    angle_tolerance: float
+
+
+def load_config(config_path):
+    config_path = Path(config_path)
+    try:
+        with config_path.open(encoding="utf-8") as handle:
+            values = yaml.safe_load(handle)
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"Cannot load generator config '{config_path}': {exc}") from exc
+
+    def invalid(field, message):
+        raise ValueError(f"Generator config '{config_path}', field '{field}': {message}")
+
+    if not isinstance(values, dict):
+        invalid("<root>", "expected a YAML mapping.")
+
+    expected_fields = {field.name for field in fields(GeneratorConfig)}
+    for field in sorted(expected_fields):
+        if field not in values:
+            invalid(field, "required field is missing.")
+    for field in values:
+        if field not in expected_fields:
+            invalid(field, "unknown field.")
+
+    for field in ("num_cases", "random_seed", "max_attempts_per_case", "waypoint_count", "round_digits"):
+        if type(values[field]) is not int:
+            invalid(field, "expected an integer.")
+        if field != "random_seed":
+            minimum = 0 if field == "round_digits" else 1
+            if values[field] < minimum:
+                invalid(field, f"must be at least {minimum}.")
+
+    for field in ("frame_id", "output_dir", "file_prefix"):
+        if not isinstance(values[field], str) or not values[field].strip():
+            invalid(field, "expected a non-empty string.")
+    if any(character in values["file_prefix"] for character in "/\\*?[]"):
+        invalid("file_prefix", "must be a filename prefix without path separators or glob patterns.")
+
+    def finite_number(value, field):
+        if type(value) not in (int, float):
+            invalid(field, "expected a finite number.")
+        try:
+            number = float(value)
+        except OverflowError:
+            invalid(field, "expected a finite number.")
+        if not math.isfinite(number):
+            invalid(field, "expected a finite number.")
+        return number
+
+    for field in ("roll", "segment_epsilon", "dot_epsilon", "angle_tolerance"):
+        values[field] = finite_number(values[field], field)
+        if field != "roll" and values[field] <= 0.0:
+            invalid(field, "must be greater than zero.")
+
+    for field in ("root_position", "root_forward_axis", "pitch_range", "x_range", "y_range", "z_range"):
+        size = 3 if field in ("root_position", "root_forward_axis") else 2
+        if not isinstance(values[field], list) or len(values[field]) != size:
+            invalid(field, f"expected a list of {size} numbers.")
+        values[field] = tuple(
+            finite_number(value, f"{field}[{index}]") for index, value in enumerate(values[field])
+        )
+        if size == 2 and values[field][0] > values[field][1]:
+            invalid(field, "lower bound must not exceed upper bound.")
+    if all(component == 0.0 for component in values["root_forward_axis"]):
+        invalid("root_forward_axis", "must be a nonzero vector.")
+
+    values["output_dir"] = Path(values["output_dir"])
+    return GeneratorConfig(**values)
 
 
 def wrap_angle(angle):
@@ -45,9 +120,9 @@ def norm(vector):
     return math.sqrt(dot(vector, vector))
 
 
-def unit_vector(vector):
+def unit_vector(vector, config):
     vector_norm = norm(vector)
-    if vector_norm <= SEGMENT_EPSILON:
+    if vector_norm <= config.segment_epsilon:
         return None
     return tuple(component / vector_norm for component in vector)
 
@@ -65,15 +140,15 @@ def forward_axis_from_pitch_yaw(pitch, yaw):
     )
 
 
-def rounded_value(value):
-    rounded = round(float(value), ROUND_DIGITS)
-    if abs(rounded) < 0.5 * 10 ** (-ROUND_DIGITS):
+def rounded_value(value, config):
+    rounded = round(float(value), config.round_digits)
+    if abs(rounded) < 0.5 * 10 ** (-config.round_digits):
         return 0.0
     return rounded
 
 
-def format_float(value):
-    text = f"{rounded_value(value):.{ROUND_DIGITS}f}"
+def format_float(value, config):
+    text = f"{rounded_value(value, config):.{config.round_digits}f}"
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     if "." not in text:
@@ -83,52 +158,52 @@ def format_float(value):
     return text
 
 
-def build_segment_directions(ordered_positions):
-    knot_positions = [ROOT_POSITION]
+def build_segment_directions(ordered_positions, config):
+    knot_positions = [config.root_position]
     knot_positions.extend(ordered_positions)
-    knot_positions.append(ROOT_POSITION)
+    knot_positions.append(config.root_position)
 
     segment_directions = []
     for start_position, end_position in zip(knot_positions[:-1], knot_positions[1:]):
-        direction = unit_vector(subtract(end_position, start_position))
+        direction = unit_vector(subtract(end_position, start_position), config)
         if direction is None:
             return None
         segment_directions.append(direction)
     return segment_directions
 
 
-def validate_segment_directions(segment_directions):
+def validate_segment_directions(segment_directions, config):
     if segment_directions is None:
         return "Generated waypoints contain a zero-length segment."
-    if dot(ROOT_FORWARD_AXIS, segment_directions[0]) <= DOT_EPSILON:
+    if dot(config.root_forward_axis, segment_directions[0]) <= config.dot_epsilon:
         return "Root forward axis is incompatible with the first segment."
-    if dot(ROOT_FORWARD_AXIS, segment_directions[-1]) <= DOT_EPSILON:
+    if dot(config.root_forward_axis, segment_directions[-1]) <= config.dot_epsilon:
         return "Root forward axis is incompatible with the last segment."
     return None
 
 
-def yaw_from_segment_bisector(incoming_direction, outgoing_direction):
+def yaw_from_segment_bisector(incoming_direction, outgoing_direction, config):
     yaw_x = incoming_direction[0] + outgoing_direction[0]
     yaw_y = incoming_direction[1] + outgoing_direction[1]
-    if yaw_x * yaw_x + yaw_y * yaw_y <= SEGMENT_EPSILON:
+    if yaw_x * yaw_x + yaw_y * yaw_y <= config.segment_epsilon:
         return None
     return math.atan2(yaw_y, yaw_x)
 
 
-def validate_waypoint_forward_axis(forward_axis, incoming_direction, outgoing_direction, waypoint_index):
-    if dot(forward_axis, incoming_direction) <= DOT_EPSILON:
+def validate_waypoint_forward_axis(forward_axis, incoming_direction, outgoing_direction, waypoint_index, config):
+    if dot(forward_axis, incoming_direction) <= config.dot_epsilon:
         return f"Waypoint {waypoint_index} faces away from its incoming segment."
-    if dot(forward_axis, outgoing_direction) <= DOT_EPSILON:
+    if dot(forward_axis, outgoing_direction) <= config.dot_epsilon:
         return f"Waypoint {waypoint_index} faces away from its outgoing segment."
     return None
 
 
-def build_nonholonomic_waypoints(ordered_positions, pitches):
+def build_nonholonomic_waypoints(ordered_positions, pitches, config):
     if len(ordered_positions) != len(pitches):
         raise ValueError("ordered_positions and pitches must have the same length.")
 
-    segment_directions = build_segment_directions(ordered_positions)
-    violation = validate_segment_directions(segment_directions)
+    segment_directions = build_segment_directions(ordered_positions, config)
+    violation = validate_segment_directions(segment_directions, config)
     if violation is not None:
         return None, violation
 
@@ -136,7 +211,7 @@ def build_nonholonomic_waypoints(ordered_positions, pitches):
     for waypoint_index, (position, pitch) in enumerate(zip(ordered_positions, pitches)):
         incoming_direction = segment_directions[waypoint_index]
         outgoing_direction = segment_directions[waypoint_index + 1]
-        yaw = yaw_from_segment_bisector(incoming_direction, outgoing_direction)
+        yaw = yaw_from_segment_bisector(incoming_direction, outgoing_direction, config)
         if yaw is None:
             return None, f"Waypoint {waypoint_index} does not have a well-defined horizontal segment bisector."
 
@@ -146,26 +221,27 @@ def build_nonholonomic_waypoints(ordered_positions, pitches):
             incoming_direction,
             outgoing_direction,
             waypoint_index,
+            config,
         )
         if violation is not None:
             return None, violation
 
-        waypoints.append([position[0], position[1], position[2], ROLL, pitch, yaw])
+        waypoints.append([position[0], position[1], position[2], config.roll, pitch, yaw])
 
     return waypoints, None
 
 
-def build_candidate_waypoints(ordered_positions, pitches):
-    waypoints, _violation = build_nonholonomic_waypoints(ordered_positions, pitches)
+def build_candidate_waypoints(ordered_positions, pitches, config):
+    waypoints, _violation = build_nonholonomic_waypoints(ordered_positions, pitches, config)
     if waypoints is None:
         return None
 
-    return [[rounded_value(value) for value in waypoint] for waypoint in waypoints]
+    return [[rounded_value(value, config) for value in waypoint] for waypoint in waypoints]
 
 
-def validate_generated_case(waypoints):
-    if len(waypoints) != WAYPOINT_COUNT:
-        raise ValueError(f"Expected {WAYPOINT_COUNT} waypoints, got {len(waypoints)}.")
+def validate_generated_case(waypoints, config):
+    if len(waypoints) != config.waypoint_count:
+        raise ValueError(f"Expected {config.waypoint_count} waypoints, got {len(waypoints)}.")
 
     ordered_positions = []
     pitches = []
@@ -175,92 +251,94 @@ def validate_generated_case(waypoints):
             raise ValueError(f"Waypoint {waypoint_index} does not have 6 values.")
 
         x_value, y_value, z_value, roll, pitch = waypoint[:5]
-        if not math.isclose(roll, ROLL, rel_tol=0.0, abs_tol=ANGLE_TOLERANCE):
-            raise ValueError(f"Waypoint {waypoint_index} roll is not {ROLL}.")
-        if not (PITCH_RANGE[0] - ANGLE_TOLERANCE <= pitch <= PITCH_RANGE[1] + ANGLE_TOLERANCE):
-            raise ValueError(f"Waypoint {waypoint_index} pitch {pitch} is outside {PITCH_RANGE}.")
+        if not math.isclose(roll, config.roll, rel_tol=0.0, abs_tol=config.angle_tolerance):
+            raise ValueError(f"Waypoint {waypoint_index} roll is not {config.roll}.")
+        if not (config.pitch_range[0] - config.angle_tolerance <= pitch <= config.pitch_range[1] + config.angle_tolerance):
+            raise ValueError(f"Waypoint {waypoint_index} pitch {pitch} is outside {config.pitch_range}.")
 
         ordered_positions.append((x_value, y_value, z_value))
         pitches.append(pitch)
 
-    expected_waypoints, violation = build_nonholonomic_waypoints(ordered_positions, pitches)
+    expected_waypoints, violation = build_nonholonomic_waypoints(ordered_positions, pitches, config)
     if violation is not None:
         raise ValueError(violation)
 
     for waypoint_index, (waypoint, expected_waypoint) in enumerate(zip(waypoints, expected_waypoints)):
-        if angular_distance(waypoint[5], expected_waypoint[5]) > ANGLE_TOLERANCE:
+        if angular_distance(waypoint[5], expected_waypoint[5]) > config.angle_tolerance:
             raise ValueError(
                 f"Waypoint {waypoint_index} yaw {waypoint[5]} does not match the segment-bisector construction."
             )
 
 
-def sample_waypoint_positions(rng):
+def sample_waypoint_positions(rng, config):
     return [
         (
-            rng.uniform(*X_RANGE),
-            rng.uniform(*Y_RANGE),
-            rng.uniform(*Z_RANGE),
+            rng.uniform(*config.x_range),
+            rng.uniform(*config.y_range),
+            rng.uniform(*config.z_range),
         )
-        for _ in range(WAYPOINT_COUNT)
+        for _ in range(config.waypoint_count)
     ]
 
 
-def generate_waypoint_case(rng):
-    for _attempt in range(MAX_ATTEMPTS_PER_CASE):
-        positions = sample_waypoint_positions(rng)
-        pitches = [rng.uniform(*PITCH_RANGE) for _ in range(WAYPOINT_COUNT)]
+def generate_waypoint_case(rng, config):
+    for _attempt in range(config.max_attempts_per_case):
+        positions = sample_waypoint_positions(rng, config)
+        pitches = [rng.uniform(*config.pitch_range) for _ in range(config.waypoint_count)]
 
         for ordered_positions in itertools.permutations(positions):
-            waypoints = build_candidate_waypoints(ordered_positions, pitches)
+            waypoints = build_candidate_waypoints(ordered_positions, pitches, config)
             if waypoints is None:
                 continue
 
             try:
-                validate_generated_case(waypoints)
+                validate_generated_case(waypoints, config)
             except ValueError:
                 continue
             return waypoints
 
     raise RuntimeError(
-        f"Failed to generate a feasible {WAYPOINT_COUNT}-waypoint case within {MAX_ATTEMPTS_PER_CASE} attempts."
+        f"Failed to generate a feasible {config.waypoint_count}-waypoint case "
+        f"within {config.max_attempts_per_case} attempts."
     )
 
 
-def output_directory():
-    return MONO_PLANNER_DIR / OUTPUT_DIR
+def output_directory(config):
+    return MONO_PLANNER_DIR / config.output_dir
 
 
-def clean_output_directory(path):
+def clean_output_directory(path, config):
     removed_count = 0
-    for file_path in path.glob(f"{FILE_PREFIX}*.yaml"):
+    for file_path in path.glob(f"{config.file_prefix}*.yaml"):
         file_path.unlink()
         removed_count += 1
     return removed_count
 
 
-def write_case_file(file_path, waypoints):
-    lines = [f"frame_id: {FRAME_ID}", "waypoints:"]
+def write_case_file(file_path, waypoints, config):
+    lines = [f"frame_id: {config.frame_id}", "waypoints:"]
     for waypoint in waypoints:
-        waypoint_text = ", ".join(format_float(value) for value in waypoint)
+        waypoint_text = ", ".join(format_float(value, config) for value in waypoint)
         lines.append(f"  - [{waypoint_text}]")
     file_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main():
-    rng = random.Random(RANDOM_SEED)
-    target_directory = output_directory()
+    config = load_config(CONFIG_FILE)
+    rng = random.Random(config.random_seed)
+    target_directory = output_directory(config)
     target_directory.mkdir(parents=True, exist_ok=True)
-    removed_count = clean_output_directory(target_directory)
+    removed_count = clean_output_directory(target_directory, config)
 
-    filename_width = max(4, len(str(NUM_CASES)))
-    for case_index in range(1, NUM_CASES + 1):
-        waypoints = generate_waypoint_case(rng)
-        file_name = f"{FILE_PREFIX}{case_index:0{filename_width}d}.yaml"
-        write_case_file(target_directory / file_name, waypoints)
+    filename_width = max(4, len(str(config.num_cases)))
+    for case_index in range(1, config.num_cases + 1):
+        waypoints = generate_waypoint_case(rng, config)
+        file_name = f"{config.file_prefix}{case_index:0{filename_width}d}.yaml"
+        write_case_file(target_directory / file_name, waypoints, config)
 
     print(
-        f"Generated {NUM_CASES} waypoint testcases in {target_directory} "
-        f"(removed {removed_count} existing {FILE_PREFIX}*.yaml files first)."
+        f"Generated {config.num_cases} waypoint testcases in {target_directory} "
+        f"(removed {removed_count} existing {config.file_prefix}*.yaml files first)."
     )
 
 

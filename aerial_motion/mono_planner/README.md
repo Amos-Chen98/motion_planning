@@ -123,3 +123,23 @@ To keep replanning whenever waypoint poses or the waypoint topic set changes:
 ```bash
 roslaunch mono_planner waypoint_conditioned_planner.launch nonholo:=true robot_frame_type:=LINK replan:=true
 ```
+
+## 3. Generate Waypoint Test Cases
+
+The standalone [generator](scripts/tools/generate_waypoint_testcases.py) reads all generation settings from [config/waypoint_testcases/geo_only_sim.yaml](config/waypoint_testcases/geo_only_sim.yaml). The default configuration produces 100 reproducible cases with four waypoints each in `test_data/geo_only_sim`, using random seed `0` and the root position `(0.5, 0, 1)`.
+
+Run from the `mono_planner` package directory:
+
+```bash
+python3 scripts/tools/generate_waypoint_testcases.py
+```
+
+To create another setup, copy the YAML file, edit its settings, and change the generator's fixed `CONFIG_FILE` path to select the new file:
+
+```python
+CONFIG_FILE = MONO_PLANNER_DIR / "config/waypoint_testcases/geo_only_sim.yaml"
+```
+
+Each run loads one configuration. Relative `output_dir` paths are resolved from the `mono_planner` package directory, independently of the current working directory; absolute output paths are also supported. Positions use meters and angles use radians. The configuration includes sampling ranges, root pose constraints, output naming, retry limits, rounding precision, and numerical tolerances.
+
+The generator validates the configuration before creating the output directory or removing existing cases. A successful configuration load is followed by removal of files matching `<file_prefix>*.yaml` in the selected output directory before generation begins, so use a separate `output_dir` for each dataset you want to retain.

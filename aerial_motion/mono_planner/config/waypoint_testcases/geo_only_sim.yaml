@@ -1,0 +1,23 @@
+# Copy this file and change CONFIG_FILE in the generator to select another setup.
+num_cases: 100
+random_seed: 0
+frame_id: world
+# Relative paths are resolved from the mono_planner package directory.
+output_dir: test_data/geo_only_sim
+file_prefix: case_
+
+# Positions are in meters; angles are in radians.
+root_position: [0.5, 0.0, 1.0]
+root_forward_axis: [-1.0, 0.0, 0.0]
+waypoint_count: 4
+roll: 0.0
+pitch_range: [-0.2, 0.2]
+x_range: [-2.0, 2.0]
+y_range: [-2.0, 2.0]
+z_range: [0.5, 4.0]
+max_attempts_per_case: 1000
+
+round_digits: 9
+segment_epsilon: 1.0e-9
+dot_epsilon: 1.0e-9
+angle_tolerance: 1.0e-9
