@@ -42,8 +42,7 @@ roslaunch multilink_copilot geometry_only_waypoint_sim.launch link_num:=4 launch
   use `3` through `10` to reproduce the geometry-only link-count sweep in the
   paper.
 - `link_length`: nominal link length in meters. Default: `0.455`.
-- `waypoint_config`: waypoint YAML path relative to the `mono_planner`
-  package. Default: `test_data/case_0001.yaml`.
+- `waypoint_config`: waypoint YAML path relative to the `mono_planner` package. Default: `test_data/geo_only_sim/case_0001.yaml`.
 - `total_trajectory_time`: duration of the waypoint-conditioned root-link tail
   trajectory. Default: `60.0`.
 - `launch_rviz`: whether to open RViz with the geometry-only marker config.
@@ -54,7 +53,7 @@ Example with a different waypoint case:
 ```bash
 roslaunch multilink_copilot geometry_only_waypoint_sim.launch \
   link_num:=5 \
-  waypoint_config:=test_data/case_0008.yaml
+  waypoint_config:=test_data/geo_only_sim/case_0008.yaml
 ```
 
 ## Main Topics

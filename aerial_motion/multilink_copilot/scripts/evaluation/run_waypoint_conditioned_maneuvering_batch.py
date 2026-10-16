@@ -78,7 +78,7 @@ def find_package_dir(package_name):
 SCRIPT_PATH = Path(__file__).resolve()
 PACKAGE_DIR = SCRIPT_PATH.parents[2]
 MONO_PLANNER_DIR = PACKAGE_DIR.parent / "mono_planner"
-DEFAULT_CASE_DIR = MONO_PLANNER_DIR / "test_data"
+DEFAULT_CASE_DIR = MONO_PLANNER_DIR / "test_data" / "geo_only_sim"
 DEFAULT_OUTPUT_ROOT = find_package_dir("data_manager") / "dragon_copilot" / "data" / "envelope_width" / "waypoint_conditioned_batch"
 PLANNER_NODE_NAMES = (
     f"/{ROBOT_NS}/holo_wpt_cond_planner",

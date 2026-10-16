@@ -8,7 +8,7 @@ from pathlib import Path
 NUM_CASES = 100
 RANDOM_SEED = 0
 FRAME_ID = "world"
-OUTPUT_DIR = Path("test_data")
+OUTPUT_DIR = Path("test_data") / "geo_only_sim"
 FILE_PREFIX = "case_"
 ROOT_POSITION = (0.5, 0.0, 1.0)
 ROLL = 0.0

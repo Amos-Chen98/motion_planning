@@ -16,7 +16,7 @@
     <arg name="seed_yaw" default="0.0" />
     <arg name="seed_publish_rate_hz" default="10.0" />
 
-    <arg name="waypoint_config" default="test_data/case_0001.yaml" />
+    <arg name="waypoint_config" default="test_data/geo_only_sim/case_0001.yaml" />
     <arg name="waypoint_publish_rate_hz" default="60.0" />
     <arg name="planner_publish_rate_hz" default="40.0" />
     <arg name="total_trajectory_time" default="60.0" />
