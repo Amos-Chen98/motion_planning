@@ -14,17 +14,15 @@ Both automatic and manual trials publish every waypoint pose/ring and the comple
 **Run experiments.** Paths are constants in `run_projection_robustness_batch.py`, resolved through `rospkg`; no exports or path arguments are needed. Results go under `data_manager/dragon_copilot/data/rosbag/projection_robustness/`.
 
 ~~~bash
-# All 100 cases → batch_100/
+# All 100 cases → batch_100_right/
 rosrun multilink_copilot run_projection_robustness_batch.py
 # Resume the same batch
 rosrun multilink_copilot run_projection_robustness_batch.py --resume
-# Selected cases → batch_100_single/
-rosrun multilink_copilot run_projection_robustness_batch.py --cases 1
 ~~~
 
-Ctrl+C interrupts and cleans up the processes. Resume with unchanged code, configuration, and case selection; completed/failed cases are skipped, and interrupted cases are archived before retrying. Edit the output constants for a separate batch.
+Automatic runs always use the complete 100-case dataset in `CASE_DIR`. Ctrl+C interrupts and cleans up the processes. Resume with unchanged code, configuration, and dataset; completed/failed cases are skipped, and interrupted cases are archived before retrying. Edit the output constants for a separate batch.
 
-**Manual simulation and recording.** Use three terminals. In B, press `r` to arm and `t` to take off. C initializes the robot, starts copilot, plays references, and records to `batch_100_manual/`. With `--attach`, C also streams the planner's stdout/stderr as it runs, starting when copilot launches after initialization.
+**Manual simulation and recording.** Use three terminals and select one case with `--attach --case N`. In B, press `r` to arm and `t` to take off. C initializes the robot, starts copilot, plays references, and records to `batch_100_manual/`. With `--attach`, C also streams the planner's stdout/stderr as it runs, starting when copilot launches after initialization.
 
 By default, each manual run replaces the selected case's existing directory (including its bag and trial metadata) and refreshes the batch manifest and summary. Other case directories are kept. No overwrite flag is required, and changed code/configuration or case selection is accepted. Add `--resume` explicitly to use the usual resume checks and skip completed/failed cases instead.
 
@@ -34,7 +32,7 @@ roslaunch multilink_copilot projection_robustness_sim.launch
 # Terminal B
 rosrun aerial_robot_base keyboard_command.py
 # Terminal C
-rosrun multilink_copilot run_projection_robustness_batch.py --cases 1 --attach
+rosrun multilink_copilot run_projection_robustness_batch.py --attach --case 1
 ~~~
 
 For skip-command-publication events, watch Terminal C for `[CopilotPlanner] Failed to find a stable joint target; skipping this control cycle` or `[CopilotPlanner] Skipping full_state_target: ...` (joint-step or predicted-tilt limit). These ERROR/WARN messages appear with the default `verbose:=false`; repeated messages are throttled to once per 1.0/0.5 seconds, respectively, so console line counts are not skip counts. The first due root update rejected by the planner is recorded on `/dragon/copilot/first_skip_stamp` and in `trial.json` as `first_skip_stamp`.

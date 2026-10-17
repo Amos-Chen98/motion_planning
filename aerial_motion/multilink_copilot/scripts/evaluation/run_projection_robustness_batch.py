@@ -165,7 +165,7 @@ class Trial:
         self.latest, self.received = {}, {}
         self.events = []
         self.reference_count = 0
-        self.meta = dict(case=Path(args.case).stem, case_sha256=digest(args.case),
+        self.meta = dict(case=Path(args.case_file).stem, case_sha256=digest(args.case_file),
                          status="starting", config=config, started_utc=datetime.now(timezone.utc).isoformat())
         self.start_wall = time.monotonic()
         self.last_clock = None
@@ -267,7 +267,7 @@ class Trial:
         self.subscribers.append(rospy.Subscriber("/dragon/mono_planner/traj_marker", MarkerArray,
                                                 lambda msg: self.receive("visualization", msg), queue_size=1))
         visualization = self.launch("visualization", ["rosrun", "multilink_copilot", "robustness_reference_publisher.py",
-            "--case", self.args.case, "--duration", str(self.config["trajectory_time"]),
+            "--case", self.args.case_file, "--duration", str(self.config["trajectory_time"]),
             "--rate", str(self.config["reference_rate"]), "--visualization-only"])
         self.wait(lambda: "visualization" in self.latest, 30, "visualization_startup_failed", True)
 
@@ -330,7 +330,7 @@ class Trial:
         self.meta["status"] = "running"
         save_json(self.output / "trial.json", self.meta)
         reference = self.launch("reference", ["rosrun", "multilink_copilot", "robustness_reference_publisher.py",
-            "--case", self.args.case, "--duration", str(self.config["trajectory_time"]),
+            "--case", self.args.case_file, "--duration", str(self.config["trajectory_time"]),
             "--rate", str(self.config["reference_rate"])])
         finished = None
         while True:
@@ -388,30 +388,35 @@ class Trial:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", nargs="+", type=int)
-    parser.add_argument("--case-limit", type=int)
+    parser.add_argument("--case", type=int, help="Case number for a single manual run; requires --attach")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--gui", action="store_true", default=True,
                         help="Show simulation windows (enabled by default)")
     parser.add_argument("--attach", action="store_true",
                         help="Use a manually started simulator, stream planner output, and overwrite the selected case unless --resume")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--case", help=argparse.SUPPRESS)
     # Per-case paths are passed internally to isolated workers, not supplied by the user.
+    parser.add_argument("--case-file", help=argparse.SUPPRESS)
     parser.add_argument("--output", help=argparse.SUPPRESS)
     parser.add_argument("--config", help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if not args.worker and (args.output is not None or args.config is not None or args.case is not None):
-        parser.error("Edit the path constants at the top of this script; path arguments are internal to workers")
-    if args.worker and not all((args.output, args.config, args.case)):
-        parser.error("Internal worker requires case, output, and configuration paths")
+    if args.worker:
+        if not all((args.output, args.config, args.case_file)) or args.case is not None:
+            parser.error("Internal worker requires case-file, output, and configuration paths")
+    else:
+        if any(value is not None for value in (args.output, args.config, args.case_file)):
+            parser.error("Edit the path constants at the top of this script; path arguments are internal to workers")
+        if args.attach:
+            if args.case is None or args.case <= 0:
+                parser.error("--attach requires --case with a positive case number")
+        elif args.case is not None:
+            parser.error("--case requires --attach; automatic runs use the complete dataset")
     signal.signal(signal.SIGINT, interrupted)
     signal.signal(signal.SIGTERM, interrupted)
     pkg = package_dir()
     config_path = Path(args.config or CONFIG_FILE).resolve()
     config = yaml.safe_load(config_path.read_text())
-    default_output = MANUAL_OUTPUT_DIR if args.attach else (
-        SELECTED_OUTPUT_DIR if args.cases or args.case_limit is not None else OUTPUT_DIR)
+    default_output = MANUAL_OUTPUT_DIR if args.attach else OUTPUT_DIR
     output = Path(args.output or default_output).resolve()
     args.output = str(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -439,20 +444,15 @@ def main():
 def run_batch(args, parser, pkg, config, config_path, output):
     config_checksum = digest(config_path)
     case_dir = Path(CASE_DIR)
-    files = sorted(case_dir.glob("case_*.yaml"))
-    if args.cases:
-        wanted = {"case_{:04d}".format(i) for i in args.cases}
-        files = [p for p in files if p.stem in wanted]
-        if {p.stem for p in files} != wanted:
-            parser.error("Some selected cases do not exist")
-    elif len(files) != 100:
-        parser.error("Expected the complete 100-case dataset")
-    if args.case_limit is not None:
-        if args.case_limit <= 0:
-            parser.error("--case-limit must be positive")
-        files = files[:args.case_limit]
-    if not files or (args.attach and len(files) != 1):
-        parser.error("--attach requires exactly one selected case")
+    if args.attach:
+        case = case_dir / "case_{:04d}.yaml".format(args.case)
+        if not case.is_file():
+            parser.error("Manual case does not exist: {}".format(case))
+        files = [case]
+    else:
+        files = sorted(case_dir.glob("case_*.yaml"))
+        if len(files) != 100:
+            parser.error("Expected the complete 100-case dataset")
     signature = dict(config=config, cases={p.name: digest(p) for p in files})
     runtime_sources = {str(p.relative_to(pkg)): digest(p) for p in sorted(pkg.rglob("*"))
                        if p.is_file() and (p.suffix in (".cpp", ".h", ".msg", ".yaml", ".launch", ".xml") or
@@ -501,7 +501,7 @@ def run_batch(args, parser, pkg, config, config_path, output):
             dest.rename(archived)
         dest.mkdir()
         shutil.copy2(case, dest / "case.yaml")
-        command = [sys.executable, str(Path(__file__).resolve()), "--worker", "--case", str(case.resolve()),
+        command = [sys.executable, str(Path(__file__).resolve()), "--worker", "--case-file", str(case.resolve()),
                    "--output", str(dest), "--config", str(config_path)]
         if args.gui: command.append("--gui")
         if args.attach: command.append("--attach")
