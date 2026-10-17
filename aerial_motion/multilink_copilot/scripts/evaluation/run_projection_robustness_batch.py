@@ -303,7 +303,7 @@ class Trial:
                 next_publish = time.monotonic() + 0.1
             p, q = self.latest["tail"].pose.position, self.latest["tail"].pose.orientation
             measured = dict(zip(self.latest["joints"].name, self.latest["joints"].position))
-            pos_error = math.sqrt((p.x-0.5)**2 + p.y**2 + (p.z-1.0)**2)
+            pos_error = math.sqrt((p.x-0.53)**2 + p.y**2 + (p.z-1.0)**2)
             rot_error = quaternion_error([q.x, q.y, q.z, q.w], [0, 0, 0, 1])
             joint_error = max(abs(measured.get(n, math.inf)-v)
                               for n, v in zip(initial.joint_state.name, initial.joint_state.position))
@@ -323,7 +323,7 @@ class Trial:
         (self.output / "parameters.yaml").write_text(yaml.safe_dump(rospy.get_param("/")))
         self.meta["initial_target"] = dict(root=[initial.root_state.pose.pose.position.x,
             initial.root_state.pose.pose.position.y, initial.root_state.pose.pose.position.z],
-            root_to_tail=[0.5-initial.root_state.pose.pose.position.x,
+            root_to_tail=[0.53-initial.root_state.pose.pose.position.x,
                           -initial.root_state.pose.pose.position.y, 1.0-initial.root_state.pose.pose.position.z],
             joint_names=list(initial.joint_state.name), joint_positions=list(initial.joint_state.position))
         self.meta["status"] = "running"

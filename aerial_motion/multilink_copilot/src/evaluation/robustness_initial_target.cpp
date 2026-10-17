@@ -20,7 +20,7 @@ int main(int argc, char** argv)
     const auto root_to_tail = model->forwardKinematics<KDL::Frame>("link2", zero);
     aerial_robot_msgs::FullStateTarget msg;
     msg.header.frame_id = msg.root_state.header.frame_id = "world";
-    msg.root_state.pose.pose.position.x = 0.5 - root_to_tail.p.x();
+    msg.root_state.pose.pose.position.x = 0.53 - root_to_tail.p.x();
     msg.root_state.pose.pose.position.y = -root_to_tail.p.y();
     msg.root_state.pose.pose.position.z = 1.0 - root_to_tail.p.z();
     msg.root_state.pose.pose.orientation.w = 1.0;

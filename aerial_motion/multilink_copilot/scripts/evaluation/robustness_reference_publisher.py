@@ -27,7 +27,7 @@ def build_samples(case_file, duration, rate):
     data = yaml.safe_load(Path(case_file).read_text())
     if data.get("frame_id") != "world" or len(data.get("waypoints", [])) != 4:
         raise ValueError("Expected four world-frame waypoints")
-    anchor = [0.5, 0.0, 1.0, 0.0, 0.0, np.pi]  # FLU: forward along world -X.
+    anchor = [0.53, 0.0, 1.0, 0.0, 0.0, np.pi]  # FLU: forward along world -X.
     knots = np.array([anchor] + data["waypoints"] + [anchor], dtype=float)
     if knots.shape != (6, 6) or not np.isfinite(knots).all():
         raise ValueError("Nonfinite or malformed waypoints")
