@@ -1,0 +1,25 @@
+# Used by scripts/tools/generate_right_turn_waypoint_testcases.py.
+num_cases: 100
+random_seed: 0
+frame_id: world
+# Relative paths are resolved from the mono_planner package directory.
+output_dir: test_data/projection_robustness_sim
+file_prefix: case_
+
+# Positions are in meters; angles are in radians.
+# The round trip returns to this position with this forward axis.
+# Viewed from +Z, every turn is clockwise (decreasing yaw).
+root_position: [0.5, 0.0, 1.0]
+root_forward_axis: [-1.0, 0.0, 0.0]
+waypoint_count: 4
+roll: 0.0
+pitch_range: [-0.5, 0.5]
+x_range: [-1.5, 2.5]
+y_range: [0.0, 3.0]
+z_range: [0.5, 2.5]
+max_attempts_per_case: 1000
+
+round_digits: 9
+segment_epsilon: 1.0e-9
+dot_epsilon: 1.0e-9
+angle_tolerance: 1.0e-9

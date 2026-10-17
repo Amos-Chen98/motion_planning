@@ -25,12 +25,11 @@ import yaml
 
 # Edit these paths here; launching a batch requires no path arguments or exports.
 ROS_PACK = rospkg.RosPack()
-CASE_DIR = Path(ROS_PACK.get_path("mono_planner")) / "test_data/batch_robustness_sim"
+CASE_DIR = Path(ROS_PACK.get_path("mono_planner")) / "test_data/projection_robustness_sim"
 CONFIG_FILE = Path(ROS_PACK.get_path("multilink_copilot")) / "config/projection_robustness.yaml"
 DATA_DIR = Path(ROS_PACK.get_path("data_manager")) / "dragon_copilot/data/rosbag/projection_robustness"
-OUTPUT_DIR = DATA_DIR / "batch_100"
-SELECTED_OUTPUT_DIR = DATA_DIR / "batch_100_single"
-MANUAL_OUTPUT_DIR = DATA_DIR / "batch_100_manual"
+OUTPUT_DIR = DATA_DIR / "test_20261017"
+MANUAL_OUTPUT_DIR = DATA_DIR / "test_20261017_manual"
 
 
 def package_dir():
