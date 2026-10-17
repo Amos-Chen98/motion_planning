@@ -88,6 +88,10 @@ add_dependencies(geometry_only_copilot_planner aerial_robot_msgs_generate_messag
 
 if(CATKIN_ENABLE_TESTING)
     find_package(rostest REQUIRED)
+    catkin_add_gtest(joint_seed_selection_test test/joint_seed_selection_test.cpp)
+    if(TARGET joint_seed_selection_test)
+        target_link_libraries(joint_seed_selection_test ${catkin_LIBRARIES})
+    endif()
     catkin_add_gtest(joint_command_continuity_test test/joint_command_continuity_test.cpp)
     if(TARGET joint_command_continuity_test)
         target_link_libraries(joint_command_continuity_test ${catkin_LIBRARIES})

@@ -71,7 +71,6 @@ CopilotPlanner::CopilotPlanner()
   , trajectory_initialized_(false)
   , has_latest_measured_link_joint_positions_(false)
   , has_latest_published_joint_positions_(false)
-  , has_latest_stable_joint_positions_(false)
   , stability_debug_timer_started_(false)
   , has_last_published_root_pose_(false)
 {
@@ -146,10 +145,8 @@ void CopilotPlanner::loadParameters()
   pnh_.param("stability_static_thrust_max", stability_static_thrust_max_, 23.6);
   pnh_.param("stability_overlap_min_clearance", stability_overlap_min_clearance_, 0.01);
   pnh_.param("stability_candidate_history_size", stability_candidate_history_size_, 32);
-  pnh_.param("stability_candidate_top_k", stability_candidate_top_k_, 6);
   pnh_.param("stability_candidate_max_repairs", stability_candidate_max_repairs_, 2);
   stability_candidate_history_size_ = std::max(0, stability_candidate_history_size_);
-  stability_candidate_top_k_ = std::max(0, stability_candidate_top_k_);
   stability_candidate_max_repairs_ = std::max(0, stability_candidate_max_repairs_);
 
   ROS_INFO("[CopilotPlanner] Loaded parameters:");
@@ -174,7 +171,6 @@ void CopilotPlanner::loadParameters()
   ROS_INFO("  stability_overlap_min_clearance: %.3f", stability_overlap_min_clearance_);
   ROS_INFO("  stability_check_fc_t: %s", stability_check_fc_t_ ? "true" : "false");
   ROS_INFO("  stability_candidate_history_size: %d", stability_candidate_history_size_);
-  ROS_INFO("  stability_candidate_top_k: %d", stability_candidate_top_k_);
   ROS_INFO("  stability_candidate_max_repairs: %d", stability_candidate_max_repairs_);
 }
 
