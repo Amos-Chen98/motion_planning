@@ -96,6 +96,12 @@ CopilotPlanner::CopilotPlanner()
   target_pose_sub_ = nh_.subscribe("root/target_pose", 1, &CopilotPlanner::targetPoseCallback, this); // root link's tail pose
   joint_state_sub_ = nh_.subscribe("joint_states", 1, &CopilotPlanner::jointStateCallback, this);
   full_state_target_pub_ = nh_.advertise<aerial_robot_msgs::FullStateTarget>("full_state_target", 1);
+  pnh_.param("publish_skip_event", publish_skip_event_, false);
+  if (publish_skip_event_)
+  {
+    first_skip_pub_ = nh_.advertise<std_msgs::Time>("copilot/first_skip_stamp", 1, true);
+    first_skip_pub_.publish(std_msgs::Time());
+  }
   trajectory_viz_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("trajectory_visualization", 1);
   if (publish_stability_metrics_)
   {
@@ -384,6 +390,7 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
 
   if (!stable_solved)
   {
+    recordFirstSkip(root_target_pose);
     ROS_ERROR_THROTTLE(1.0, "[CopilotPlanner] Failed to find a stable joint target; skipping this control cycle");
     return;
   }
@@ -398,6 +405,7 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
 
   if (!passesFullStateTargetSafetyChecks(root_target_pose, stable_joint_positions))
   {
+    recordFirstSkip(root_target_pose);
     trajectory_viz_pub_.publish(getTrajectoryVisualization());
     return;
   }
@@ -438,6 +446,15 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   has_latest_published_joint_positions_ = true;
   recordPublishedRootPose(root_target_pose);
   trajectory_viz_pub_.publish(getTrajectoryVisualization());
+}
+
+void CopilotPlanner::recordFirstSkip(const geometry_msgs::Pose& root_target_pose)
+{
+  if (!publish_skip_event_ || !first_skip_stamp_.isZero() || !shouldPublishFullStateTarget(root_target_pose)) return;
+  first_skip_stamp_ = ros::Time::now();
+  std_msgs::Time event;
+  event.data = first_skip_stamp_;
+  first_skip_pub_.publish(event);
 }
 
 void CopilotPlanner::stabilityDebugTimerCallback(const ros::TimerEvent&)

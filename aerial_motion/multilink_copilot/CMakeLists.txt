@@ -76,6 +76,10 @@ add_executable(copilot_planner ${COPILOT_PLANNER_SOURCES})
 target_link_libraries(copilot_planner multilink_copilot_geometry multilink_copilot_stability ${catkin_LIBRARIES})
 add_dependencies(copilot_planner aerial_robot_msgs_generate_messages_cpp)
 
+add_executable(robustness_initial_target src/evaluation/robustness_initial_target.cpp)
+target_link_libraries(robustness_initial_target ${catkin_LIBRARIES})
+add_dependencies(robustness_initial_target aerial_robot_msgs_generate_messages_cpp)
+
 add_executable(geometry_only_copilot_planner
     src/demo/geometry_only_copilot_planner.cpp
 )
@@ -107,6 +111,8 @@ catkin_install_python(PROGRAMS
     scripts/evaluation/last_link_tail_pose_publisher.py
     scripts/evaluation/trajectory_marker_publisher.py
     scripts/evaluation/run_waypoint_conditioned_maneuvering_batch.py
+    scripts/evaluation/run_projection_robustness_batch.py
+    scripts/evaluation/robustness_reference_publisher.py
     scripts/demo/dragon_dance_node.py
     scripts/demo/root_circular_trajectory_node.py
     scripts/demo/root_straight_trajectory_node.py
@@ -121,7 +127,7 @@ catkin_install_python(PROGRAMS
 # ############
 # # Install ##
 # ############
-install(TARGETS multilink_copilot_geometry multilink_copilot_stability copilot_planner geometry_only_copilot_planner
+install(TARGETS multilink_copilot_geometry multilink_copilot_stability copilot_planner geometry_only_copilot_planner robustness_initial_target
     ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
     LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
     RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -150,3 +156,5 @@ install(FILES
     scripts/demo/dragon_dance_support.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
+
+install(DIRECTORY docs/ DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/docs)

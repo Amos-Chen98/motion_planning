@@ -1,0 +1,14 @@
+<launch>
+  <arg name="headless" default="false" />
+  <arg name="rviz_config" default="$(find mono_planner)/rviz/wpt_cond_manv.rviz" />
+  <include file="$(find dragon)/launch/bringup.launch">
+    <arg name="rm" value="false" />
+    <arg name="sim" value="true" />
+    <arg name="headless" value="$(arg headless)" />
+    <arg name="rviz_config" value="$(arg rviz_config)" />
+    <arg name="demo" value="false" />
+  </include>
+  <group ns="dragon">
+    <node pkg="multilink_copilot" type="robustness_initial_target" name="robustness_initial_target" output="screen" />
+  </group>
+</launch>

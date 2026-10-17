@@ -11,7 +11,7 @@ import yaml
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MONO_PLANNER_DIR = SCRIPT_DIR.parent.parent
-CONFIG_FILE = MONO_PLANNER_DIR / "config/waypoint_testcases/geo_only_sim.yaml"
+CONFIG_FILE = MONO_PLANNER_DIR / "config/waypoint_testcases/batch_robustness_sim.yaml"
 
 
 @dataclass(frozen=True)

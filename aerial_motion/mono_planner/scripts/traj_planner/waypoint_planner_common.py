@@ -9,6 +9,7 @@ import numpy as np
 import rospy
 import tf.transformations as tf_trans
 from geometry_msgs.msg import Point, PoseStamped
+from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
 
@@ -20,6 +21,35 @@ class PlanningArtifacts:
 
 
 LINK_TO_FLU_LOCAL_Z_HALF_TURN = np.array([0.0, 0.0, 1.0, 0.0], dtype=float)
+
+# Match GeometryOnlyCopilotPlanner::interpolateTimeColor.
+TRAJECTORY_TIME_COLOR_STOPS = (
+    (0.00, 0.00, 0.00, 0.45),
+    (0.16, 0.00, 0.00, 1.00),
+    (0.32, 0.00, 0.55, 1.00),
+    (0.46, 0.00, 1.00, 0.90),
+    (0.58, 0.55, 1.00, 0.20),
+    (0.70, 1.00, 1.00, 0.00),
+    (0.82, 1.00, 0.48, 0.00),
+    (0.94, 1.00, 0.00, 0.00),
+    (1.00, 0.55, 0.00, 0.00),
+)
+
+
+def interpolate_time_color(normalized_time):
+    time = min(max(float(normalized_time), 0.0), 1.0)
+    for lower, upper in zip(TRAJECTORY_TIME_COLOR_STOPS[:-1], TRAJECTORY_TIME_COLOR_STOPS[1:]):
+        if time > upper[0]:
+            continue
+        local_time = (time - lower[0]) / (upper[0] - lower[0])
+        weight = local_time * local_time * (3.0 - 2.0 * local_time)
+        return ColorRGBA(
+            r=lower[1] + weight * (upper[1] - lower[1]),
+            g=lower[2] + weight * (upper[2] - lower[2]),
+            b=lower[3] + weight * (upper[3] - lower[3]),
+            a=1.0,
+        )
+    return ColorRGBA(*TRAJECTORY_TIME_COLOR_STOPS[-1][1:], 1.0)
 
 
 def normalize_topic_name(topic_name):
@@ -621,11 +651,15 @@ class BaseWaypointConditionedPlannerNode(ABC):
         line_marker.action = Marker.ADD
         line_marker.pose.orientation.w = 1.0
         line_marker.scale.x = 0.05
-        line_marker.color.r = 0.10
-        line_marker.color.g = 0.85
-        line_marker.color.b = 0.25
+        line_marker.color.r = 1.0
+        line_marker.color.g = 1.0
+        line_marker.color.b = 1.0
         line_marker.color.a = 1.0
         line_marker.points = [position_to_point(position) for position in trajectory_positions]
+        line_marker.colors = [
+            interpolate_time_color(sample_time / self.total_trajectory_time)
+            for sample_time in self.build_sample_times()
+        ]
         marker_array.markers.append(line_marker)
 
         waypoint_marker = Marker()

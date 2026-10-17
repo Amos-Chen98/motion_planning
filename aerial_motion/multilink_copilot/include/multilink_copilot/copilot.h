@@ -10,6 +10,7 @@
 #include <dragon/model/hydrus_like_robot_model.h>
 #include <multilink_copilot/follow_the_leader.h>
 #include <multilink_copilot/stability_evaluator.h>
+#include <std_msgs/Time.h>
 #include <pluginlib/class_loader.h>
 #include <kdl/jntarray.hpp>
 #include <Eigen/Dense>
@@ -72,6 +73,10 @@ private:
   ros::Publisher stability_overlap_clearance_pub_;
   ros::Timer control_timer_;
   ros::Timer stability_debug_timer_;
+  ros::Publisher first_skip_pub_;
+  bool publish_skip_event_ = false;
+  ros::Time first_skip_stamp_;
+  void recordFirstSkip(const geometry_msgs::Pose& root_target_pose);
 
   // Robot model
   pluginlib::ClassLoader<aerial_robot_model::RobotModel> robot_model_loader_;

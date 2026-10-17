@@ -1,0 +1,13 @@
+# Experiment settings; planner/controller parameters stay in their existing files.
+trajectory_time: 50.0
+reference_rate: 40.0
+post_time: 5.0
+settle_time: 2.0
+position_tolerance: 0.05
+rotation_tolerance: 0.05
+joint_tolerance: 0.05
+startup_timeout: 120.0
+initialization_timeout: 90.0
+case_wall_timeout: 600.0
+clock_stall_timeout: 20.0
+state_max_age: 0.1

@@ -5,6 +5,7 @@
     <arg name="evaluation" default="false" />
     <arg name="verbose" default="false" />
     <arg name="publish_stability_metrics" default="true" />
+    <arg name="publish_skip_event" default="false" />
     <arg name="max_joint_step_before_publish" default="0.1" />
 
     <group ns="$(arg robot_ns)">
@@ -17,6 +18,7 @@
             <param name="target_pose_frame_type" value="$(arg target_pose_frame_type)" />
             <param name="verbose" value="$(arg verbose)" />
             <param name="publish_stability_metrics" value="$(arg publish_stability_metrics)" />
+            <param name="publish_skip_event" value="$(arg publish_skip_event)" />
             <param name="max_joint_step_before_publish" value="$(arg max_joint_step_before_publish)" />
         </node>
     </group>
