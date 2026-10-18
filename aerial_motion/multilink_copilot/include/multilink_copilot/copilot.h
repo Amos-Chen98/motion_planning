@@ -27,7 +27,30 @@ namespace multilink_copilot
 class CopilotPlanner
 {
 public:
-  CopilotPlanner();
+  struct UpdateResult
+  {
+    std::string status = "no_input";
+    std::string source = "none";
+    bool fallback = false;
+    bool geometry_warmup = false;
+    double total_ms = 0.0;
+    double feasibility_ms = 0.0;
+    double planning_ms = 0.0;  // Legacy timing boundary, excluding history and final gate.
+    int projection_calls = 0;
+    int qp_solves = 0;
+    int projection_iterations = 0;
+    aerial_robot_msgs::FullStateTarget target;
+    bool published() const { return status == "published"; }
+  };
+
+  explicit CopilotPlanner(bool start_ros_runtime = true);
+  // Synchronous execution uses the same stateful update as the ROS timer.
+  UpdateResult step(const geometry_msgs::PoseStamped& root_tail_pose,
+                    const Eigen::VectorXd& measured_joints);
+  const std::vector<std::string>& jointNames() const { return link_joint_names_; }
+  int linkCount() const { return link_num_; }
+  StabilityEvaluator& stabilityEvaluator() { return *stability_evaluator_; }
+
   ~CopilotPlanner() = default;
 
   using StabilityMetrics = multilink_copilot::StabilityMetrics;
@@ -35,6 +58,10 @@ public:
   using StableCandidateSource = JointSeedSource;
 
 private:
+  friend class CopilotStepTest;
+  UpdateResult updateOnce();
+  std::string accepted_source_ = "none";
+  bool used_fallback_ = false;
   // ROS handles
   ros::NodeHandle nh_;
   ros::NodeHandle pnh_;

@@ -51,6 +51,15 @@ install(DIRECTORY config/
 )
 
 # Install RViz configs
+install(DIRECTORY scripts/traj_planner/
+    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts/traj_planner
+    FILES_MATCHING PATTERN "*.py"
+)
+install(DIRECTORY test_data/computation_benchmark/
+    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/test_data/computation_benchmark
+    FILES_MATCHING PATTERN "case_*.yaml"
+)
+
 install(DIRECTORY rviz/
     DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/rviz
     FILES_MATCHING PATTERN "*.rviz"

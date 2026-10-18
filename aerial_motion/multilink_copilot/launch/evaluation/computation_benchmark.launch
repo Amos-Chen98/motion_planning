@@ -1,0 +1,35 @@
+<launch>
+  <arg name="link_num" default="4"/>
+  <arg name="reference_file"/>
+  <arg name="reference_rate" default="40.0"/>
+  <arg name="waypoint_file" default=""/>
+  <arg name="output_dir" default="$(find data_manager)/dragon_copilot/data/computation_benchmark/$(anon manual)"/>
+  <arg name="visualize" default="false"/>
+  <arg name="launch_rviz" default="$(arg visualize)"/>
+  <arg name="playback_speed" default="1.0"/>
+  <arg name="start_delay" default="3.0"/>
+  <arg name="keep_open" default="true"/>
+  <group ns="copilot_benchmark">
+    <param name="robot_description" command="$(find xacro)/xacro '$(find multilink_copilot)/models/computation_benchmark.urdf.xacro' link_num:=$(arg link_num)"/>
+    <rosparam command="load" file="$(find dragon)/config/quad/v1_5_202601/model/HydrusLikeRobotModel.yaml"/>
+    <node pkg="multilink_copilot" type="computation_benchmark" name="computation_benchmark" output="screen" required="true">
+      <rosparam command="load" file="$(find multilink_copilot)/config/copilot_planner.yaml"/>
+      <rosparam command="load" file="$(find multilink_copilot)/config/computation_benchmark.yaml"/>
+      <param name="visualize" value="$(arg visualize)"/>
+      <param name="playback_speed" value="$(arg playback_speed)"/>
+      <param name="start_delay" value="$(arg start_delay)"/>
+      <param name="keep_open" value="$(arg keep_open)"/>
+      <param name="link_count" value="$(arg link_num)"/>
+      <param name="reference_file" value="$(arg reference_file)"/>
+      <param name="waypoint_file" value="$(arg waypoint_file)"/>
+      <param name="output_dir" value="$(arg output_dir)"/>
+      <param name="dt" value="$(eval 1.0 / float(arg('reference_rate')))"/>
+    </node>
+    <node if="$(arg visualize)" pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher">
+      <param name="tf_prefix" value="copilot_benchmark"/>
+      <param name="publish_frequency" value="40.0"/>
+    </node>
+  </group>
+  <node if="$(arg launch_rviz)" pkg="rviz" type="rviz" name="copilot_benchmark_rviz"
+        args="-d $(find multilink_copilot)/rviz/computation_benchmark.rviz" output="screen"/>
+</launch>

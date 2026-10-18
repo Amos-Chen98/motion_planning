@@ -1,0 +1,8 @@
+# The same trajectory construction and sampling as projection_robustness.
+trajectory_time: 50.0
+reference_rate: 40.0
+trial_timeout: 600.0
+# No discarded trajectory prefix: report all 2001 updates.
+target_pose_frame_type: FLU
+publish_stability_metrics: false
+verbose: false

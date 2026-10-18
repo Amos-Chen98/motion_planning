@@ -1,0 +1,53 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz/Grid
+      Name: Ground grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 60
+      Color: 100; 110; 120
+    - Class: rviz/RobotModel
+      Name: Accepted robot configuration
+      Enabled: true
+      Robot Description: /copilot_benchmark/robot_description
+      TF Prefix: copilot_benchmark
+      Visual Enabled: true
+      Collision Enabled: false
+      Alpha: 0.8
+      Update Interval: 0
+    - Class: rviz/MarkerArray
+      Name: Reference and projection status
+      Enabled: true
+      Marker Topic: /copilot_benchmark/visualization
+      Queue Size: 10
+  Enabled: true
+  Global Options:
+    Fixed Frame: world
+    Background Color: 35; 40; 48
+    Frame Rate: 30
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Target Frame: copilot_benchmark/link4
+      Distance: 7
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Pitch: 0.65
+      Yaw: 0.8
+      Near Clip Distance: 0.01
+Window Geometry:
+  Hide Left Dock: true
+  Hide Right Dock: true
+  Width: 1350
+  Height: 850

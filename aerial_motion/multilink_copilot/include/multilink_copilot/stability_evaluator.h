@@ -41,12 +41,21 @@ struct StabilityMetrics
   double baselink_tilt = 0.0;
 };
 
+struct ProjectionStatistics
+{
+  int calls = 0;
+  int iterations = 0;
+  int qp_solves = 0;
+};
+
 class StabilityEvaluator
 {
 public:
   StabilityEvaluator(const boost::shared_ptr<Dragon::HydrusLikeRobotModel>& robot_model,
                      const StabilityConfig& config);
 
+  void resetStatistics() { statistics_ = ProjectionStatistics(); }
+  const ProjectionStatistics& statistics() const { return statistics_; }
   void setRootLinkRotation(const KDL::Rotation& root_link_rotation);
   bool evaluate(const Eigen::VectorXd& joint_positions, StabilityMetrics& metrics);
   bool satisfiesSafeStability(const StabilityMetrics& metrics) const;
@@ -71,6 +80,7 @@ public:
   const boost::shared_ptr<Dragon::HydrusLikeRobotModel>& robotModel() const;
 
 private:
+  ProjectionStatistics statistics_;
   boost::shared_ptr<Dragon::HydrusLikeRobotModel> robot_model_;
   StabilityConfig config_;
   KDL::Rotation root_link_rotation_ = KDL::Rotation::Identity();

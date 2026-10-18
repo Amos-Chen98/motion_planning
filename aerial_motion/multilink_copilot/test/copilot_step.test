@@ -1,0 +1,10 @@
+<launch>
+  <group ns="copilot_step_test">
+    <param name="robot_description" command="$(find xacro)/xacro '$(find multilink_copilot)/models/computation_benchmark.urdf.xacro' link_num:=4"/>
+    <rosparam command="load" file="$(find dragon)/config/quad/v1_5_202601/model/HydrusLikeRobotModel.yaml"/>
+    <test pkg="multilink_copilot" type="copilot_step_test" test-name="copilot_step_test" time-limit="60">
+      <rosparam command="load" file="$(find multilink_copilot)/config/copilot_planner.yaml"/>
+      <param name="target_pose_frame_type" value="FLU"/>
+    </test>
+  </group>
+</launch>

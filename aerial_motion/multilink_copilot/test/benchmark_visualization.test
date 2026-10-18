@@ -1,0 +1,13 @@
+<launch>
+  <arg name="output_dir" default="/tmp/copilot_benchmark_tests/$(anon scenario_visual_test)"/>
+  <group ns="copilot_benchmark">
+    <param name="robot_description" command="$(find xacro)/xacro '$(find multilink_copilot)/models/computation_benchmark.urdf.xacro' link_num:=8"/>
+    <rosparam command="load" file="$(find dragon)/config/quad/v1_5_202601/model/HydrusLikeRobotModel.yaml"/>
+    <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher">
+      <param name="tf_prefix" value="copilot_benchmark"/>
+    </node>
+  </group>
+  <test pkg="multilink_copilot" type="test_benchmark_visualization.py" test-name="benchmark_visualization_test" time-limit="100">
+    <param name="output_dir" value="$(arg output_dir)"/>
+  </test>
+</launch>

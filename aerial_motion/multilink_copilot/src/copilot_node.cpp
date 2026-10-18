@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <boost/make_shared.hpp>
+#include <stdexcept>
 #include <cmath>
 #include <exception>
 #include <string>
@@ -63,7 +65,7 @@ geometry_msgs::PoseStamped::Ptr convertFluPoseToLinkFrame(const geometry_msgs::P
 }
 }  // namespace
 
-CopilotPlanner::CopilotPlanner()
+CopilotPlanner::CopilotPlanner(bool start_ros_runtime)
   : nh_("")
   , pnh_("~")
   , robot_model_loader_("aerial_robot_model", "aerial_robot_model::RobotModel")
@@ -92,26 +94,29 @@ CopilotPlanner::CopilotPlanner()
   stability_config.max_baselink_tilt = max_baselink_tilt_before_publish_;
   stability_evaluator_.reset(new StabilityEvaluator(dragon_robot_model_, stability_config));
 
-  target_pose_sub_ = nh_.subscribe("root/target_pose", 1, &CopilotPlanner::targetPoseCallback, this); // root link's tail pose
-  joint_state_sub_ = nh_.subscribe("joint_states", 1, &CopilotPlanner::jointStateCallback, this);
-  full_state_target_pub_ = nh_.advertise<aerial_robot_msgs::FullStateTarget>("full_state_target", 1);
-  pnh_.param("publish_skip_event", publish_skip_event_, false);
-  if (publish_skip_event_)
+  if (start_ros_runtime)
   {
-    first_skip_pub_ = nh_.advertise<std_msgs::Time>("copilot/first_skip_stamp", 1, true);
-    first_skip_pub_.publish(std_msgs::Time());
-  }
-  trajectory_viz_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("trajectory_visualization", 1);
-  if (publish_stability_metrics_)
-  {
-    stability_fc_rp_min_pub_ = nh_.advertise<std_msgs::Float64>("stability/fc_rp_min", 1);
-    stability_overlap_clearance_pub_ = nh_.advertise<std_msgs::Float64>("stability/overlap_clearance", 1);
-  }
-  control_timer_ =
-      nh_.createTimer(ros::Duration(1.0 / control_loop_rate_), &CopilotPlanner::controlTimerCallback, this);
-  stability_debug_timer_ =
-      nh_.createTimer(ros::Duration(0.5), &CopilotPlanner::stabilityDebugTimerCallback, this, false, false);
+    target_pose_sub_ = nh_.subscribe("root/target_pose", 1, &CopilotPlanner::targetPoseCallback, this); // root link's tail pose
+    joint_state_sub_ = nh_.subscribe("joint_states", 1, &CopilotPlanner::jointStateCallback, this);
+    full_state_target_pub_ = nh_.advertise<aerial_robot_msgs::FullStateTarget>("full_state_target", 1);
+    pnh_.param("publish_skip_event", publish_skip_event_, false);
+    if (publish_skip_event_)
+    {
+      first_skip_pub_ = nh_.advertise<std_msgs::Time>("copilot/first_skip_stamp", 1, true);
+      first_skip_pub_.publish(std_msgs::Time());
+    }
+    trajectory_viz_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("trajectory_visualization", 1);
+    if (publish_stability_metrics_)
+    {
+      stability_fc_rp_min_pub_ = nh_.advertise<std_msgs::Float64>("stability/fc_rp_min", 1);
+      stability_overlap_clearance_pub_ = nh_.advertise<std_msgs::Float64>("stability/overlap_clearance", 1);
+    }
+    control_timer_ =
+        nh_.createTimer(ros::Duration(1.0 / control_loop_rate_), &CopilotPlanner::controlTimerCallback, this);
+    stability_debug_timer_ =
+        nh_.createTimer(ros::Duration(0.5), &CopilotPlanner::stabilityDebugTimerCallback, this, false, false);
 
+  }
   ROS_INFO("[CopilotPlanner] Node initialized");
   ROS_INFO("[CopilotPlanner] Snake mode enabled: %s", snake_mode_enabled_ ? "true" : "false");
   ROS_INFO("[CopilotPlanner] Link number: %d, Link length: %.3f", link_num_, link_length_);
@@ -329,35 +334,48 @@ void CopilotPlanner::jointStateCallback(const sensor_msgs::JointStateConstPtr& m
   has_latest_measured_link_joint_positions_ = true;
 }
 
-void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
+CopilotPlanner::UpdateResult CopilotPlanner::step(const geometry_msgs::PoseStamped& pose,
+                                                const Eigen::VectorXd& measured_joints)
 {
-  publishCurrentStabilityMetrics();
+  if (measured_joints.size() != link_joint_num_ || !measured_joints.allFinite())
+    throw std::invalid_argument("Invalid measured joint vector for synchronous Copilot step");
+  targetPoseCallback(boost::make_shared<geometry_msgs::PoseStamped>(pose));
+  latest_measured_link_joint_positions_ = clampLinkJointPositions(measured_joints);
+  has_latest_measured_link_joint_positions_ = true;
+  return updateOnce();
+}
 
-  if (!latest_target_pose_)
-  {
-    return;
-  }
-
+CopilotPlanner::UpdateResult CopilotPlanner::updateOnce()
+{
+  UpdateResult result;
+  if (!latest_target_pose_) return result;
+  const auto start = std::chrono::steady_clock::now();
+  stability_evaluator_->resetStatistics();
+  accepted_source_ = "none";
+  used_fallback_ = false;
+  const auto finish = [&]() {
+    result.total_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    const auto& stats = stability_evaluator_->statistics();
+    result.projection_calls = stats.calls;
+    result.projection_iterations = stats.iterations;
+    result.qp_solves = stats.qp_solves;
+    result.source = accepted_source_;
+    result.fallback = used_fallback_;
+    return result;
+  };
   const Eigen::Vector3d link1_tail_position = getLink1TailPositionFromPose(latest_target_pose_->pose);
   const geometry_msgs::Pose root_target_pose = convertLink1TailPoseToRootPose(latest_target_pose_->pose);
   const Eigen::Vector3d root_position = getRootPositionFromLink1TailPose(latest_target_pose_->pose);
   updateTrajectoryBuffer(link1_tail_position, root_position);
-
   if (!has_latest_measured_link_joint_positions_)
   {
-    trajectory_viz_pub_.publish(getTrajectoryVisualization());
-    ROS_WARN_THROTTLE(1.0,
-                      "[CopilotPlanner] Waiting for complete joint_states before publishing full_state_target");
-    return;
+    result.status = "waiting_measurement";
+    return finish();
   }
-
-  const auto planning_start_time = std::chrono::steady_clock::now();
-
+  const auto planning_start = std::chrono::steady_clock::now();
   restoreRobotModelToLinkJointPositions(latest_measured_link_joint_positions_);
-
   Eigen::VectorXd desired_joint_positions = Eigen::VectorXd::Zero(link_joint_num_);
   latest_snake_targets_.clear();
-
   if (snake_mode_enabled_ && prepareTrajectoryData())
   {
     latest_snake_targets_ = computeSnakeTargetPositions();
@@ -365,6 +383,7 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   }
   else if (snake_mode_enabled_)
   {
+    result.geometry_warmup = true;
     latest_snake_targets_ = computeWarmupTargetPositions();
     desired_joint_positions = computeWarmupNominalJointPositions(latest_snake_targets_);
   }
@@ -372,42 +391,27 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
   {
     desired_joint_positions = buildDefaultReferenceJointPositions();
   }
-
   Eigen::VectorXd stable_joint_positions;
+  const auto feasibility_start = std::chrono::steady_clock::now();
   const bool stable_solved = computeStableJointPositions(desired_joint_positions, stable_joint_positions);
-
-  const auto planning_end_time = std::chrono::steady_clock::now();
-  const double planning_duration_ms =
-      std::chrono::duration<double, std::milli>(planning_end_time - planning_start_time).count();
+  const auto feasibility_end = std::chrono::steady_clock::now();
+  result.feasibility_ms = std::chrono::duration<double, std::milli>(feasibility_end - feasibility_start).count();
+  result.planning_ms = std::chrono::duration<double, std::milli>(feasibility_end - planning_start).count();
   if (!stable_solved)
   {
-    recordFirstSkip(root_target_pose);
-    ROS_ERROR_THROTTLE(1.0, "[CopilotPlanner] Failed to find a stable joint target; skipping this control cycle");
-    return;
+    result.status = "feasibility_failed";
+    return finish();
   }
-
   if (!shouldPublishFullStateTarget(root_target_pose))
   {
-    trajectory_viz_pub_.publish(getTrajectoryVisualization());
-    ROS_DEBUG_THROTTLE(1.0,
-                       "[CopilotPlanner] Skipping full_state_target publish because root motion is below thresholds");
-    return;
+    result.status = "filtered";
+    return finish();
   }
-
   if (!passesFullStateTargetSafetyChecks(root_target_pose, stable_joint_positions))
   {
-    recordFirstSkip(root_target_pose);
-    trajectory_viz_pub_.publish(getTrajectoryVisualization());
-    return;
+    result.status = "safety_rejected";
+    return finish();
   }
-
-  if (verbose_ && !stability_debug_timer_started_)
-  {
-    stability_debug_timer_.start();
-    stability_debug_timer_started_ = true;
-    ROS_INFO("[CopilotPlanner] Started periodic stability debug timer");
-  }
-
   aerial_robot_msgs::FullStateTarget full_state_msg;
   full_state_msg.header.stamp = ros::Time::now();
   full_state_msg.root_state.header = latest_target_pose_->header;
@@ -432,14 +436,40 @@ void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
     full_state_msg.joint_state.position[i] = stable_joint_positions(i);
   }
 
-  full_state_target_pub_.publish(full_state_msg);
-  if (verbose_)
-  {
-    ROS_INFO("[CopilotPlanner] Joint cmd planning time: %.3f ms", planning_duration_ms);
-  }
   latest_published_joint_positions_ = stable_joint_positions;
   has_latest_published_joint_positions_ = true;
   recordPublishedRootPose(root_target_pose);
+  result.target = std::move(full_state_msg);
+  result.status = "published";
+  return finish();
+}
+
+void CopilotPlanner::controlTimerCallback(const ros::TimerEvent&)
+{
+  publishCurrentStabilityMetrics();
+  const UpdateResult result = updateOnce();
+  if (result.status == "no_input") return;
+  if (result.status == "feasibility_failed" || result.status == "safety_rejected")
+    recordFirstSkip(convertLink1TailPoseToRootPose(latest_target_pose_->pose));
+  if (result.status == "feasibility_failed")
+  {
+    ROS_ERROR_THROTTLE(1.0, "[CopilotPlanner] Failed to find a stable joint target; skipping this control cycle");
+    return;
+  }
+  if (result.status == "waiting_measurement")
+    ROS_WARN_THROTTLE(1.0, "[CopilotPlanner] Waiting for complete joint_states before publishing full_state_target");
+  if (result.published())
+  {
+    if (verbose_ && !stability_debug_timer_started_)
+    {
+      stability_debug_timer_.start();
+      stability_debug_timer_started_ = true;
+      ROS_INFO("[CopilotPlanner] Started periodic stability debug timer");
+    }
+    full_state_target_pub_.publish(result.target);
+    if (verbose_)
+      ROS_INFO("[CopilotPlanner] Joint cmd planning time: %.3f ms", result.planning_ms);
+  }
   trajectory_viz_pub_.publish(getTrajectoryVisualization());
 }
 
@@ -591,21 +621,3 @@ void CopilotPlanner::recordPublishedRootPose(const geometry_msgs::Pose& root_tar
 }
 
 }  // namespace multilink_copilot
-
-int main(int argc, char** argv)
-{
-  ros::init(argc, argv, "copilot_planner");
-
-  try
-  {
-    multilink_copilot::CopilotPlanner planner;
-    ros::spin();
-  }
-  catch (const std::exception& e)
-  {
-    ROS_ERROR("Exception in CopilotPlanner: %s", e.what());
-    return 1;
-  }
-
-  return 0;
-}

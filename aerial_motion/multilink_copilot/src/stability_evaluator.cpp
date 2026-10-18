@@ -317,6 +317,7 @@ bool StabilityEvaluator::projectToSafe(const Eigen::VectorXd& desired_joint_posi
                                        Eigen::VectorXd& stable_joint_positions,
                                        bool allow_unstable_seed)
 {
+  ++statistics_.calls;
   const Eigen::VectorXd desired = clampJointPositions(desired_joint_positions);
   if (link_joint_num_ <= 0)
   {
@@ -340,6 +341,7 @@ bool StabilityEvaluator::projectToSafe(const Eigen::VectorXd& desired_joint_posi
 
   for (int iteration = 0; iteration < config_.qp_max_iterations; ++iteration)
   {
+    ++statistics_.iterations;
     StabilityMetrics iteration_metrics;
     if (!evaluate(current, iteration_metrics))
     {
@@ -410,6 +412,7 @@ bool StabilityEvaluator::projectToSafe(const Eigen::VectorXd& desired_joint_posi
       options.enableEqualities = qpOASES::BT_TRUE;
       solver.setOptions(options);
       int working_set_recalculations = kQpMaxWorkingSetRecalculations;
+      ++statistics_.qp_solves;
       status =
           solver.init(hessian_row_major.data(), gradient.data(), constraints_row_major.data(), qp_lower.data(),
                       qp_upper.data(), builder.lower.data(), builder.upper.data(), working_set_recalculations);

@@ -53,6 +53,7 @@ bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_
 
       if (!solveStableJointQp(desired_joint_positions, stable_reference, stable_joint_positions))
       {
+        used_fallback_ = true;
         stable_joint_positions = stable_reference;
       }
 
@@ -65,6 +66,7 @@ bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_
           return false;
         }
 
+        used_fallback_ = true;
         stable_joint_positions = stable_reference;
       }
 
@@ -97,6 +99,7 @@ bool CopilotPlanner::computeStableJointPositions(const Eigen::VectorXd& nominal_
     return false;
   }
 
+  accepted_source_ = describeStableCandidateSource(accepted_source);
   restoreRobotModelToLinkJointPositions(stable_joint_positions);
   rememberStableJointPositions(stable_joint_positions);
 
@@ -252,6 +255,7 @@ bool CopilotPlanner::enforceStableJointCommandContinuity(const Eigen::VectorXd& 
   StabilityMetrics reference_metrics;
   if (evaluateStability(continuity_reference, reference_metrics) && reference_metrics.safe)
   {
+    used_fallback_ = true;
     stable_joint_positions = continuity_reference;
     accepted_source = reference_source;
     ROS_WARN_THROTTLE(0.5,

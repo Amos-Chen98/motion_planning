@@ -28,7 +28,7 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DNDEBUG")
 
 catkin_package(
     INCLUDE_DIRS include
-    LIBRARIES multilink_copilot_geometry multilink_copilot_stability
+    LIBRARIES multilink_copilot_geometry multilink_copilot_stability multilink_copilot_core
     CATKIN_DEPENDS
     roscpp
     rospy
@@ -72,9 +72,13 @@ set(COPILOT_PLANNER_SOURCES
     src/copilot_motion.cpp
 )
 
-add_executable(copilot_planner ${COPILOT_PLANNER_SOURCES})
-target_link_libraries(copilot_planner multilink_copilot_geometry multilink_copilot_stability ${catkin_LIBRARIES})
-add_dependencies(copilot_planner aerial_robot_msgs_generate_messages_cpp)
+add_library(multilink_copilot_core ${COPILOT_PLANNER_SOURCES})
+target_link_libraries(multilink_copilot_core multilink_copilot_geometry multilink_copilot_stability ${catkin_LIBRARIES})
+add_dependencies(multilink_copilot_core aerial_robot_msgs_generate_messages_cpp)
+add_executable(copilot_planner src/copilot_main.cpp)
+target_link_libraries(copilot_planner multilink_copilot_core)
+add_executable(computation_benchmark src/evaluation/computation_benchmark.cpp)
+target_link_libraries(computation_benchmark multilink_copilot_core)
 
 add_executable(robustness_initial_target src/evaluation/robustness_initial_target.cpp)
 target_link_libraries(robustness_initial_target ${catkin_LIBRARIES})
@@ -88,6 +92,15 @@ add_dependencies(geometry_only_copilot_planner aerial_robot_msgs_generate_messag
 
 if(CATKIN_ENABLE_TESTING)
     find_package(rostest REQUIRED)
+    catkin_add_gtest(benchmark_reference_test test/benchmark_reference_test.cpp)
+    if(TARGET benchmark_reference_test)
+        target_link_libraries(benchmark_reference_test ${catkin_LIBRARIES})
+    endif()
+    add_rostest(test/benchmark_visualization.test)
+    add_rostest_gtest(copilot_step_test test/copilot_step.test test/copilot_step_test.cpp)
+    if(TARGET copilot_step_test)
+        target_link_libraries(copilot_step_test multilink_copilot_core)
+    endif()
     catkin_add_gtest(joint_seed_selection_test test/joint_seed_selection_test.cpp)
     if(TARGET joint_seed_selection_test)
         target_link_libraries(joint_seed_selection_test ${catkin_LIBRARIES})
@@ -111,6 +124,7 @@ if(CATKIN_ENABLE_TESTING)
 endif()
 
 catkin_install_python(PROGRAMS
+    scripts/evaluation/run_computation_benchmark_batch.py
     scripts/evaluation/envelope_width_evaluator.py
     scripts/evaluation/last_link_tail_pose_publisher.py
     scripts/evaluation/trajectory_marker_publisher.py
@@ -131,7 +145,7 @@ catkin_install_python(PROGRAMS
 # ############
 # # Install ##
 # ############
-install(TARGETS multilink_copilot_geometry multilink_copilot_stability copilot_planner geometry_only_copilot_planner robustness_initial_target
+install(TARGETS computation_benchmark multilink_copilot_core multilink_copilot_geometry multilink_copilot_stability copilot_planner geometry_only_copilot_planner robustness_initial_target
     ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
     LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
     RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -162,3 +176,5 @@ install(FILES
 )
 
 install(DIRECTORY docs/ DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/docs)
+
+install(DIRECTORY models/ DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/models)
