@@ -1,11 +1,12 @@
 <?xml version="1.0"?>
 <launch>
     <arg name="ns" default="dragon" />
-    <arg name="nonholo" default="false" />
+    <arg name="nonholo" default="true" />
     <arg name="replan" default="false" doc="If true, replan whenever goal pose, waypoint poses, or the waypoint topic set changes." />
+    <arg name="loop_trajectory" default="false" doc="If true, continuously replay the planned trajectory without replanning at lap boundaries." />
     <arg name="publish_rate_hz" default="40.0" />
     <arg name="total_trajectory_time" default="60.0" />
-    <arg name="robot_frame_type" default="FLU" doc="Planner root/tail_pose frame type: FLU or LINK" />
+    <arg name="robot_frame_type" default="FLU" doc="Input root/tail_pose orientation convention: LINK for Dragon state estimation, or FLU for an already converted input. Output root/target_pose is always FLU." />
     <arg name="robot_pose_topic" default="root/tail_pose" />
     <arg name="target_pose_topic" default="root/target_pose" />
     <arg name="waypoint_topic_prefix" default="/waypoint/pose_" />
@@ -14,6 +15,7 @@
     <group ns="$(arg ns)">
         <node unless="$(arg nonholo)" pkg="mono_planner" type="holo_wpt_cond_planner.py" name="holo_wpt_cond_planner" output="screen">
             <param name="replan" value="$(arg replan)" />
+            <param name="loop_trajectory" value="$(arg loop_trajectory)" />
             <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
             <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
             <param name="robot_frame_type" value="$(arg robot_frame_type)" />
@@ -25,6 +27,7 @@
 
         <node if="$(arg nonholo)" pkg="mono_planner" type="nonholo_wpt_cond_planner.py" name="nonholo_wpt_cond_planner" output="screen">
             <param name="replan" value="$(arg replan)" />
+            <param name="loop_trajectory" value="$(arg loop_trajectory)" />
             <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
             <param name="total_trajectory_time" value="$(arg total_trajectory_time)" />
             <param name="robot_frame_type" value="$(arg robot_frame_type)" />

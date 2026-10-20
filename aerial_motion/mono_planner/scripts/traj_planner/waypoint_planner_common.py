@@ -134,8 +134,9 @@ class BaseWaypointConditionedPlannerNode(ABC):
 
         self.publish_rate_hz = float(rospy.get_param("~publish_rate_hz", 60.0))
         self.total_trajectory_time = float(rospy.get_param("~total_trajectory_time", 20.0))
-        configured_robot_frame_type = str(rospy.get_param("~robot_frame_type", "FLU"))
+        configured_robot_frame_type = str(rospy.get_param("~robot_frame_type", "LINK"))
         self.replan = get_boolean_param("~replan", False)
+        self.loop_trajectory = get_boolean_param("~loop_trajectory", False)
         self.robot_frame_type = configured_robot_frame_type.upper()
         self.waypoint_topic_prefix = self.resolve_waypoint_topic_prefix(
             rospy.get_param("~waypoint_topic_prefix", self.DEFAULT_WAYPOINT_TOPIC_PREFIX)
@@ -197,6 +198,8 @@ class BaseWaypointConditionedPlannerNode(ABC):
         else:
             rospy.loginfo("Using goal pose topic %s as the terminal pose.", self.goal_pose_topic)
         rospy.loginfo("Discovering waypoint topics matching %s<index>.", self.waypoint_topic_prefix)
+        if self.loop_trajectory:
+            rospy.loginfo("Trajectory looping is enabled; replaying each planned trajectory until replaced or shutdown.")
         if self.replan:
             rospy.loginfo("Input-triggered replanning is enabled (~replan:=true).")
         else:
@@ -600,6 +603,9 @@ class BaseWaypointConditionedPlannerNode(ABC):
             sample = self.trajectory_samples[self.publish_index]
             self.publish_index += 1
             reached_end = self.publish_index >= len(self.trajectory_samples)
+            if reached_end and self.loop_trajectory:
+                self.publish_index = 0
+                reached_end = False
 
         pose_msg = self.sample_to_pose(sample)
         pose_msg.header.stamp = rospy.Time.now()
