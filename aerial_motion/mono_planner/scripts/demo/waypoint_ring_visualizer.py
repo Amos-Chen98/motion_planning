@@ -28,7 +28,8 @@ class WaypointRingVisualizer:
         self.subscribers = {}
         self.ring_points = self._build_ring_points()
         self.ring_marker_publisher = rospy.Publisher("/waypoint/ring_markers", MarkerArray, queue_size=1, latch=True)
-        self.discovery_timer = rospy.Timer(rospy.Duration(self.DISCOVERY_PERIOD_SECONDS), self.discover_waypoint_topics)
+        self.shutdown_event = threading.Event()
+        rospy.on_shutdown(self.shutdown_event.set)
 
         self._publish_ring_markers()
         rospy.loginfo(
@@ -80,7 +81,7 @@ class WaypointRingVisualizer:
         ]
         return all(abs(left - right) <= cls.POSE_EPSILON for left, right in zip(left_values, right_values))
 
-    def discover_waypoint_topics(self, _event):
+    def discover_waypoint_topics(self):
         discovered_topics = {}
         for topic_name, topic_type in rospy.get_published_topics():
             if topic_type != self.WAYPOINT_TOPIC_TYPE:
@@ -182,7 +183,11 @@ class WaypointRingVisualizer:
         self.ring_marker_publisher.publish(self._build_ring_markers(stamped_poses))
 
     def run(self):
-        rospy.spin()
+        # Topic discovery must continue even when simulation time is paused or absent.
+        while not rospy.is_shutdown():
+            self.discover_waypoint_topics()
+            if self.shutdown_event.wait(self.DISCOVERY_PERIOD_SECONDS):
+                break
 
 
 if __name__ == "__main__":
