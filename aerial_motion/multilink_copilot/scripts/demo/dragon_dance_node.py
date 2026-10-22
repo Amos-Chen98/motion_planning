@@ -42,7 +42,7 @@ def validate_config(config):
     positive = (
         "publish_rate_hz", "total_duration", "ellipse_semi_major", "ellipse_semi_minor",
         "entry_max_linear_speed", "entry_max_yaw_rate", "startup_position_tolerance",
-        "startup_yaw_tolerance", "status_period",
+        "startup_yaw_tolerance",
         "shutdown_joint_tolerance", "shutdown_cog_hold_duration",
         "shutdown_leveling_publish_duration", "shutdown_leveling_tolerance",
     )
@@ -126,11 +126,11 @@ class DragonDancePublisher(DragonDanceSupportMixin):
         # Callback-visible state must exist before any subscription/service is registered.
         self.lock = threading.RLock()
         self.state = "WAIT_INPUTS"
-        self.detail = "Waiting for robot inputs and connections"
+        self.detail = ("Waiting for robot inputs and connections; normal stop: q or rosservice call %s '{}'. "
+                       "Ctrl+C terminates without completing recovery." % rospy.resolve_name("~stop"))
         self.state_wall = time.monotonic()
         self.state_ros = rospy.Time.now().to_sec()
         self.last_ros = self.state_ros
-        self.last_status_wall = -math.inf
         self.latest_root_pose = None
         self.latest_cog_pose = None
         self.latest_cog_odom = None
@@ -178,26 +178,21 @@ class DragonDancePublisher(DragonDanceSupportMixin):
         self.resolved_rotation_target_topic = rospy.resolve_name(self.ROTATION_TARGET_TOPIC)
         rospy.on_shutdown(self.on_ros_shutdown)
         self.keyboard_enabled = self.configure_keyboard_input() if config["keyboard_enabled"] else False
-        rospy.loginfo("[Dance] Normal stop: q or rosservice call %s '{}'. Ctrl+C terminates without completing recovery.",
-                      rospy.resolve_name("~stop"))
-        self.report(force=True)
+        self.report_stage()
 
     def transition(self, state, detail, wall=None, ros=None):
         self.state = state
         self.detail = detail
         self.state_wall = time.monotonic() if wall is None else wall
         self.state_ros = rospy.Time.now().to_sec() if ros is None else ros
-        self.report(force=True, wall=self.state_wall)
+        self.report_stage()
 
-    def report(self, force=False, wall=None):
-        wall = time.monotonic() if wall is None else wall
-        if not force and wall - self.last_status_wall < self.status_period:
-            return
+    def report_stage(self):
+        """Publish and log the stage on startup or transition."""
         message = "[%s] %s" % (self.state, self.detail)
         self.status_publisher.publish(String(data=message))
-        if force or self.state != "DANCING":
-            (rospy.logerr if self.state == "ERROR" else rospy.loginfo)("[Dance] %s", message)
-        self.last_status_wall = wall
+        (rospy.logerr if self.state == "ERROR" else rospy.loginfo)(
+            "[Dance] Entering %s: %s", self.state, self.detail)
 
     def fail(self, reason, wall=None, ros=None):
         if self.state not in self.TERMINAL:
@@ -241,7 +236,6 @@ class DragonDancePublisher(DragonDanceSupportMixin):
                 reasons.append("waiting for ROS time")
             if reasons:
                 self.detail = "; ".join(reasons)
-                self.report(wall=wall)
                 return
             self.transition("WAIT_HOVER", "Use bringup to take off; waiting for stable HOVER", wall, ros)
 
@@ -272,14 +266,11 @@ class DragonDancePublisher(DragonDanceSupportMixin):
         elif self.state == "DANCING":
             elapsed = ros - self.dance_start_ros
             cycles = int(elapsed / self.total_duration)
-            if cycles != self.completed_cycles:
-                self.completed_cycles = cycles
-                rospy.loginfo("[Dance] Completed cycle %d", cycles)
+            self.completed_cycles = cycles
             self.root_target_publisher.publish(self.build_tail_pose_message(elapsed % self.total_duration))
             self.detail = "Cycle %d, %.1f/%.1f s; q or stop service to recover" % (cycles + 1, elapsed % self.total_duration, self.total_duration)
         elif self.state in self.STOPPING:
             self.tick_shutdown(ros, wall)
-        self.report(wall=wall)
 
     def current_velocity(self):
         # Dragon's estimator publishes world linear velocity and CoG/body
@@ -550,7 +541,6 @@ class DragonDancePublisher(DragonDanceSupportMixin):
         if not math.isfinite(length) or length <= 0:
             raise ValueError("root link length must be positive and finite")
         self.root_link_length = length
-        rospy.loginfo("[Dance] Validated robot model, root link length %.3f m", length)
         return True
 
     def configure_keyboard_input(self):

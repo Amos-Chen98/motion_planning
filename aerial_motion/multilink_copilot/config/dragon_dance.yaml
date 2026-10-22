@@ -4,23 +4,21 @@ publish_rate_hz: 40.0
 total_duration: 60.0
 ellipse_center_x: 0.0
 ellipse_center_y: -0.2
-ellipse_semi_major: 1.8
+ellipse_semi_major: 1.6
 ellipse_semi_minor: 1.2
 z_offset: 1.25
 z_amplitude: 0.25
 z_cycles: 3
 
 # Peak reference speed limits; entry duration is computed from current state.
-entry_max_linear_speed: 0.3
-entry_max_yaw_rate: 0.3
+entry_max_linear_speed: 0.4
+entry_max_yaw_rate: 0.4
 startup_position_tolerance: 0.15
 startup_yaw_tolerance: 0.15
 # Optional positive override; normally derived from robot_description.
 # root_link_length: 0.54
 
-# Conditions advance immediately; waiting has no timeout. Wall time only
-# controls status reporting, so feedback stays visible while /clock is paused.
-status_period: 2.0
+# Enable q in an interactive terminal to request a graceful stop.
 keyboard_enabled: true
 
 # Graceful stop: hold, restore planar joint shape, then level the physical body.

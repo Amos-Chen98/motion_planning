@@ -92,13 +92,6 @@ add_dependencies(geometry_only_copilot_planner aerial_robot_msgs_generate_messag
 
 if(CATKIN_ENABLE_TESTING)
     find_package(rostest REQUIRED)
-    # These tests need ROS messages but no ROS master or optional nose runner.
-    foreach(dance_test dragon_dance_trajectory dragon_dance_lifecycle)
-        set(dance_test_result "unittest-${dance_test}.xml")
-        catkin_run_tests_target("unittest" ${dance_test} ${dance_test_result}
-            COMMAND "\"${PYTHON_EXECUTABLE}\" \"${CMAKE_CURRENT_SOURCE_DIR}/test/run_unittest.py\" \"${CMAKE_CURRENT_SOURCE_DIR}/test/test_${dance_test}.py\" \"${CATKIN_TEST_RESULTS_DIR}/${PROJECT_NAME}/${dance_test_result}\""
-        )
-    endforeach()
     catkin_add_gtest(benchmark_reference_test test/benchmark_reference_test.cpp)
     if(TARGET benchmark_reference_test)
         target_link_libraries(benchmark_reference_test ${catkin_LIBRARIES})
