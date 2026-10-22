@@ -39,6 +39,7 @@
     <exec_depend>sensor_msgs</exec_depend>
     <exec_depend>nav_msgs</exec_depend>
     <exec_depend>std_msgs</exec_depend>
+    <exec_depend>std_srvs</exec_depend>
     <exec_depend>geometry_msgs</exec_depend>
     <exec_depend>visualization_msgs</exec_depend>
     <exec_depend>aerial_robot_msgs</exec_depend>
@@ -61,6 +62,7 @@
     <exec_depend>xacro</exec_depend>
 
     <test_depend>rostest</test_depend>
+    <test_depend>rosunit</test_depend>
 
     <export>
     </export>

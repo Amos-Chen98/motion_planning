@@ -1,8 +1,25 @@
 <?xml version="1.0"?>
 <launch>
     <arg name="robot_ns" default="dragon" />
+    <arg name="config_file" default="$(find multilink_copilot)/config/dragon_dance.yaml" />
+
+    <!-- Scope the remap to the planner: the demo owns the actual control output. -->
+    <group>
+        <remap from="/$(arg robot_ns)/full_state_target"
+               to="/$(arg robot_ns)/dragon_dance/planned_full_state_target" />
+        <include file="$(find multilink_copilot)/launch/copilot_planner.launch">
+            <arg name="robot_ns" value="$(arg robot_ns)" />
+            <arg name="target_pose_frame_type" value="FLU" />
+            <arg name="evaluation" value="false" />
+        </include>
+    </group>
 
     <group ns="$(arg robot_ns)">
-        <node pkg="multilink_copilot" type="dragon_dance_node.py" name="dragon_dance" output="screen" />
+        <!-- Normal completion or a fault also stops this launch's planner. -->
+        <node pkg="multilink_copilot" type="dragon_dance_node.py" name="dragon_dance"
+              output="screen" required="true" respawn="false">
+            <env name="PYTHONUNBUFFERED" value="1" />
+            <rosparam command="load" file="$(arg config_file)" />
+        </node>
     </group>
 </launch>

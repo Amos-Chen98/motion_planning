@@ -1,0 +1,36 @@
+# Reference trajectory (metres, seconds, radians). Entry and dance use world/FLU.
+frame_id: world
+publish_rate_hz: 40.0
+total_duration: 60.0
+ellipse_center_x: 0.0
+ellipse_center_y: -0.2
+ellipse_semi_major: 1.8
+ellipse_semi_minor: 1.2
+z_offset: 1.25
+z_amplitude: 0.25
+z_cycles: 3
+
+# Peak reference speed limits; entry duration is computed from current state.
+entry_max_linear_speed: 0.3
+entry_max_yaw_rate: 0.3
+startup_position_tolerance: 0.15
+startup_yaw_tolerance: 0.15
+# Optional positive override; normally derived from robot_description.
+# root_link_length: 0.54
+
+# Conditions advance immediately; waiting has no timeout. Wall time only
+# controls status reporting, so feedback stays visible while /clock is paused.
+status_period: 2.0
+keyboard_enabled: true
+
+# Graceful stop: hold, restore planar joint shape, then level the physical body.
+# Holding advances once measured speed/yaw rate are within 10% of entry limits.
+shutdown_joint_tolerance: 0.05
+# These durations define reference motion, not failure deadlines or dwell time.
+shutdown_cog_hold_duration: 0.5
+shutdown_leveling_publish_duration: 6.0
+# Measured physical baselink roll/pitch tolerance (radians).
+shutdown_leveling_tolerance: 0.1
+shutdown_joint_names: [joint1_pitch, joint1_yaw, joint2_pitch, joint2_yaw, joint3_pitch, joint3_yaw]
+# Pitch targets must be zero so all links share the horizontal body plane.
+shutdown_joint_positions: [0.0, 1.57, 0.0, 1.57, 0.0, 1.57]

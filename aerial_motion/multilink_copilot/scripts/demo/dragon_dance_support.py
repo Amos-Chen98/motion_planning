@@ -91,8 +91,8 @@ class DragonDanceSupportMixin:
 
         tail_orientation_flu = self.orientation_to_tuple(tail_pose_flu.pose.orientation)
         root_orientation = self.quaternion_multiply(
-            self.quaternion_from_yaw(self.TAIL_FLU_TO_ROOT_YAW_OFFSET),
             tail_orientation_flu,
+            self.quaternion_from_yaw(self.TAIL_FLU_TO_ROOT_YAW_OFFSET),
         )
         tail_position = self.position_to_tuple(tail_pose_flu.pose.position)
         link_direction = self.rotate_vector(root_orientation, (1.0, 0.0, 0.0))
@@ -137,7 +137,9 @@ class DragonDanceSupportMixin:
         if self.shutdown_leveling_publish_duration > 1e-6:
             progress = max(0.0, min(1.0, elapsed / self.shutdown_leveling_publish_duration))
 
-        # Smoothstep avoids commanding a sudden orientation jump at either end.
+        # The baselink interface takes the desired physical body orientation in
+        # world, unlike the mutable CoG control frame. Keep the measured body
+        # heading and smoothly bring its roll/pitch to zero.
         blend = progress * progress * (3.0 - 2.0 * progress)
         start_roll, start_pitch, start_yaw = self.shutdown_leveling_start_rpy
         target_roll = (1.0 - blend) * start_roll
@@ -155,31 +157,10 @@ class DragonDanceSupportMixin:
         return goal_msg
 
     def publish_shutdown_leveling_commands(self, elapsed):
-        hold_goal = self.copy_pose_message(self.shutdown_hold_cog_target)
-        hold_goal.header.stamp = rospy.Time.now() + rospy.Duration.from_sec(self.shutdown_cog_hold_duration)
-        hold_goal.header.frame_id = self.FRAME_ID
-        self.cog_target_publisher.publish(hold_goal)
-
         rotation_goal = self.build_shutdown_leveling_rotation_target(elapsed)
         self.rotation_target_publisher.publish(rotation_goal)
 
-        rospy.loginfo_throttle(
-            1.0,
-            "Published shutdown CoG hold target on %s and interpolated leveling target on %s at [x=%.2f, y=%.2f, z=%.2f] with target [roll=%.2f, pitch=%.2f, yaw=%.2f] rad",
-            self.resolved_cog_target_topic,
-            self.resolved_rotation_target_topic,
-            hold_goal.pose.position.x,
-            hold_goal.pose.position.y,
-            hold_goal.pose.position.z,
-            *self.rpy_from_orientation(rotation_goal.pose.pose.orientation),
-        )
-
     def publish_shutdown_joint_shape_commands(self):
-        hold_goal = self.copy_pose_message(self.shutdown_hold_cog_target)
-        hold_goal.header.stamp = rospy.Time.now() + rospy.Duration.from_sec(self.shutdown_cog_hold_duration)
-        hold_goal.header.frame_id = self.FRAME_ID
-        self.cog_target_publisher.publish(hold_goal)
-
         joint_goal = self.copy_joint_state_message(self.shutdown_joint_target)
         joint_goal.header.stamp = rospy.Time.now()
         self.joint_target_publisher.publish(joint_goal)
