@@ -132,6 +132,7 @@ catkin_install_python(PROGRAMS
     scripts/evaluation/run_projection_robustness_batch.py
     scripts/evaluation/robustness_reference_publisher.py
     scripts/demo/dragon_dance_node.py
+    scripts/demo/full_state_target_pub_node.py
     scripts/demo/root_circular_trajectory_node.py
     scripts/demo/root_straight_trajectory_node.py
     scripts/demo/root_tail_pose_seed_publisher.py
