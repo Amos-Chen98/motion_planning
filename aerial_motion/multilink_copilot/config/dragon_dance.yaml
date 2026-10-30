@@ -1,18 +1,18 @@
 # Reference trajectory (metres, seconds, radians). Entry and dance use world/FLU.
 frame_id: world
 publish_rate_hz: 40.0
-total_duration: 60.0
+total_duration: 40.0
 ellipse_center_x: 0.0
 ellipse_center_y: -0.2
-ellipse_semi_major: 1.6
-ellipse_semi_minor: 1.2
+ellipse_semi_major: 1.3
+ellipse_semi_minor: 1.0
 z_offset: 1.25
 z_amplitude: 0.25
 z_cycles: 3
 
 # Peak reference speed limits; entry duration is computed from current state.
 entry_max_linear_speed: 0.4
-entry_max_yaw_rate: 0.4
+entry_max_yaw_rate: 0.5
 startup_position_tolerance: 0.15
 startup_yaw_tolerance: 0.15
 # Optional positive override; normally derived from robot_description.
